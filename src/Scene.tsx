@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useEditorStore } from './store';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -21,10 +21,6 @@ export const Scene: React.FC = () => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const objects = useEditorStore(state => state.objects);
-  const currentTime = useEditorStore(state => state.currentTime);
-  const isPlaying = useEditorStore(state => state.isPlaying);
-  const setTime = useEditorStore(state => state.setTime);
-  const duration = useEditorStore(state => state.duration);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -75,6 +71,8 @@ export const Scene: React.FC = () => {
       const delta = (now - lastTime) / 1000;
       lastTime = now;
 
+      const { isPlaying, currentTime, objects: liveObjects } = useEditorStore.getState();
+
       if (isPlaying) {
         useEditorStore.setState((state) => ({
           currentTime: (state.currentTime + delta) % state.duration
@@ -82,7 +80,7 @@ export const Scene: React.FC = () => {
       }
 
       // Update object transforms based on keyframes or store values
-      objects.forEach(obj => {
+      liveObjects.forEach(obj => {
         if (!obj.mesh) return;
 
         // Simple interpolation logic

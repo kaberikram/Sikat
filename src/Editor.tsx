@@ -1,6 +1,6 @@
 import React from 'react';
 import { useEditorStore } from './store';
-import { Play, Pause, ChevronRight, Square, Box, Plus, Trash2, Layers, Sliders, BoxSelect } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -61,16 +61,25 @@ export const Toolbar: React.FC = () => {
 
     const url = URL.createObjectURL(file);
     const loader = new GLTFLoader();
-    loader.load(url, (gltf) => {
-      const model = gltf.scene;
-      (model as any).userData = { id: Math.random().toString(36).substr(2, 9) };
-      addObject({ 
-        name: file.name.toUpperCase(), 
-        type: 'group', 
-        mesh: model,
-        scale: [2, 2, 2]
-      });
-    });
+    loader.load(
+      url,
+      (gltf) => {
+        URL.revokeObjectURL(url);
+        const model = gltf.scene;
+        (model as any).userData = { id: Math.random().toString(36).substr(2, 9) };
+        addObject({
+          name: file.name.toUpperCase(),
+          type: 'group',
+          mesh: model,
+          scale: [2, 2, 2]
+        });
+      },
+      undefined,
+      (error) => {
+        URL.revokeObjectURL(url);
+        console.error('Failed to load model:', error);
+      }
+    );
   };
 
   return (
