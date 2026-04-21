@@ -1,0 +1,126 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+@theme {
+  --font-sans: "Arial Black", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --jsr-orange: #FF6B00;
+  --jsr-blue: #0094FF;
+  --jsr-yellow: #FFE600;
+  --jsr-pink: #FF0090;
+  --bg-color: #E8E8E8;
+  --panel-border: 3px solid #000;
+  
+  /* Legacy aliases to avoid breaking references too much during transition */
+  --dc-orange: var(--jsr-orange);
+  --dc-yellow: var(--jsr-yellow);
+  --dc-blue: var(--jsr-blue);
+  --dc-bg: var(--bg-color);
+  --dc-ink: #000000;
+}
+
+@layer base {
+  body {
+    @apply bg-[var(--bg-color)] text-[#000] overflow-hidden;
+    font-family: 'Arial Black', sans-serif;
+  }
+}
+
+.brutalist-shadow {
+  box-shadow: 5px 5px 0px #000;
+}
+
+.panel-title {
+  @apply text-[14px] bg-black text-white px-2 py-1 inline-block mb-2.5 -rotate-2 font-bold uppercase;
+}
+
+.funky-border {
+  border: var(--panel-border);
+  box-shadow: 5px 5px 0px #000;
+}
+
+.skew-panel {
+  transform: skewX(-5deg);
+}
+
+.graffiti-text {
+  text-shadow: 3px 3px 0 #000;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 12px;
+}
+::-webkit-scrollbar-track {
+  background: #000;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--jsr-yellow);
+  border: 3px solid #000;
+}
+
+.header {
+  grid-area: header;
+  background: var(--jsr-orange);
+  border-bottom: var(--panel-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 50;
+}
+
+.layers-panel {
+  grid-area: layers;
+  background: var(--jsr-blue);
+  border-right: var(--panel-border);
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.viewport {
+  grid-area: viewport;
+  background: #fff;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.props-panel {
+  grid-area: props;
+  background: var(--jsr-pink);
+  border-left: var(--panel-border);
+  padding: 15px;
+}
+
+.timeline-panel {
+  grid-area: timeline;
+  background: var(--jsr-yellow);
+  border-top: var(--panel-border);
+  display: flex;
+  flex-direction: column;
+}
+
+/* App Grid Layout */
+.app-grid {
+  display: grid;
+  grid-template-areas:
+    'header header header'
+    'layers viewport props'
+    'timeline timeline timeline';
+  grid-template-rows: 60px 1fr 180px;
+  grid-template-columns: 220px 1fr 280px;
+  height: 100vh;
+  width: 100vw;
+}
+
+.viewport-bg {
+  background-image: radial-gradient(#ccc 1px, transparent 1px);
+  background-size: 20px 20px;
+}
