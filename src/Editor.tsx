@@ -1,15 +1,94 @@
-import React from 'react';
-import { useEditorStore } from './store';
-import { Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { useEditorStore, type MotionObject, type PostProcessingStack } from './store';
+import { Trash2, ChevronDown, ChevronRight, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { gltfLoader } from './gltf-loader';
 import { Scene } from './Scene';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+type PostSectionId = keyof PostProcessingStack;
+
+const POST_STACK_SECTIONS: {
+  id: PostSectionId;
+  label: string;
+  sliders: { key: string; label: string; min: number; max: number; step: number }[];
+  toggles?: { key: string; label: string }[];
+}[] = [
+  {
+    id: 'bloom',
+    label: 'BLOOM',
+    sliders: [
+      { key: 'strength', label: 'Strength', min: 0, max: 2.5, step: 0.05 },
+      { key: 'threshold', label: 'Threshold', min: 0, max: 1, step: 0.01 },
+      { key: 'radius', label: 'Radius', min: 0, max: 1, step: 0.02 },
+      { key: 'emissiveBoost', label: 'Surface glow', min: 0, max: 1.5, step: 0.05 },
+      { key: 'emissiveIntensity', label: 'Glow intensity', min: 0, max: 3, step: 0.05 },
+    ],
+  },
+  {
+    id: 'pixelate',
+    label: 'PIXELATE',
+    sliders: [
+      { key: 'pixelSize', label: 'Block size', min: 2, max: 24, step: 1 },
+      { key: 'normalEdge', label: 'Normal edge', min: 0, max: 0.8, step: 0.05 },
+      { key: 'depthEdge', label: 'Depth edge', min: 0, max: 0.8, step: 0.05 },
+    ],
+  },
+  {
+    id: 'cellShading',
+    label: 'CELL_SHADING',
+    sliders: [{ key: 'outlineScale', label: 'Outline inflate', min: 1, max: 1.18, step: 0.005 }],
+  },
+  {
+    id: 'glitch',
+    label: 'GLITCH',
+    sliders: [
+      { key: 'intensity', label: 'Jitter amount', min: 0, max: 0.5, step: 0.01 },
+      { key: 'rate', label: 'Jitter rate', min: 0, max: 0.35, step: 0.01 },
+    ],
+  },
+  {
+    id: 'dither',
+    label: 'DITHER',
+    sliders: [
+      { key: 'pixelSize', label: 'Dot size', min: 1, max: 10, step: 1 },
+      { key: 'levels', label: 'Color levels', min: 2, max: 16, step: 1 },
+      { key: 'strength', label: 'Mix', min: 0, max: 1, step: 0.05 },
+    ],
+    toggles: [{ key: 'monochrome', label: 'Monochrome' }],
+  },
+];
+
+function patchPostSection<S extends PostSectionId>(
+  selected: MotionObject,
+  section: S,
+  patch: Partial<PostProcessingStack[S]>
+): { postProcessing: PostProcessingStack } {
+  return {
+    postProcessing: {
+      ...selected.postProcessing,
+      [section]: { ...selected.postProcessing[section], ...patch },
+    },
+  };
+}
+
+function PostFxCheckbox({ checked }: { checked: boolean }) {
+  return (
+    <span
+      className={cn('fx-toggle pointer-events-none', checked && 'fx-toggle--on')}
+      aria-hidden
+    >
+      {checked ? (
+        <Check size={13} strokeWidth={3} className="text-[var(--jsr-yellow)]" />
+      ) : null}
+    </span>
+  );
 }
 
 export const Toolbar: React.FC = () => {
@@ -57,8 +136,7 @@ export const Toolbar: React.FC = () => {
     if (!file) return;
 
     const url = URL.createObjectURL(file);
-    const loader = new GLTFLoader();
-    loader.load(
+    gltfLoader.load(
       url,
       (gltf) => {
         URL.revokeObjectURL(url);
@@ -150,13 +228,20 @@ export const Outliner: React.FC = () => {
   const { objects, selectedId, setSelected, removeObject } = useEditorStore();
 
   return (
-    <aside className="layers-panel" style={{ gridArea: 'layers' }}>
-      <span className="panel-title">OBJECTS</span>
-      <div className="flex flex-col gap-2 overflow-y-auto pr-1">
+    <aside
+      className="layers-panel"
+      style={{ gridArea: 'layers' }}
+      onClick={() => setSelected(null)}
+    >
+      <span className="panel-title select-none">OBJECTS</span>
+      <div className="flex flex-col gap-2 overflow-y-auto pr-1 flex-1 min-h-0">
         {objects.map((obj, i) => (
           <div 
             key={obj.id} 
-            onClick={() => setSelected(obj.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelected(obj.id);
+            }}
             className={cn(
               "layer-item group",
               selectedId === obj.id && "active"
@@ -173,7 +258,7 @@ export const Outliner: React.FC = () => {
           </div>
         ))}
       </div>
-      <div className="mt-auto">
+      <div className="mt-auto shrink-0" onClick={(e) => e.stopPropagation()}>
         <div className="bg-black text-white p-2 text-[10px] transform rotate-1 flex justify-between">
           <span>MEMORY_FREE</span>
           <span>88%</span>
@@ -186,6 +271,7 @@ export const Outliner: React.FC = () => {
 export const Properties: React.FC = () => {
   const { objects, selectedId, updateObject, addKeyframe, currentTime } = useEditorStore();
   const selected = objects.find(o => o.id === selectedId);
+  const [openSections, setOpenSections] = useState<Partial<Record<PostSectionId, boolean>>>({});
 
   return (
     <aside className="props-panel" style={{ gridArea: 'props' }}>
@@ -194,13 +280,13 @@ export const Properties: React.FC = () => {
       {!selected ? (
         <div className="text-[10px] opacity-40 italic text-center mt-10">SELECT AN OBJECT</div>
       ) : (
-        <div className="flex flex-col gap-2 mt-4">
-          <div className="bg-black/10 p-2 border-2 border-black mb-2">
+        <div className="flex flex-col gap-2 mt-4 overflow-y-auto max-h-[calc(100vh-12rem)] pr-1">
+          <div className="bg-black/10 p-2 border-2 border-black mb-2 shrink-0">
             <div className="text-[9px] opacity-50 mb-1">SELECTED</div>
             <div className="text-xs font-bold truncate">{selected.name}</div>
           </div>
 
-          <div className="fx-row">
+          <div className="fx-row shrink-0">
             <span className="text-[11px] block mb-2">TRANSFORM</span>
             <div className="grid grid-cols-3 gap-1">
               {[0, 1, 2].map(i => (
@@ -225,13 +311,110 @@ export const Properties: React.FC = () => {
             </button>
           </div>
 
-          {Object.entries(selected.postProcessing).map(([key, val]) => (
-            <div key={key} className="fx-row flex items-center justify-between group cursor-pointer" 
-                 onClick={() => updateObject(selected.id, { postProcessing: { ...selected.postProcessing, [key]: !val } })}>
-              <span className="text-[11px]">{key.toUpperCase()}</span>
-              <div className={cn("fx-toggle transition-colors", val && "bg-black")} />
-            </div>
-          ))}
+          {POST_STACK_SECTIONS.map((section) => {
+            const cfg = selected.postProcessing[section.id];
+            const expanded = !!openSections[section.id];
+            const numericCfg = cfg as unknown as Record<string, number | boolean>;
+
+            return (
+              <div key={section.id} className="fx-row">
+                <div className="flex items-center gap-1 justify-between">
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    onClick={() =>
+                      setOpenSections((s) => ({ ...s, [section.id]: !s[section.id] }))
+                    }
+                    className="p-0.5 border-2 border-black bg-white hover:bg-black/5 shrink-0"
+                  >
+                    {expanded ? <ChevronDown size={14} strokeWidth={2.5} /> : <ChevronRight size={14} strokeWidth={2.5} />}
+                  </button>
+                  <span className="text-[11px] font-bold flex-1 truncate">{section.label}</span>
+                  <button
+                    type="button"
+                    aria-pressed={cfg.enabled}
+                    title={cfg.enabled ? 'Effect on' : 'Effect off'}
+                    onClick={() =>
+                      updateObject(
+                        selected.id,
+                        patchPostSection(selected, section.id, { enabled: !cfg.enabled })
+                      )
+                    }
+                    className="shrink-0 cursor-pointer border-0 bg-transparent p-0"
+                  >
+                    <PostFxCheckbox checked={cfg.enabled} />
+                  </button>
+                </div>
+
+                <AnimatePresence initial={false}>
+                  {expanded ? (
+                    <motion.div
+                      key={`fx-${section.id}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-2 pt-2 border-t-2 border-black/15 space-y-3">
+                        {section.sliders.map((sl) => {
+                          const value = numericCfg[sl.key] as number;
+                          return (
+                            <label key={sl.key} className="block">
+                              <div className="flex justify-between text-[9px] font-mono font-bold mb-0.5">
+                                <span>{sl.label}</span>
+                                <span className="opacity-60">{value.toFixed(sl.step < 1 ? 2 : 0)}</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={sl.min}
+                                max={sl.max}
+                                step={sl.step}
+                                value={value}
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value);
+                                  updateObject(
+                                    selected.id,
+                                    patchPostSection(selected, section.id, {
+                                      [sl.key]: v,
+                                    } as Partial<PostProcessingStack[typeof section.id]>)
+                                  );
+                                }}
+                                className="w-full accent-black h-2"
+                              />
+                            </label>
+                          );
+                        })}
+                        {section.toggles?.map((tg) => {
+                          const on = numericCfg[tg.key] as boolean;
+                          return (
+                            <button
+                              key={tg.key}
+                              type="button"
+                              aria-pressed={on}
+                              title={on ? `${tg.label} on` : `${tg.label} off`}
+                              onClick={() =>
+                                updateObject(
+                                  selected.id,
+                                  patchPostSection(selected, section.id, {
+                                    [tg.key]: !on,
+                                  } as Partial<PostProcessingStack[typeof section.id]>)
+                                )
+                              }
+                              className="flex w-full items-center justify-between gap-2 cursor-pointer border-0 bg-transparent p-0 text-left"
+                            >
+                              <span className="text-[9px] font-mono font-bold">{tg.label}</span>
+                              <PostFxCheckbox checked={on} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  ) : null}
+                </AnimatePresence>
+              </div>
+            );
+          })}
         </div>
       )}
     </aside>

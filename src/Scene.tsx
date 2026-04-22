@@ -5,9 +5,15 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { useEditorStore } from './store';
+import { useEditorStore, type MotionObject, type PostProcessingBloom } from './store';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { RenderPixelatedPass } from 'three/examples/jsm/postprocessing/RenderPixelatedPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 
 // Fallback to WebGL if WebGPURenderer is not easily available or compatible with the current setup
 // Three.js WebGPURenderer is still in jsm/renderers/webgpu/WebGPURenderer.js
@@ -18,6 +24,124 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 function tagSceneInfrastructure(obj: THREE.Object3D) {
   obj.userData.isSceneInfrastructure = true;
 }
+
+function forEachMeshMaterial(mesh: THREE.Mesh, fn: (mat: THREE.Material) => void) {
+  const m = mesh.material;
+  if (Array.isArray(m)) m.forEach(fn);
+  else fn(m);
+}
+
+interface BloomMatUserData {
+  bloomSaved?: boolean;
+  bloomPrevEmissive?: THREE.Color;
+  bloomPrevIntensity?: number;
+}
+
+function syncBloomMaterial(mat: THREE.Material, bloom: PostProcessingBloom) {
+  if (!('emissive' in mat) || !('color' in mat)) return;
+  const m = mat as THREE.MeshStandardMaterial;
+  const u = m.userData as BloomMatUserData;
+  if (bloom.enabled) {
+    if (!u.bloomSaved) {
+      u.bloomSaved = true;
+      u.bloomPrevEmissive = m.emissive.clone();
+      u.bloomPrevIntensity = m.emissiveIntensity;
+    }
+    m.emissive.copy(m.color).multiplyScalar(bloom.emissiveBoost);
+    m.emissiveIntensity = bloom.emissiveIntensity;
+  } else if (u.bloomSaved && u.bloomPrevEmissive) {
+    m.emissive.copy(u.bloomPrevEmissive);
+    m.emissiveIntensity = u.bloomPrevIntensity ?? 0;
+    delete u.bloomSaved;
+    delete u.bloomPrevEmissive;
+    delete u.bloomPrevIntensity;
+  }
+}
+
+function aggregateBloomPassParams(objects: MotionObject[]) {
+  const on = objects.filter((o) => o.postProcessing.bloom.enabled);
+  if (on.length === 0) return null;
+  return {
+    strength: Math.max(...on.map((o) => o.postProcessing.bloom.strength)),
+    radius: Math.max(...on.map((o) => o.postProcessing.bloom.radius)),
+    threshold: Math.min(...on.map((o) => o.postProcessing.bloom.threshold)),
+  };
+}
+
+function aggregatePixelateParams(objects: MotionObject[]) {
+  const on = objects.filter((o) => o.postProcessing.pixelate.enabled);
+  if (on.length === 0) return null;
+  return {
+    pixelSize: Math.max(...on.map((o) => o.postProcessing.pixelate.pixelSize)),
+    normalEdge: Math.max(...on.map((o) => o.postProcessing.pixelate.normalEdge)),
+    depthEdge: Math.max(...on.map((o) => o.postProcessing.pixelate.depthEdge)),
+  };
+}
+
+function aggregateDitherParams(objects: MotionObject[]) {
+  const on = objects.filter((o) => o.postProcessing.dither.enabled);
+  if (on.length === 0) return null;
+  return {
+    pixelSize: Math.max(...on.map((o) => o.postProcessing.dither.pixelSize)),
+    levels: Math.min(...on.map((o) => o.postProcessing.dither.levels)),
+    strength: Math.max(...on.map((o) => o.postProcessing.dither.strength)),
+    monochrome: on.some((o) => o.postProcessing.dither.monochrome),
+  };
+}
+
+const DitherShader = {
+  name: 'DitherShader',
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    resolution: { value: new THREE.Vector2(1, 1) },
+    pixelSize: { value: 2 },
+    levels: { value: 4 },
+    strength: { value: 1 },
+    monochrome: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 resolution;
+    uniform float pixelSize;
+    uniform float levels;
+    uniform float strength;
+    uniform float monochrome;
+    varying vec2 vUv;
+
+    float bayer2(vec2 a) { a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
+    float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer8(vec2 a) { return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+
+    void main() {
+      vec2 cell = floor(vUv * resolution / max(pixelSize, 1.0));
+      vec2 sampleUv = (cell * max(pixelSize, 1.0) + 0.5) / resolution;
+
+      vec3 original = texture2D(tDiffuse, vUv).rgb;
+      vec3 color = texture2D(tDiffuse, sampleUv).rgb;
+
+      if (monochrome > 0.5) {
+        float l = dot(color, vec3(0.299, 0.587, 0.114));
+        color = vec3(l);
+      }
+
+      float quant = max(levels - 1.0, 1.0);
+      float threshold = bayer8(cell) - 0.5;
+
+      vec3 dithered = color + threshold / quant;
+      dithered = clamp(floor(dithered * quant + 0.5) / quant, 0.0, 1.0);
+
+      vec3 finalColor = mix(original, dithered, clamp(strength, 0.0, 1.0));
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  `,
+};
 
 export const Scene: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -46,9 +170,32 @@ export const Scene: React.FC = () => {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1;
     renderer.domElement.style.display = 'block';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
+
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(renderer.getPixelRatio());
+    const renderPass = new RenderPass(scene, camera);
+    const pixelatedPass = new RenderPixelatedPass(8, scene, camera, {
+      normalEdgeStrength: 0.25,
+      depthEdgeStrength: 0.35,
+    });
+    renderPass.enabled = true;
+    pixelatedPass.enabled = false;
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.9, 0.4, 0.18);
+    bloomPass.enabled = false;
+    const ditherPass = new ShaderPass(DitherShader);
+    ditherPass.enabled = false;
+    const outputPass = new OutputPass();
+    outputPass.enabled = false;
+    composer.addPass(renderPass);
+    composer.addPass(pixelatedPass);
+    composer.addPass(bloomPass);
+    composer.addPass(ditherPass);
+    composer.addPass(outputPass);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -115,8 +262,6 @@ export const Scene: React.FC = () => {
       const sphere = new THREE.Mesh(sphereGeo, sphereMat);
       const st = useEditorStore.getState();
       st.addObject({ name: 'CORE_SPHERE', type: 'mesh', mesh: sphere });
-      const added = useEditorStore.getState().objects;
-      if (added.length === 1) st.setSelected(added[0].id);
     }
 
     let lastObjectIdSig = '';
@@ -151,14 +296,19 @@ export const Scene: React.FC = () => {
       }
 
       const selected = liveObjects.find((o) => o.id === selectedId);
-      if (selected?.mesh) {
-        if (lastGizmoObject !== selected.mesh) {
-          transformControl.attach(selected.mesh);
-          lastGizmoObject = selected.mesh;
+      const gizmoTarget = selected?.mesh;
+      if (gizmoTarget) {
+        transformControl.enabled = true;
+        if (lastGizmoObject !== gizmoTarget) {
+          transformControl.attach(gizmoTarget);
+          lastGizmoObject = gizmoTarget;
         }
-      } else if (lastGizmoObject) {
-        transformControl.detach();
-        lastGizmoObject = null;
+      } else {
+        transformControl.enabled = false;
+        if (lastGizmoObject) {
+          transformControl.detach();
+          lastGizmoObject = null;
+        }
       }
 
       // Update object transforms based on keyframes or store values
@@ -187,22 +337,29 @@ export const Scene: React.FC = () => {
           mesh.castShadow = true;
           mesh.receiveShadow = true;
 
-          if (obj.postProcessing.cellShading) {
+          const cell = obj.postProcessing.cellShading;
+          if (cell.enabled) {
+            const outlineScale = cell.outlineScale;
             if (!mesh.userData.outline) {
               const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
               const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMaterial);
-              outlineMesh.scale.multiplyScalar(1.05);
+              outlineMesh.scale.setScalar(outlineScale);
               outlineMesh.userData.isCellOutlineShell = true;
               mesh.add(outlineMesh);
               mesh.userData.outline = outlineMesh;
+            } else {
+              (mesh.userData.outline as THREE.Mesh).scale.setScalar(outlineScale);
             }
           } else if (mesh.userData.outline) {
             mesh.remove(mesh.userData.outline);
             mesh.userData.outline = null;
           }
 
-          if (obj.postProcessing.glitch && Math.random() > 0.95)
-            mesh.position.x += (Math.random() - 0.5) * 0.1;
+          forEachMeshMaterial(mesh, (mat) => syncBloomMaterial(mat, obj.postProcessing.bloom));
+
+          const glitch = obj.postProcessing.glitch;
+          if (glitch.enabled && Math.random() < glitch.rate)
+            mesh.position.x += (Math.random() - 0.5) * glitch.intensity;
         });
 
         if (!scene.children.includes(obj.mesh)) {
@@ -210,8 +367,45 @@ export const Scene: React.FC = () => {
         }
       });
 
+      const needsPixelate = liveObjects.some((o) => o.postProcessing.pixelate.enabled);
+      const needsBloom = liveObjects.some((o) => o.postProcessing.bloom.enabled);
+      const needsDither = liveObjects.some((o) => o.postProcessing.dither.enabled);
+      const needsComposer = needsPixelate || needsBloom || needsDither;
+
+      const pixAgg = aggregatePixelateParams(liveObjects);
+      if (pixAgg) {
+        pixelatedPass.setPixelSize(pixAgg.pixelSize);
+        pixelatedPass.normalEdgeStrength = pixAgg.normalEdge;
+        pixelatedPass.depthEdgeStrength = pixAgg.depthEdge;
+      }
+
+      const bloomAgg = aggregateBloomPassParams(liveObjects);
+      if (bloomAgg) {
+        bloomPass.strength = bloomAgg.strength;
+        bloomPass.radius = bloomAgg.radius;
+        bloomPass.threshold = bloomAgg.threshold;
+      }
+
+      const ditherAgg = aggregateDitherParams(liveObjects);
+      if (ditherAgg) {
+        const size = renderer.getSize(new THREE.Vector2());
+        const pr = renderer.getPixelRatio();
+        ditherPass.uniforms.resolution.value.set(size.x * pr, size.y * pr);
+        ditherPass.uniforms.pixelSize.value = ditherAgg.pixelSize;
+        ditherPass.uniforms.levels.value = ditherAgg.levels;
+        ditherPass.uniforms.strength.value = ditherAgg.strength;
+        ditherPass.uniforms.monochrome.value = ditherAgg.monochrome ? 1 : 0;
+      }
+
+      renderPass.enabled = !needsPixelate;
+      pixelatedPass.enabled = needsPixelate;
+      bloomPass.enabled = needsBloom;
+      ditherPass.enabled = needsDither;
+      outputPass.enabled = needsComposer;
+
       controls.update();
-      renderer.render(scene, camera);
+      if (needsComposer) composer.render(delta);
+      else renderer.render(scene, camera);
       rafId = requestAnimationFrame(animate);
     };
 
@@ -225,6 +419,8 @@ export const Scene: React.FC = () => {
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+      composer.setSize(width, height);
+      composer.setPixelRatio(renderer.getPixelRatio());
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
@@ -239,6 +435,11 @@ export const Scene: React.FC = () => {
       resizeObserver.disconnect();
       transformControl.dispose();
       scene.remove(gizmoHelper);
+      pixelatedPass.dispose();
+      bloomPass.dispose();
+      ditherPass.dispose();
+      outputPass.dispose();
+      composer.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };

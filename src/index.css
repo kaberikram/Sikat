@@ -171,11 +171,22 @@
 }
 
 .fx-toggle {
-  width: 28px;
-  height: 14px;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
   border: 2px solid #000;
   background: white;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.fx-toggle--on {
+  background: #000;
 }
 
 .track {

@@ -1,6 +1,96 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 
+export interface PostProcessingBloom {
+  enabled: boolean;
+  strength: number;
+  threshold: number;
+  radius: number;
+  emissiveBoost: number;
+  emissiveIntensity: number;
+}
+
+export interface PostProcessingPixelate {
+  enabled: boolean;
+  pixelSize: number;
+  normalEdge: number;
+  depthEdge: number;
+}
+
+export interface PostProcessingCellShading {
+  enabled: boolean;
+  outlineScale: number;
+}
+
+export interface PostProcessingGlitch {
+  enabled: boolean;
+  intensity: number;
+  rate: number;
+}
+
+export interface PostProcessingDither {
+  enabled: boolean;
+  pixelSize: number;
+  levels: number;
+  strength: number;
+  monochrome: boolean;
+}
+
+export interface PostProcessingStack {
+  bloom: PostProcessingBloom;
+  pixelate: PostProcessingPixelate;
+  cellShading: PostProcessingCellShading;
+  glitch: PostProcessingGlitch;
+  dither: PostProcessingDither;
+}
+
+export function createDefaultPostProcessing(): PostProcessingStack {
+  return {
+    bloom: {
+      enabled: false,
+      strength: 0.9,
+      threshold: 0.18,
+      radius: 0.4,
+      emissiveBoost: 0.55,
+      emissiveIntensity: 1.35,
+    },
+    pixelate: {
+      enabled: false,
+      pixelSize: 8,
+      normalEdge: 0.25,
+      depthEdge: 0.35,
+    },
+    cellShading: {
+      enabled: true,
+      outlineScale: 1.05,
+    },
+    glitch: {
+      enabled: false,
+      intensity: 0.1,
+      rate: 0.06,
+    },
+    dither: {
+      enabled: false,
+      pixelSize: 2,
+      levels: 4,
+      strength: 1,
+      monochrome: false,
+    },
+  };
+}
+
+function mergePostProcessing(partial?: Partial<PostProcessingStack>): PostProcessingStack {
+  const d = createDefaultPostProcessing();
+  if (!partial) return d;
+  return {
+    bloom: { ...d.bloom, ...partial.bloom },
+    pixelate: { ...d.pixelate, ...partial.pixelate },
+    cellShading: { ...d.cellShading, ...partial.cellShading },
+    glitch: { ...d.glitch, ...partial.glitch },
+    dither: { ...d.dither, ...partial.dither },
+  };
+}
+
 export interface MotionObject {
   id: string;
   name: string;
@@ -9,12 +99,7 @@ export interface MotionObject {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
-  postProcessing: {
-    bloom: boolean;
-    pixelate: boolean;
-    cellShading: boolean;
-    glitch: boolean;
-  };
+  postProcessing: PostProcessingStack;
   keyframes: Array<{
     time: number;
     property: 'position' | 'rotation' | 'scale';
@@ -53,12 +138,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       position: obj.position || [0, 0, 0],
       rotation: obj.rotation || [0, 0, 0],
       scale: obj.scale || [1, 1, 1],
-      postProcessing: obj.postProcessing || {
-        bloom: false,
-        pixelate: false,
-        cellShading: true,
-        glitch: false,
-      },
+      postProcessing: mergePostProcessing(obj.postProcessing),
       keyframes: obj.keyframes || [],
     };
     // Scene cleanup matches scene children by mesh.userData.id — must equal MotionObject.id
