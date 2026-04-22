@@ -43,9 +43,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   currentTime: 0,
   duration: 10,
   isPlaying: false,
-  addObject: (obj) => set((state) => ({
-    objects: [...state.objects, {
-      id: Math.random().toString(36).substr(2, 9),
+  addObject: (obj) => set((state) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    const motion: MotionObject = {
+      id,
       name: obj.name || 'Untitled Object',
       type: obj.type || 'mesh',
       mesh: obj.mesh,
@@ -59,8 +60,12 @@ export const useEditorStore = create<EditorState>((set) => ({
         glitch: false,
       },
       keyframes: obj.keyframes || [],
-    }]
-  })),
+    };
+    // Scene cleanup matches scene children by mesh.userData.id — must equal MotionObject.id
+    if (motion.mesh)
+      motion.mesh.userData = { ...motion.mesh.userData, id };
+    return { objects: [...state.objects, motion] };
+  }),
   removeObject: (id) => set((state) => ({
     objects: state.objects.filter(o => o.id !== id),
     selectedId: state.selectedId === id ? null : state.selectedId

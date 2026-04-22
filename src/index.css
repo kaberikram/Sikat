@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;700&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
 
 @theme {
   --font-sans: "Arial Black", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
@@ -90,6 +90,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 0;
 }
 
 .props-panel {

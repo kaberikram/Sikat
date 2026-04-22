@@ -19,7 +19,6 @@ export const Toolbar: React.FC = () => {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshToonMaterial({ color: '#FF6B00' });
     const mesh = new THREE.Mesh(geometry, material);
-    (mesh as any).userData = { id: Math.random().toString(36).substr(2, 9) };
     addObject({ name: 'BOX_MDL_01', type: 'mesh', mesh });
   };
 
@@ -27,7 +26,6 @@ export const Toolbar: React.FC = () => {
     const geometry = new THREE.SphereGeometry(0.5, 32, 32);
     const material = new THREE.MeshToonMaterial({ color: '#0094FF' });
     const mesh = new THREE.Mesh(geometry, material);
-    (mesh as any).userData = { id: Math.random().toString(36).substr(2, 9) };
     addObject({ name: 'SPHERE_MDL_02', type: 'mesh', mesh });
   };
 
@@ -51,7 +49,6 @@ export const Toolbar: React.FC = () => {
     const geometry = new THREE.PlaneGeometry(2, 1);
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geometry, material);
-    (mesh as any).userData = { id: Math.random().toString(36).substr(2, 9) };
     addObject({ name: 'TAG_PLANE_00', type: 'mesh', mesh });
   };
 
@@ -66,7 +63,6 @@ export const Toolbar: React.FC = () => {
       (gltf) => {
         URL.revokeObjectURL(url);
         const model = gltf.scene;
-        (model as any).userData = { id: Math.random().toString(36).substr(2, 9) };
         addObject({
           name: file.name.toUpperCase(),
           type: 'group',
