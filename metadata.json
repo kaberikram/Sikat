@@ -1,6 +1,6 @@
 {
-  "name": "FunkyRender GX",
-  "description": "A high-octane WebGPU 3D motion design editor with a funky Dreamcast era aesthetic.",
+  "name": "RADIO_EDIT.EXE",
+  "description": "A brutalist browser-based 3D scene editor with a keyframe timeline and a per-object post-processing FX stack.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

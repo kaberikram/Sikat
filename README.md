@@ -1,20 +1,124 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# RADIO_EDIT.EXE
 
-# Run and deploy your AI Studio app
+A brutalist, browser-based 3D scene editor for building stylized shots with a post-processing FX stack and a keyframe timeline. Drop in a `.glb`, throw some effects on it, scrub the timeline, and export the scene as JSON.
 
-This contains everything you need to run your app locally.
+Built with React + Three.js. No backend, no accounts, no API keys — just open it and start moving things around.
 
-View your app in AI Studio: https://ai.studio/apps/c7a839c8-d769-42a0-816c-b67a4a7e7527
+## Product direction
+
+Radio Edit is one app in two form factors:
+
+### Desktop (current focus)
+
+A conventional web-based 3D motion design tool. Arrange objects, keyframe transforms, stylize the shot through a **virtual camera**, scrub, preview, export. The main viewport shows the scene perspective; a **picture-in-picture viewfinder** in the corner shows what the virtual camera sees with all FX applied — your final-look preview.
+
+### XR (next phase)
+
+Same app, spatial form factor. On Quest 3 / Vision Pro: you stand in your real room, the 3D scene composites onto passthrough, and you hold a virtual camcorder whose back screen is the viewfinder. You "shoot" the scene by physically moving the camcorder — pose samples into keyframes, timeline plays them back.
+
+The **viewfinder** is the concept that unifies both modes. On desktop it's a PiP overlay; in XR it's a mesh in your hand. **Post-processing lives on the viewfinder only** — never on the user's view of the scene. This is what makes the XR experience comfortable (no motion-sickness-inducing full-screen effects on passthrough) and gives us a clean "film stock / lens" metaphor on desktop.
+
+**Desktop first. XR when the editing model is solid.**
+
+## Roadmap
+
+### Phase 1 — Desktop MVP (current)
+
+1. **Virtual camera as a first-class entity** — separate `virtualCamera` from `userCamera` in the store, with its own transform, FOV, and FX stack.
+2. **Viewfinder PiP** — small `RenderTarget` rendered from the virtual camera, drawn as a corner overlay. FX moves off `MotionObject` and onto the virtual camera.
+3. **Camera-view toggle** — press `C` to fullscreen the viewfinder.
+4. **Auto-keyframe / record mode** — toggle "REC"; any transform change auto-records a keyframe.
+5. **Easing curves per keyframe** — `linear`, `easeIn`, `easeOut`, `easeInOut`, `step`.
+6. **Undo / redo** — Zundo on top of Zustand.
+
+Stretch: object duplication, keyboard shortcuts, scene save/load to localStorage, material editor (color + emissive + material type), video export via WebCodecs.
+
+### Phase 2 — XR (Quest 3 / Vision Pro)
+
+1. WebXR session + passthrough + controller/hand tracking.
+2. Virtual camcorder mesh locked to a controller; viewfinder moves from PiP overlay to the camcorder's back screen (same `RenderTarget`).
+3. "Record" = trigger button; keyframe sampling runs at headset framerate.
+4. Playback / scrub UI reachable in-headset.
+
+Steps 1–2 of the desktop phase are the architectural investment that makes Phase 2 a mount-point swap rather than a rewrite.
+
+## Features
+
+- **3D viewport** with orbit camera and a translate gizmo for moving objects
+- **Object library**: add primitives (box, sphere), text tags, or import your own `.gltf` / `.glb` models (Draco-compressed models supported)
+- **Keyframe timeline**: scrub, play, and record position / rotation / scale keyframes per object
+- **Per-object post-processing stack**:
+  - `BLOOM` — UnrealBloom with surface glow controls
+  - `PIXELATE` — pixel-art render pass with normal/depth edge detection
+  - `CELL_SHADING` — back-face outline shell for toon looks
+  - `GLITCH` — jitter on position at a configurable rate
+  - `DITHER` — Bayer-dithered, quantized color with optional monochrome
+- **JSON export** of the full scene (transforms, keyframes, FX settings)
+
+## Tech Stack
+
+- **React 19** + **TypeScript** + **Vite**
+- **Three.js** (WebGL renderer, EffectComposer, custom ShaderPass)
+- **Zustand** for editor state
+- **Tailwind CSS v4** + **Motion** for the UI
+- **lucide-react** for icons
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js 18+
 
+```bash
+npm install
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+The app runs on [http://localhost:3000](http://localhost:3000).
+
+## Scripts
+
+- `npm run dev` — start the Vite dev server
+- `npm run build` — production build
+- `npm run preview` — preview the production build
+- `npm run lint` — typecheck with `tsc --noEmit`
+- `npm run clean` — remove `dist/`
+
+## Project Structure
+
+```
+src/
+  Editor.tsx      — Toolbar, Outliner, Properties, Timeline, Editor shell
+  Scene.tsx       — Three.js scene, composer passes, animation loop
+  store.ts        — Zustand store (objects, keyframes, FX state)
+  gltf-loader.ts  — GLTFLoader wired up with Draco decoder
+  index.css       — Tailwind + brutalist theme tokens
+public/
+  draco/          — Draco decoder assets for compressed glTF models
+```
+
+## Notes
+
+- Draco decoder files live in `public/draco/` so compressed `.glb` files load without a CDN round-trip.
+- The post-processing passes are aggregated across all objects that have a given effect enabled — per-object effect state drives a single shared pipeline for performance.
+
+## Renderer & XR strategy
+
+**WebGL today. WebGPU later, only once WebXR-on-WebGPU is stable on Quest browser.**
+
+The scene runs on `THREE.WebGLRenderer` + `EffectComposer`. WebXR on Quest 3 currently rides WebGL2, and Three.js's WebGL XR path is years more mature than its WebGPU XR path. Swapping renderers now would slow XR, not speed it up.
+
+### Architectural invariants (read before adding features)
+
+1. **`src/Scene.tsx` is the only renderer-aware module.** `Editor.tsx`, `store.ts`, and the FX config types stay agnostic to WebGL / WebGPU / WebXR. Never reach for renderer or composer APIs from UI code.
+
+2. **Post-processing is per-camera ("lens"), never per-scene or per-world-render.**
+   - The user's view (passthrough + scene) stays clean. No bloom, no pixelate, nothing — on any device.
+   - Effects only apply to the **viewfinder render target** attached to the virtual camcorder.
+   - This keeps the XR experience comfortable (no motion-sickness inducing full-screen effects) and gives us the "film stock" metaphor for free.
+
+3. **Two cameras, not one.**
+   - `userCamera` — what the viewer sees. Stereo under WebXR, mono on desktop. No FX.
+   - `virtualCamera` — the camcorder. Renders into a small RT shown as the viewfinder texture. This is the camera whose pose the timeline records.
+
+4. **New FX = declarative config on the camera's FX stack**, wired up inside `Scene.tsx`. No exceptions.
+
+A full WebGPU migration checklist (with XR gating criteria) lives at the top of `src/Scene.tsx`.
