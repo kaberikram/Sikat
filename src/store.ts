@@ -94,6 +94,34 @@ function mergePostProcessing(partial?: Partial<PostProcessingStack>): PostProces
   };
 }
 
+export interface SceneLighting {
+  ambient: { color: string; intensity: number };
+  key: { color: string; intensity: number; position: [number, number, number] };
+  background: string;
+}
+
+/** Defaults match the values previously hard-coded in Scene.tsx. */
+export function createDefaultLighting(): SceneLighting {
+  return {
+    ambient: { color: '#ffffff', intensity: 0.8 },
+    key: { color: '#ffffff', intensity: 1.5, position: [5, 10, 7] },
+    background: '#f2f2f2',
+  };
+}
+
+export interface LightingPatch {
+  ambient?: Partial<SceneLighting['ambient']>;
+  key?: Partial<SceneLighting['key']>;
+  background?: string;
+}
+
+export interface MaterialOverride {
+  color?: string;
+  emissive?: string;
+  emissiveIntensity?: number;
+  opacity?: number;
+}
+
 export type CameraKeyframeProperty = 'position' | 'rotation' | 'fov';
 
 export interface VirtualCamera {
@@ -142,11 +170,14 @@ export interface MotionObject {
   subMeshTransparent?: Record<string, boolean>
   /** Per-mesh shadow: `false` = no cast / receive. Omitted or `true` = scene default (on). */
   subMeshShadow?: Record<string, boolean>
+  /** Material changes applied by Director Mode agents (kept for scene export). */
+  materialOverride?: MaterialOverride
 }
 
 interface EditorState {
   objects: MotionObject[];
   virtualCamera: VirtualCamera;
+  lighting: SceneLighting;
   selectedId: string | null;
   currentTime: number;
   duration: number;
@@ -159,6 +190,8 @@ interface EditorState {
   updateObject: (id: string, updates: Partial<MotionObject>) => void
   setSubMeshTransparent: (objectId: string, meshUuid: string, transparent: boolean) => void
   setSubMeshShadow: (objectId: string, meshUuid: string, castAndReceive: boolean) => void
+  updateLighting: (patch: LightingPatch) => void
+  setObjectMaterial: (id: string, patch: MaterialOverride) => void
   updateCamera: (updates: Partial<VirtualCamera>) => void
   setSelected: (id: string | null) => void
   setTime: (time: number) => void
@@ -185,6 +218,7 @@ interface EditorState {
 export const useEditorStore = create<EditorState>((set) => ({
   objects: [],
   virtualCamera: createDefaultVirtualCamera(),
+  lighting: createDefaultLighting(),
   selectedId: null,
   currentTime: 0,
   duration: 10,
@@ -192,7 +226,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   isExporting: false,
   setExporting: (v) => set({ isExporting: v }),
   addObject: (obj) => set((state) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = obj.id ?? Math.random().toString(36).substr(2, 9);
     const motion: MotionObject = {
       id,
       name: obj.name || 'Untitled Object',
@@ -252,6 +286,39 @@ export const useEditorStore = create<EditorState>((set) => ({
         else subMeshShadow[meshUuid] = false
         return { ...o, subMeshShadow }
       }),
+    }
+  }),
+  updateLighting: (patch) => set((state) => ({
+    lighting: {
+      ambient: { ...state.lighting.ambient, ...patch.ambient },
+      key: { ...state.lighting.key, ...patch.key },
+      background: patch.background ?? state.lighting.background,
+    },
+  })),
+  setObjectMaterial: (id, patch) => set((state) => {
+    const obj = state.objects.find((o) => o.id === id)
+    if (!obj?.mesh) return state
+    // Same mutate-THREE-inside-the-store pattern as setSubMeshTransparent.
+    obj.mesh.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return
+      if (child.userData.isCellOutlineShell) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const m of materials) {
+        const mat = m as THREE.MeshStandardMaterial
+        if (patch.color !== undefined && mat.color) mat.color.set(patch.color)
+        if (patch.emissive !== undefined && 'emissive' in mat) mat.emissive.set(patch.emissive)
+        if (patch.emissiveIntensity !== undefined && 'emissiveIntensity' in mat)
+          mat.emissiveIntensity = patch.emissiveIntensity
+        if (patch.opacity !== undefined) {
+          mat.opacity = patch.opacity
+          mat.transparent = patch.opacity < 1
+        }
+      }
+    })
+    return {
+      objects: state.objects.map((o) =>
+        o.id === id ? { ...o, materialOverride: { ...o.materialOverride, ...patch } } : o
+      ),
     }
   }),
   updateCamera: (updates) => set((state) => ({

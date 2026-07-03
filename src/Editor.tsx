@@ -8,6 +8,8 @@ import * as THREE from 'three'
 import { gltfLoader } from './gltf-loader'
 import { Scene } from './Scene'
 import { exportMp4 } from './exporter'
+import { buildTurnaroundRotationKeyframes } from './animation-presets'
+import { DirectorConsole } from './director/DirectorConsole'
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -415,8 +417,6 @@ function PostStackEditor({
   )
 }
 
-const TURNAROUND_STEPS = 8
-
 function collectDescendantMeshes(root: THREE.Object3D): THREE.Mesh[] {
   const out: THREE.Mesh[] = []
   root.traverse((c) => {
@@ -441,23 +441,6 @@ function getEffectiveMeshShadow(
   overrides: Record<string, boolean> | undefined
 ): boolean {
   return overrides?.[mesh.uuid] !== false
-}
-
-function buildTurnaroundRotationKeyframes(
-  baseRotation: [number, number, number],
-  duration: number
-): Array<{ time: number; value: [number, number, number] }> {
-  const [rx, , rz] = baseRotation
-  const startY = baseRotation[1]
-  const out: Array<{ time: number; value: [number, number, number] }> = []
-  for (let i = 0; i <= TURNAROUND_STEPS; i++) {
-    const alpha = i / TURNAROUND_STEPS
-    out.push({
-      time: alpha * duration,
-      value: [rx, startY + alpha * Math.PI * 2, rz],
-    })
-  }
-  return out
 }
 
 export const Properties: React.FC = () => {
@@ -951,6 +934,8 @@ export const Editor: React.FC = () => {
           </div>
           <div ref={setPipMountEl} className="absolute inset-0" />
         </div>
+
+        <DirectorConsole />
       </main>
 
       <Properties />

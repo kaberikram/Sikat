@@ -4,6 +4,8 @@ A brutalist, browser-based 3D scene editor for building stylized shots with a po
 
 Built with React + Three.js. No backend, no accounts, no API keys — just open it and start moving things around.
 
+**Optional: [Director Mode](#director-mode-optional)** adds a voice/text-commanded AI crew (spawn props, relight the set, dial FX, move the camera) via a local FastAPI agent server. The editor still runs fully standalone without it.
+
 ## Product direction
 
 Radio Edit is one app in two form factors:
@@ -88,12 +90,47 @@ The app runs on [http://localhost:3000](http://localhost:3000).
 src/
   Editor.tsx      — Toolbar, Outliner, Properties, Timeline, Editor shell
   Scene.tsx       — Three.js scene, composer passes, animation loop
-  store.ts        — Zustand store (objects, keyframes, FX state)
+  store.ts        — Zustand store (objects, keyframes, lighting, FX state)
   gltf-loader.ts  — GLTFLoader wired up with Draco decoder
   index.css       — Tailwind + brutalist theme tokens
+  director/       — Director Mode client (socket, applier, tween, console)
+server/           — Director Mode agent server (FastAPI, optional)
+docs/DirectorAI/  — Obsidian-compatible vault: PRD, protocol, agent profiles
 public/
   draco/          — Draco decoder assets for compressed glTF models
 ```
+
+## Director Mode (optional)
+
+Direct the scene like a film set: a **DIRECTOR_LINK** console appears in the
+viewport, and an AI crew (Producer, Director's Assistant, Lighting Tech, Asset
+Animator, VFX Operator) turns instructions into live scene changes over a
+WebSocket — `"add a red box then dim the lights"`, `"sunset mood"`,
+`"move the box up 2 over 3 seconds"`, `"turnaround the sphere"`, `"enable bloom"`.
+
+```bash
+# Terminal A — agent server (requires uv; https://docs.astral.sh/uv/)
+cd server && uv sync && uv run uvicorn app.main:app --port 8000
+
+# Terminal B — the editor as usual
+npm run dev
+```
+
+Works with **no API key** via a deterministic command grammar. Set
+`ANTHROPIC_API_KEY` for free-form phrasing (Claude structured outputs; the
+grammar remains the fallback). Chromium-based browsers also get a mic button
+for spoken direction.
+
+Extras:
+
+- `cd server && uv run pytest` — agent/parser/protocol test suite
+- `uv run python scripts/mock_telemetry.py --duration 15` — simulated camera
+  operator orbiting the stage (drives the virtual camera through the same path
+  a headset will use in the XR phase)
+- Protocol + architecture docs: `docs/DirectorAI/` (Obsidian-compatible vault)
+
+Director Mode respects the architectural invariants below: agents mutate the
+Zustand store only, and FX changes land exclusively on the viewfinder.
 
 ## Notes
 
