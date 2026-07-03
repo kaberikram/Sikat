@@ -1,0 +1,153 @@
+/**
+ * DirectorSocket: the editor's realtime link to the agent-swarm backend.
+ * Reconnects with exponential backoff (1s -> 10s cap, ±20% jitter).
+ * No React imports — UI subscribes via the on* methods.
+ */
+import {
+  type CommandPacket,
+  type AgentLogMessage,
+  type ErrorMessage,
+  type SceneSnapshot,
+  parseServerMessage,
+} from './protocol'
+
+export type SocketStatus = 'connecting' | 'open' | 'closed'
+
+type Listener<T> = (value: T) => void
+
+function defaultUrl(): string {
+  const configured = import.meta.env.VITE_DIRECTOR_WS_URL as string | undefined
+  if (configured) return configured
+  const host = typeof location !== 'undefined' ? location.hostname : 'localhost'
+  return `ws://${host}:8000/ws`
+}
+
+export class DirectorSocket {
+  private ws: WebSocket | null = null
+  private url: string
+  private attempts = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private closedByUser = false
+
+  private packetListeners = new Set<Listener<CommandPacket>>()
+  private logListeners = new Set<Listener<AgentLogMessage>>()
+  private errorListeners = new Set<Listener<ErrorMessage>>()
+  private statusListeners = new Set<Listener<SocketStatus>>()
+  private openListeners = new Set<() => void>()
+
+  status: SocketStatus = 'closed'
+
+  constructor(url = defaultUrl()) {
+    this.url = url
+  }
+
+  connect() {
+    if (this.ws && this.ws.readyState <= WebSocket.OPEN) return
+    this.closedByUser = false
+    this.setStatus('connecting')
+    this.ws = new WebSocket(this.url)
+    this.ws.onopen = () => {
+      this.attempts = 0
+      this.setStatus('open')
+      for (const cb of this.openListeners) cb()
+    }
+    this.ws.onmessage = (event) => {
+      let raw: unknown
+      try {
+        raw = JSON.parse(event.data as string)
+      } catch {
+        return
+      }
+      const msg = parseServerMessage(raw)
+      if (!msg) return
+      if (msg.type === 'agent_command') for (const cb of this.packetListeners) cb(msg.packet)
+      else if (msg.type === 'agent_log') for (const cb of this.logListeners) cb(msg)
+      else for (const cb of this.errorListeners) cb(msg)
+    }
+    this.ws.onclose = () => {
+      this.ws = null
+      this.setStatus('closed')
+      if (!this.closedByUser) this.scheduleReconnect()
+    }
+    this.ws.onerror = () => {
+      this.ws?.close()
+    }
+  }
+
+  disconnect() {
+    this.closedByUser = true
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.ws?.close()
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) return
+    const base = Math.min(10_000, 1_000 * 2 ** this.attempts)
+    const jitter = base * (0.8 + Math.random() * 0.4)
+    this.attempts += 1
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.connect()
+    }, jitter)
+  }
+
+  private setStatus(status: SocketStatus) {
+    this.status = status
+    for (const cb of this.statusListeners) cb(status)
+  }
+
+  private sendRaw(obj: unknown): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false
+    this.ws.send(JSON.stringify(obj))
+    return true
+  }
+
+  /** Returns the commandId used, or null when the socket is not open. */
+  sendUserCommand(text: string): string | null {
+    const commandId = crypto.randomUUID()
+    const sent = this.sendRaw({
+      type: 'user_command',
+      timestamp: Date.now() / 1000,
+      text,
+      commandId,
+    })
+    return sent ? commandId : null
+  }
+
+  sendSceneState(snapshot: Omit<SceneSnapshot, 'type' | 'timestamp'>): boolean {
+    return this.sendRaw({ type: 'scene_state', timestamp: Date.now() / 1000, ...snapshot })
+  }
+
+  onPacket(cb: Listener<CommandPacket>): () => void {
+    this.packetListeners.add(cb)
+    return () => this.packetListeners.delete(cb)
+  }
+
+  onLog(cb: Listener<AgentLogMessage>): () => void {
+    this.logListeners.add(cb)
+    return () => this.logListeners.delete(cb)
+  }
+
+  onError(cb: Listener<ErrorMessage>): () => void {
+    this.errorListeners.add(cb)
+    return () => this.errorListeners.delete(cb)
+  }
+
+  onStatus(cb: Listener<SocketStatus>): () => void {
+    this.statusListeners.add(cb)
+    return () => this.statusListeners.delete(cb)
+  }
+
+  onOpen(cb: () => void): () => void {
+    this.openListeners.add(cb)
+    if (this.status === 'open') cb()
+    return () => this.openListeners.delete(cb)
+  }
+}
+
+let singleton: DirectorSocket | null = null
+
+export function getDirectorSocket(): DirectorSocket {
+  if (!singleton) singleton = new DirectorSocket()
+  return singleton
+}

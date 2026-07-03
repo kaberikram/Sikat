@@ -244,6 +244,16 @@ export const Scene: React.FC<SceneProps> = ({ pipMountEl }) => {
       const selectedId = useEditorStore.getState().selectedId
       const vcamData = useEditorStore.getState().virtualCamera
 
+      // Lighting is store-driven (Director Mode agents patch it); defaults
+      // are identical to the previous hard-coded values.
+      const lighting = useEditorStore.getState().lighting
+      ambientLight.color.set(lighting.ambient.color)
+      ambientLight.intensity = lighting.ambient.intensity
+      directionalLight.color.set(lighting.key.color)
+      directionalLight.intensity = lighting.key.intensity
+      directionalLight.position.set(...lighting.key.position)
+      ;(scene.background as THREE.Color).set(lighting.background)
+
       const gizmoCamDrag = gizmo.dragging && gizmo.object === virtCamera
       if (!gizmoCamDrag) applyVirtualCameraAtTime(t, vcamData, virtCamera)
 

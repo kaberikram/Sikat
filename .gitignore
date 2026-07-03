@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Python (Director server)
+server/.venv/
+__pycache__/
+.pytest_cache/
