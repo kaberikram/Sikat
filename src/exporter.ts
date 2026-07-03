@@ -1,11 +1,8 @@
 import * as THREE from 'three'
 import { Muxer, ArrayBufferTarget, type MuxerOptions } from 'mp4-muxer'
-import { createViewfinderComposer, renderViewfinderFrame } from './pip-composer'
+import { renderViewfinderExportFrame } from './scene/viewfinder-pass'
+import { createViewfinderComposer } from './pip-composer'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime } from './timeline-apply'
-import {
-  applyViewfinderMeshEffects,
-  stripViewfinderObjectEffects,
-} from './viewfinder-mesh-fx'
 import { getSceneForExport } from './scene-export-registry'
 import { useEditorStore } from './store'
 
@@ -131,14 +128,8 @@ export async function exportMp4(options: ExportMp4Options = {}): Promise<Blob> {
       applyVirtualCameraAtTime(t, vcData, vcam)
       for (const obj of objects) applyObjectTransformAtTime(t, obj)
 
-      stripViewfinderObjectEffects(objects)
       const stack = getPostProcessing()
-      applyViewfinderMeshEffects(objects, stack)
-      renderViewfinderFrame(stack, exportRenderer, scene, vcam, passes, 0)
-
-      stripViewfinderObjectEffects(objects)
-      for (const obj of objects) applyObjectTransformAtTime(t, obj)
-      applyVirtualCameraAtTime(t, vcData, vcam)
+      renderViewfinderExportFrame(objects, stack, exportRenderer, scene, vcam, passes, t, vcData)
 
       const ts = (frame * 1_000_000) / fps
       const vf = new VideoFrame(exportRenderer.domElement, { timestamp: ts })

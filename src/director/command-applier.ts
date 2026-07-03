@@ -23,6 +23,8 @@ import {
 } from '../animation-presets'
 import { buildSpawnMesh } from './spawn-factory'
 import { startTween } from './tween'
+import { getEaseFn } from '../easing'
+import { patchCameraPostSection } from '../post-processing'
 import type {
   CommandPacket,
   Target,
@@ -31,13 +33,6 @@ import type {
 } from './protocol'
 
 const EASE_SAMPLES = 8
-
-const EASE_FN: Record<Transition['easing'], (t: number) => number> = {
-  linear: (t) => t,
-  easeIn: (t) => t * t * t,
-  easeOut: (t) => 1 - (1 - t) ** 3,
-  easeInOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2),
-}
 
 function resolveTarget(target: Target | null | undefined): MotionObject | null {
   if (!target) return null
@@ -74,7 +69,7 @@ function bakeEasedKeyframes(
   const st = useEditorStore.getState()
   const t0 = st.currentTime
   const from = interpolateKeyframes(obj.keyframes, t0, property, obj[property])
-  const ease = EASE_FN[transition.easing] ?? EASE_FN.easeInOut
+  const ease = getEaseFn(transition.easing)
   for (let i = 0; i <= EASE_SAMPLES; i++) {
     const alpha = i / EASE_SAMPLES
     const eased = ease(alpha)
@@ -282,20 +277,19 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const cleaned = Object.fromEntries(
         Object.entries(patch).filter(([, v]) => v !== null && v !== undefined)
       )
-      st.updateCamera({
-        postProcessing: {
-          ...vc.postProcessing,
-          [section]: { ...vc.postProcessing[section], ...cleaned },
-        },
-      })
+      st.updateCamera(patchCameraPostSection(vc, section, cleaned))
       return `${section} fx updated`
     }
 
     case 'SET_KEYFRAMES': {
       const p = packet.payload
       if (!p.target) {
+        if (p.property === 'scale') {
+          console.warn('SET_KEYFRAMES: camera scale keyframes ignored')
+          return 'camera scale keyframes skipped'
+        }
         for (const kf of p.keyframes) {
-          st.addCameraKeyframe(kf.time, p.property === 'scale' ? 'position' : p.property, kf.value)
+          st.addCameraKeyframe(kf.time, p.property, kf.value)
         }
         return `camera ${p.property} keyframes set`
       }

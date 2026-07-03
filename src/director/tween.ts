@@ -8,13 +8,7 @@
  */
 import { useEditorStore } from '../store'
 import type { Easing } from './protocol'
-
-const EASING: Record<Easing, (t: number) => number> = {
-  linear: (t) => t,
-  easeIn: (t) => t * t * t,
-  easeOut: (t) => 1 - (1 - t) ** 3,
-  easeInOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2),
-}
+import { getEaseFn } from '../easing'
 
 interface ActiveTween {
   from: number[]
@@ -63,7 +57,7 @@ export function startTween({ key, from, to, durationSec, easing, set }: TweenOpt
     to,
     start: performance.now(),
     durationMs: Math.max(1, durationSec * 1000),
-    ease: EASING[easing] ?? EASING.easeInOut,
+    ease: getEaseFn(easing),
     set,
   })
   if (rafId === null) {
@@ -72,7 +66,7 @@ export function startTween({ key, from, to, durationSec, easing, set }: TweenOpt
   }
 }
 
-export function cancelTweensFor(prefix: string) {
+function cancelTweensFor(prefix: string) {
   for (const key of active.keys()) {
     if (key.startsWith(prefix)) active.delete(key)
   }

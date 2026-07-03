@@ -2,7 +2,14 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 
 export const VIRTUAL_CAMERA_ID = 'virtualCamera' as const;
-export type VirtualCameraId = typeof VIRTUAL_CAMERA_ID;
+
+function findMeshByUuid(root: THREE.Object3D, meshUuid: string): THREE.Mesh | null {
+  let target: THREE.Mesh | null = null
+  root.traverse((c) => {
+    if (c instanceof THREE.Mesh && c.uuid === meshUuid) target = c
+  })
+  return target
+}
 
 export interface PostProcessingBloom {
   enabled: boolean;
@@ -184,7 +191,12 @@ interface EditorState {
   isPlaying: boolean;
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
+  overlayTimeline: boolean
+  overlayObjects: boolean
+  overlayExport: boolean
   setExporting: (v: boolean) => void
+  setOverlay: (overlay: 'timeline' | 'objects' | 'export', open?: boolean) => void
+  closeAllOverlays: () => void
   addObject: (obj: Partial<MotionObject>) => void
   removeObject: (id: string) => void
   updateObject: (id: string, updates: Partial<MotionObject>) => void
@@ -213,9 +225,11 @@ interface EditorState {
     property: 'position' | 'rotation' | 'scale',
     keyframes: Array<{ time: number; value: [number, number, number] }>
   ) => void
+  snapshotObjectKeyframes: (objectId: string, time: number) => void
+  snapshotCameraKeyframes: (time: number) => void
 }
 
-export const useEditorStore = create<EditorState>((set) => ({
+export const useEditorStore = create<EditorState>((set, get) => ({
   objects: [],
   virtualCamera: createDefaultVirtualCamera(),
   lighting: createDefaultLighting(),
@@ -224,9 +238,19 @@ export const useEditorStore = create<EditorState>((set) => ({
   duration: 10,
   isPlaying: false,
   isExporting: false,
+  overlayTimeline: false,
+  overlayObjects: false,
+  overlayExport: false,
   setExporting: (v) => set({ isExporting: v }),
+  setOverlay: (overlay, open) => set((state) => {
+    const next = open ?? !(overlay === 'timeline' ? state.overlayTimeline : overlay === 'objects' ? state.overlayObjects : state.overlayExport)
+    if (overlay === 'timeline') return { overlayTimeline: next }
+    if (overlay === 'objects') return { overlayObjects: next }
+    return { overlayExport: next }
+  }),
+  closeAllOverlays: () => set({ overlayTimeline: false, overlayObjects: false, overlayExport: false }),
   addObject: (obj) => set((state) => {
-    const id = obj.id ?? Math.random().toString(36).substr(2, 9);
+    const id = obj.id ?? Math.random().toString(36).slice(2, 11);
     const motion: MotionObject = {
       id,
       name: obj.name || 'Untitled Object',
@@ -251,10 +275,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setSubMeshTransparent: (objectId, meshUuid, transparent) => set((state) => {
     const obj = state.objects.find((o) => o.id === objectId)
     if (!obj?.mesh) return state
-    let target: THREE.Mesh | null = null
-    obj.mesh.traverse((c) => {
-      if (c instanceof THREE.Mesh && c.uuid === meshUuid) target = c
-    })
+    const target = findMeshByUuid(obj.mesh, meshUuid)
     if (!target) return state
     const materials = Array.isArray(target.material) ? target.material : [target.material]
     for (const m of materials) m.transparent = transparent
@@ -271,10 +292,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setSubMeshShadow: (objectId, meshUuid, castAndReceive) => set((state) => {
     const obj = state.objects.find((o) => o.id === objectId)
     if (!obj?.mesh) return state
-    let target: THREE.Mesh | null = null
-    obj.mesh.traverse((c) => {
-      if (c instanceof THREE.Mesh && c.uuid === meshUuid) target = c
-    })
+    const target = findMeshByUuid(obj.mesh, meshUuid)
     if (!target) return state
     target.castShadow = castAndReceive
     target.receiveShadow = castAndReceive
@@ -298,7 +316,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   setObjectMaterial: (id, patch) => set((state) => {
     const obj = state.objects.find((o) => o.id === id)
     if (!obj?.mesh) return state
-    // Same mutate-THREE-inside-the-store pattern as setSubMeshTransparent.
     obj.mesh.traverse((child) => {
       if (!(child instanceof THREE.Mesh)) return
       if (child.userData.isCellOutlineShell) return
@@ -362,4 +379,17 @@ export const useEditorStore = create<EditorState>((set) => ({
       },
     }
   }),
+  snapshotObjectKeyframes: (objectId, time) => {
+    const obj = get().objects.find((o) => o.id === objectId)
+    if (!obj) return
+    get().addKeyframe(objectId, time, 'position', obj.position)
+    get().addKeyframe(objectId, time, 'rotation', obj.rotation)
+    get().addKeyframe(objectId, time, 'scale', obj.scale)
+  },
+  snapshotCameraKeyframes: (time) => {
+    const vc = get().virtualCamera
+    get().addCameraKeyframe(time, 'position', vc.position)
+    get().addCameraKeyframe(time, 'rotation', vc.rotation)
+    get().addCameraKeyframe(time, 'fov', [vc.fov, 0, 0])
+  },
 }))

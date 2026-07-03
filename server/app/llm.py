@@ -88,6 +88,15 @@ async def parse_intents(text: str, scene: SceneState | None) -> IntentList | Non
         return None
     try:
         return await asyncio.to_thread(_parse_sync, client, text, scene)
-    except Exception:
-        log.exception("LLM intent parse failed; falling back to rule parser")
+    except ImportError:
+        log.warning("anthropic package not installed; using fallback parser")
+        return None
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if exc_name == "ValidationError":
+            log.warning("LLM returned invalid structured output; falling back to rule parser")
+        elif exc_name == "APIError" or "API" in exc_name:
+            log.warning("LLM API error (%s); falling back to rule parser", exc_name)
+        else:
+            log.exception("LLM intent parse failed; falling back to rule parser")
         return None

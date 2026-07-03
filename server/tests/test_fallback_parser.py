@@ -161,3 +161,70 @@ def test_multi_clause_then():
 
 def test_unparseable_returns_empty():
     assert parse("what is the meaning of life") == []
+
+
+def test_disable_bloom():
+    (i,) = parse("disable bloom")
+    assert i.action == "update_fx"
+    assert i.section == "bloom"
+    assert i.fx_enabled is False
+
+
+def test_warm_lights():
+    (i,) = parse("warm lights")
+    assert i.action == "update_lights"
+    assert i.ambient_color == "#ffd9a8"
+    assert i.key_color == "#ffb066"
+
+
+def test_cool_lights():
+    (i,) = parse("cooler lighting")
+    assert i.action == "update_lights"
+    assert i.ambient_color == "#a8c8ff"
+    assert i.key_color == "#7fb4ff"
+
+
+def test_camera_to_xyz():
+    (i,) = parse("camera to 1 2 3")
+    assert i.action == "move_camera"
+    assert i.position == (1.0, 2.0, 3.0)
+
+
+def test_text_spawn():
+    (i,) = parse('add text saying "hello world"')
+    assert i.action == "spawn"
+    assert i.primitive == "text"
+    assert i.text == '"hello world"'
+
+
+def test_scale_absolute():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("scale the sphere to 2", scene)
+    assert i.action == "transform"
+    assert i.mode == "absolute"
+    assert i.scale == (2.0, 2.0, 2.0)
+
+
+def test_orbit_preset():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("orbit the sphere", scene)
+    assert i.action == "animate"
+    assert i.preset == "orbit"
+    assert i.target == "CORE_SPHERE"
+
+
+def test_bounce_preset():
+    scene = scene_with("BOX_MDL_01")
+    (i,) = parse("bounce the box", scene)
+    assert i.action == "animate"
+    assert i.preset == "bounce"
+    assert i.target == "BOX_MDL_01"
+
+
+def test_clause_split_semicolon():
+    intents = parse("play; pause")
+    assert [i.playback_action for i in intents] == ["play", "pause"]
+
+
+def test_fx_substring_non_match():
+    assert parse("spotlight on the stage") == []

@@ -1,0 +1,185 @@
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
+import { createViewfinderComposer } from '../pip-composer'
+import { registerSceneForExport } from '../scene-export-registry'
+import { tagSceneInfrastructure } from './infrastructure'
+import { ensureShadowsOnObjectMeshes } from './shadows'
+import { setupGizmo } from './setup-gizmo'
+import { setupPicking } from './setup-picking'
+import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
+
+export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivElement) {
+  container.replaceChildren()
+
+  const scene = new THREE.Scene()
+  scene.background = new THREE.Color('#f2f2f2')
+
+  const userCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
+  const defaultSceneFocus = new THREE.Vector3(1.5, 0.6, 1.5)
+  userCamera.position.set(7.5, 4.25, 7.5)
+  userCamera.lookAt(defaultSceneFocus)
+  userCamera.layers.enable(0)
+  userCamera.layers.enable(1)
+
+  const virtCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 1000)
+  virtCamera.layers.set(0)
+  virtCamera.userData.id = VIRTUAL_CAMERA_ID
+  const vc0 = useEditorStore.getState().virtualCamera
+  virtCamera.position.set(...vc0.position)
+  virtCamera.rotation.set(...vc0.rotation)
+  virtCamera.fov = vc0.fov
+  virtCamera.updateProjectionMatrix()
+  scene.add(virtCamera)
+
+  const camAxes = new THREE.AxesHelper(0.75)
+  camAxes.layers.set(1)
+  virtCamera.add(camAxes)
+
+  const mainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+  mainRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  mainRenderer.shadowMap.enabled = true
+  mainRenderer.shadowMap.type = THREE.PCFSoftShadowMap
+  mainRenderer.toneMapping = THREE.ACESFilmicToneMapping
+  mainRenderer.toneMappingExposure = 1
+  mainRenderer.domElement.style.display = 'block'
+  container.appendChild(mainRenderer.domElement)
+
+  const pipRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+  const pipDpr = Math.min(window.devicePixelRatio, 2)
+  pipRenderer.setPixelRatio(pipDpr)
+  pipRenderer.shadowMap.enabled = true
+  pipRenderer.toneMapping = THREE.ACESFilmicToneMapping
+  pipRenderer.toneMappingExposure = 1
+  pipRenderer.domElement.style.width = '100%'
+  pipRenderer.domElement.style.height = '100%'
+  pipRenderer.domElement.style.display = 'block'
+  pipMount.appendChild(pipRenderer.domElement)
+
+  const viewfinder = createViewfinderComposer(scene, virtCamera, pipRenderer, pipDpr)
+
+  const handlePipResize = () => {
+    const w = pipMount.clientWidth
+    const h = pipMount.clientHeight
+    if (w === 0 || h === 0) return
+    virtCamera.aspect = w / h
+    virtCamera.updateProjectionMatrix()
+    pipRenderer.setSize(w, h, false)
+    viewfinder.composer.setSize(w, h)
+  }
+
+  registerSceneForExport({
+    scene,
+    virtualCamera: virtCamera,
+    getPostProcessing: () => useEditorStore.getState().virtualCamera.postProcessing,
+    viewfinder: { ...viewfinder, renderer: pipRenderer },
+    remeasurePip: handlePipResize,
+  })
+
+  const controls = new OrbitControls(userCamera, mainRenderer.domElement)
+  controls.enableDamping = true
+  controls.target.copy(defaultSceneFocus)
+  controls.update()
+
+  const { transformControl, isGizmoDragged, clearGizmoDrag } = setupGizmo(
+    scene,
+    userCamera,
+    mainRenderer.domElement,
+    controls
+  )
+
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.8)
+  tagSceneInfrastructure(ambientLight)
+  scene.add(ambientLight)
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5)
+  directionalLight.position.set(5, 10, 7)
+  directionalLight.castShadow = true
+  directionalLight.shadow.mapSize.set(1024, 1024)
+  tagSceneInfrastructure(directionalLight)
+  scene.add(directionalLight)
+
+  if (useEditorStore.getState().objects.length === 0) {
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 32, 32),
+      new THREE.MeshToonMaterial({ color: 0x0076ff })
+    )
+    useEditorStore.getState().addObject({ name: 'CORE_SPHERE', type: 'mesh', mesh: sphere })
+  }
+
+  let lastObjectIdSig = ''
+  function pruneRemovedObjectsFromScene() {
+    const { objects: ob } = useEditorStore.getState()
+    const sig = ob.map((o) => o.id).sort().join(',')
+    if (sig === lastObjectIdSig) return
+    lastObjectIdSig = sig
+    const objectIds = new Set(ob.map((o) => o.id))
+    scene.children.slice().forEach((child) => {
+      if (child.userData?.isSceneInfrastructure) return
+      const id = child.userData?.id as string | undefined
+      if (id === VIRTUAL_CAMERA_ID) return
+      if (id && !objectIds.has(id)) scene.remove(child)
+    })
+  }
+
+  const unsubStore = useEditorStore.subscribe(() => pruneRemovedObjectsFromScene())
+  const unsubShadows = subscribeShadowSync()
+  ensureShadowsOnObjectMeshes(useEditorStore.getState().objects)
+
+  const stopAnimate = createAnimateLoop({
+    scene,
+    userCamera,
+    virtCamera,
+    mainRenderer,
+    pipRenderer,
+    viewfinder,
+    controls,
+    transformControl,
+    ambientLight,
+    directionalLight,
+  })
+
+  const handleMainResize = () => {
+    const w = container.clientWidth
+    const h = container.clientHeight
+    if (w === 0 || h === 0) return
+    userCamera.aspect = w / h
+    userCamera.updateProjectionMatrix()
+    mainRenderer.setSize(w, h)
+  }
+  const roMain = new ResizeObserver(handleMainResize)
+  roMain.observe(container)
+  const roPip = new ResizeObserver(handlePipResize)
+  roPip.observe(pipMount)
+  handleMainResize()
+  handlePipResize()
+  pruneRemovedObjectsFromScene()
+
+  const teardownPicking = setupPicking(
+    scene,
+    userCamera,
+    mainRenderer.domElement,
+    isGizmoDragged,
+    clearGizmoDrag
+  )
+
+  return () => {
+    teardownPicking()
+    stopAnimate()
+    unsubStore()
+    unsubShadows()
+    roMain.disconnect()
+    roPip.disconnect()
+    transformControl.dispose()
+    scene.remove(transformControl.getHelper())
+    viewfinder.pixelatedPass.dispose()
+    viewfinder.bloomPass.dispose()
+    viewfinder.ditherPass.dispose()
+    viewfinder.outputPass.dispose()
+    viewfinder.composer.dispose()
+    mainRenderer.dispose()
+    pipRenderer.dispose()
+    if (mainRenderer.domElement.parentNode) mainRenderer.domElement.remove()
+    if (pipRenderer.domElement.parentNode) pipRenderer.domElement.remove()
+    registerSceneForExport(null)
+  }
+}

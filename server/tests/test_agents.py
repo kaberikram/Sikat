@@ -2,6 +2,7 @@
 import pytest
 
 from app.agents.producer import Producer
+from app.mood_presets import mood_packets
 from app.schema import CameraSnapshot, ObjectSnapshot, SceneState
 
 
@@ -79,3 +80,26 @@ async def test_emit_log_called(producer, scene):
     await producer.handle_user_command("add a sphere", scene, emit=emit)
     assert any(agent == "DirectorsAssistant" for agent, _, _ in logs)
     assert any(agent == "AssetAnimator" for agent, _, _ in logs)
+
+
+@pytest.mark.parametrize(
+    "phrase,mood",
+    [
+        ("noir mood", "noir"),
+        ("sunset mood", "sunset"),
+        ("neon vibe", "neon"),
+        ("studio look", "studio"),
+    ],
+)
+async def test_all_mood_macros(producer, scene, phrase, mood):
+    packets = await producer.handle_user_command(phrase, scene)
+    commands = [p.command for p in packets]
+    assert "UPDATE_LIGHTS" in commands
+    assert any(p.command == "UPDATE_FX" for p in packets) or mood == "studio"
+    assert len(packets) >= 2
+
+
+async def test_unknown_mood_returns_no_packets(producer, scene):
+    assert mood_packets("gothic") == []
+    packets = await producer.handle_user_command("gothic atmosphere", scene)
+    assert packets == []

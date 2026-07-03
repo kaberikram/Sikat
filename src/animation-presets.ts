@@ -7,7 +7,7 @@ export type PresetKeyframes = Array<{ time: number; value: [number, number, numb
 
 const TURNAROUND_STEPS = 8
 
-/** 360° yaw across `duration`, preserving base pitch/roll. (Moved from Editor.tsx.) */
+/** 360° yaw across `duration`, preserving base pitch/roll. */
 export function buildTurnaroundRotationKeyframes(
   baseRotation: [number, number, number],
   duration: number
