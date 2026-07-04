@@ -13,6 +13,7 @@ as a vault (or the whole repo) and links resolve.
 | `03_PRD_Architecture/` | [[PRD_MR_Directing_Studio]], [[System_Architecture]], [[Command_Protocol]] (the normative wire contract) |
 | `04_AI_Crew_Profiles/` | One card per agent: role, owned commands, prompt text, failure modes |
 | `05_Knowledge_Base/` | [[Store_Capabilities]] (what the editor store can actually do), [[Fallback_Grammar]] (rule parser reference) |
+| `06_Implementation_Brief/` | [[Scene_Aware_Director]] (ready-to-code spec), [[LLM_System_Prompt]] (prompt extract) |
 
 ## Source-of-truth rules
 

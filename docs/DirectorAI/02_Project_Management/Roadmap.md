@@ -20,7 +20,19 @@ The core loop: **text/voice command → agent swarm → JSON over WebSocket → 
 - Synchronized playback log correlating telemetry frames with asset mutations
 - System-clock sync between telemetry and render frames
 
-## Next (from the editor's own roadmap)
+## Next — Scene-Aware Director ([[Scene_Aware_Director]])
+
+Phased implementation brief in `06_Implementation_Brief/`. Order:
+
+1. **Phase A — Rich scene context** (heartbeat + full snapshot, sampled poses, `describe` intent, scene-aware LLM prompt)
+2. **Phase C — Set radio** (browser TTS ACKs on agent active)
+3. **Phase B — Vision on command** (viewfinder JPEG when director asks to "look")
+4. **Phase D — Hold / Action / Cut** (playback semantics + optional command gate)
+5. **Phase E — Streaming partial intents** (stretch)
+
+Explicitly **not** adopting Gemini Live — data + on-demand snapshots cover the use case.
+
+## Later (editor roadmap)
 
 - WebXR session on Quest browser: passthrough + controller-tracked virtual camcorder.
   Director Mode already speaks MOVE_CAMERA from telemetry, so a headset replaces

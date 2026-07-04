@@ -14,7 +14,16 @@ Kanban-style (works with the Obsidian Kanban plugin — one list per heading).
 
 ## In progress
 
-## Backlog
+- [ ] [[Scene_Aware_Director]] Phase A — rich scene context + describe intent + LLM prompt
+
+## Backlog (Scene-Aware Director)
+
+- [ ] Phase C — set radio verbal ACKs (`set-radio.ts`)
+- [ ] Phase B — viewfinder capture + vision triggers
+- [ ] Phase D — hold / action / cut
+- [ ] Phase E — streaming partial intents
+
+## Backlog (other)
 
 - [ ] Phase 4: scripted shoot + synchronized playback log
 - [ ] WebXR telemetry source (replace mock with headset pose)
