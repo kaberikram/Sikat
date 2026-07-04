@@ -1,33 +1,11 @@
 """Producer pipeline tests (fallback path only — no API key needed)."""
 import pytest
 
-from app.agents.producer import Producer
 from app.mood_presets import mood_packets
-from app.schema import CameraSnapshot, ObjectSnapshot, SceneState
-
-
-@pytest.fixture
-def scene() -> SceneState:
-    return SceneState(
-        objects=[
-            ObjectSnapshot(id="a1", name="CORE_SPHERE"),
-            ObjectSnapshot(id="b2", name="BOX_MDL_01"),
-        ],
-        camera=CameraSnapshot(fov=50),
-    )
-
-
-@pytest.fixture
-def producer(monkeypatch) -> Producer:
-    # Force the fallback path even if a key/provider is set in the environment.
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("DIRECTOR_LLM_PROVIDER", raising=False)
-    return Producer()
 
 
 async def test_spawn_then_lights(producer, scene):
-    packets = await producer.handle_user_command(
+    packets, _ = await producer.handle_user_command(
         "add a red box then dim the lights", scene, command_id="cmd-1"
     )
     assert [p.command for p in packets] == ["SPAWN_OBJECT", "UPDATE_LIGHTS"]
@@ -37,7 +15,7 @@ async def test_spawn_then_lights(producer, scene):
 
 
 async def test_mood_macro_expands(producer, scene):
-    packets = await producer.handle_user_command("sunset mood", scene)
+    packets, _ = await producer.handle_user_command("sunset mood", scene)
     commands = [p.command for p in packets]
     assert "UPDATE_LIGHTS" in commands
     assert "UPDATE_FX" in commands
@@ -45,7 +23,7 @@ async def test_mood_macro_expands(producer, scene):
 
 
 async def test_transform_carries_transition(producer, scene):
-    packets = await producer.handle_user_command(
+    packets, _ = await producer.handle_user_command(
         "move the box up 2 over 3 seconds", scene
     )
     (packet,) = packets
@@ -55,22 +33,25 @@ async def test_transform_carries_transition(producer, scene):
 
 
 async def test_playback(producer, scene):
-    (packet,) = await producer.handle_user_command("pause", scene)
+    packets, _ = await producer.handle_user_command("pause", scene)
+    (packet,) = packets
     assert packet.command == "PLAYBACK"
     assert packet.payload.action == "pause"
 
 
 async def test_fx_clamped_via_schema(producer, scene):
-    (packet,) = await producer.handle_user_command(
+    packets, _ = await producer.handle_user_command(
         "set bloom strength to 99", scene
     )
+    (packet,) = packets
     assert packet.command == "UPDATE_FX"
     assert packet.payload.patch.strength == 2.5  # clamped, not rejected
 
 
 async def test_unparseable_yields_no_packets(producer, scene):
-    packets = await producer.handle_user_command("tell me a joke", scene)
+    packets, describe_only = await producer.handle_user_command("tell me a joke", scene)
     assert packets == []
+    assert describe_only is False
 
 
 async def test_emit_log_called(producer, scene):
@@ -94,7 +75,7 @@ async def test_emit_log_called(producer, scene):
     ],
 )
 async def test_all_mood_macros(producer, scene, phrase, mood):
-    packets = await producer.handle_user_command(phrase, scene)
+    packets, _ = await producer.handle_user_command(phrase, scene)
     commands = [p.command for p in packets]
     assert "UPDATE_LIGHTS" in commands
     assert any(p.command == "UPDATE_FX" for p in packets) or mood == "studio"
@@ -103,5 +84,5 @@ async def test_all_mood_macros(producer, scene, phrase, mood):
 
 async def test_unknown_mood_returns_no_packets(producer, scene):
     assert mood_packets("gothic") == []
-    packets = await producer.handle_user_command("gothic atmosphere", scene)
+    packets, _ = await producer.handle_user_command("gothic atmosphere", scene)
     assert packets == []

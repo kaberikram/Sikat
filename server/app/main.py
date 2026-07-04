@@ -77,15 +77,16 @@ async def _handle_user_command(msg: UserCommand) -> None:
     try:
         # direct() streams packets + presence status over time via the callbacks
         # above; it returns the full plan so we can still detect a no-op command.
-        packets = await producer.direct(
+        packets, describe_only = await producer.direct(
             msg.text,
-            scene_state.latest(),
+            msg.scene or scene_state.latest(),
             msg.commandId,
             emit_log,
             emit_packet,
             emit_status,
+            frame=msg.frame,
         )
-        if not packets:
+        if not packets and not describe_only:
             await manager.broadcast(
                 error_message(f"no actionable direction in: {msg.text!r}", msg.commandId)
             )

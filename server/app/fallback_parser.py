@@ -15,15 +15,24 @@ from .schema import Intent, SceneState
 _CLAUSE_SPLIT = re.compile(r"\s*(?:;|\.\s+|,?\s+(?:and\s+)?then\s+)\s*")
 
 
+def split_clauses(text: str) -> list[str]:
+    """Split compound director lines on ``then``, ``,``, and ``;``."""
+    return [clause.strip() for clause in _CLAUSE_SPLIT.split(text) if clause.strip()]
+
+
+def parse_one_clause(clause: str, scene: SceneState | None = None) -> Intent | None:
+    """Parse a single clause and thread session context for follow-ups."""
+    intent = parse_clause(clause, scene)
+    if intent is not None:
+        session_context.note_target(intent.target)
+        session_context.note_transform(intent)
+    return intent
+
+
 def parse(text: str, scene: SceneState | None = None) -> list[Intent]:
     intents: list[Intent] = []
-    for clause in _CLAUSE_SPLIT.split(text):
-        intent = parse_clause(clause, scene)
+    for clause in split_clauses(text):
+        intent = parse_one_clause(clause, scene)
         if intent is not None:
             intents.append(intent)
-            # Thread the resolved target across clauses so a later clause in the
-            # same command ("...then go back a bit") can resolve a pronoun or
-            # amendment before the whole exchange is committed to history.
-            session_context.note_target(intent.target)
-            session_context.note_transform(intent)
     return intents

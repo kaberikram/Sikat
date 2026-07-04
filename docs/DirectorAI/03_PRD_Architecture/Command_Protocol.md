@@ -12,9 +12,29 @@ Implementations: `server/app/schema.py` (pydantic, authoritative validation) and
 
 | type | fields | notes |
 |---|---|---|
-| `user_command` | `text`, `commandId` | one director instruction (may contain several clauses) |
-| `scene_state` | `objects[] {id,name,position,rotation,scale,keyframedProperties}`, `camera {position,rotation,fov}`, `duration`, `isPlaying` | sent on connect + debounced 300 ms on change |
+| `user_command` | `text`, `commandId`, `scene?`, `frame?` | one director instruction; `scene` is a full snapshot (`mode: full`) at command time; `frame` is an optional viewfinder JPEG (base64, no `data:` prefix) when vision triggers fire — never on heartbeat |
+| `scene_state` | see **SceneState** below | sent on connect + debounced 300 ms on change (`mode: heartbeat`) |
 | `telemetry` | `source`, `pose {position, rotation?, fov?}` | camera-operator pose; server converts to `MOVE_CAMERA` (throttled ≤ 20 Hz) |
+
+### SceneState (heartbeat + full)
+
+Breaking change: `camera` → **`virtualCamera`**.
+
+| field | heartbeat | full (on `user_command.scene`) |
+|---|---|---|
+| `mode` | `"heartbeat"` | `"full"` |
+| `currentTime`, `duration`, `isPlaying`, `selectedId?` | ✓ | ✓ |
+| `objects[]` | summary tracks (`keyframeCount`) | full keyframes per track |
+| `virtualCamera` | sampled pose, fx summary, track counts | + full keyframe data |
+| `lighting` | `{ambient, key, background}` | ✓ |
+
+**ObjectSnapshot:** `id`, `name`, `position/rotation/scale` (base store values), `sampled {position, rotation, scale}` (interpolated at `currentTime`), `keyframedProperties[]`, `tracks[]`, `materialOverride?`
+
+**Track shapes:** heartbeat → `{property, keyframeCount}` · full → `{property, keyframes[] {time, value}}`
+
+**VirtualCameraSnapshot:** base + `sampled`, `sampledFov`, `tracks[]`, `fx {enabledSections[], bloomStrength?, ditherLevels?}`
+
+**SceneFrame** (vision on command): `{mime: "image/jpeg", width, height, data (base64, no prefix), capturedAt}` — attached only on `user_command` when the client detects vision triggers (`shouldAttachVision`) or Shift+mic; server Anthropic path sends multimodal; DeepSeek skips the image.
 
 ## Server → client (multicast)
 

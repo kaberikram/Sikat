@@ -2,14 +2,8 @@
 from app import session_context
 from app.agents.producer import Producer
 from app.fallback_parser import parse
-from app.schema import CameraSnapshot, ObjectSnapshot, SceneState
 
-
-def scene_with(*names: str) -> SceneState:
-    return SceneState(
-        objects=[ObjectSnapshot(id=f"id{i}", name=n) for i, n in enumerate(names)],
-        camera=CameraSnapshot(fov=50),
-    )
+from tests.helpers import scene_with
 
 
 def test_record_captures_target_and_summary():
@@ -77,8 +71,7 @@ async def test_producer_records_after_parse(monkeypatch):
     scene = scene_with("CORE_SPHERE")
     await producer.handle_user_command("move the ball up 1.5", scene)
     assert session_context.last_target() == "CORE_SPHERE"
-    # A follow-up with no named target now lands on the same object.
-    packets = await producer.handle_user_command("go back a bit", scene)
+    packets, _ = await producer.handle_user_command("go back a bit", scene)
     assert [p.command for p in packets] == ["TRANSFORM_OBJECT"]
     assert packets[0].payload.target.name == "CORE_SPHERE"
     assert packets[0].payload.mode == "relative"

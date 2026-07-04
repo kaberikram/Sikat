@@ -21,7 +21,7 @@ Kanban-style (works with the Obsidian Kanban plugin — one list per heading).
 - [ ] Phase C — set radio verbal ACKs (`set-radio.ts`)
 - [ ] Phase B — viewfinder capture + vision triggers
 - [ ] Phase D — hold / action / cut
-- [ ] Phase E — streaming partial intents
+- [x] Phase E — streaming partial intents
 
 ## Backlog (other)
 

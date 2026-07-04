@@ -1,37 +1,42 @@
 # Director's Assistant
 
 **Code:** `server/app/agents/directors_assistant.py`, `server/app/llm.py`,
-`server/app/fallback_parser.py` · **Kind:** the only LLM-touching agent
+`server/app/fallback_parser.py`, `server/app/scene_context.py` · **Kind:** the only LLM-touching agent
 
 ## Role
 
 Turns raw director speech/text into a list of structured `Intent`s. Two paths:
 
-1. **LLM** — when `ANTHROPIC_API_KEY` is set: `client.messages.parse()` with
-   `output_format=IntentList` (structured outputs guarantee schema-valid JSON).
-   Model: `DIRECTOR_MODEL` env var, default `claude-sonnet-5`.
+1. **LLM** — when an API key is set: structured JSON parse (Anthropic native or
+   DeepSeek JSON mode). Model: `DIRECTOR_MODEL` env var.
 2. **Fallback** — the deterministic grammar in [[Fallback_Grammar]]; also the
-   automatic safety net for any LLM exception or validation failure, so a broken
-   key degrades the vocabulary, never the system.
+   automatic safety net for any LLM exception or validation failure.
 
-## System prompt (actual text, abridged — full string in `llm.py`)
+## System prompt (Scene-Aware — full text in `llm.py` + [[LLM_System_Prompt]])
 
-> You are the Director's Assistant for a virtual film studio. Parse the director's
-> spoken instruction into a list of structured intents. …
-> Rules: rotations are world-space euler XYZ in RADIANS; colors are lowercase
-> "#rrggbb" hex; durations like "over 3 seconds" go into transition.durationSec;
-> prefer set_scene for whole-mood requests; target must be one of the scene object
-> names below when the director refers to an existing object.
-> Current scene objects: *(injected from the latest scene_state snapshot)*
+> You are the Director's Assistant on a virtual film set. Parse instructions into
+> structured intents. You receive a **scene briefing** (not raw JSON) with BASE
+> transforms, NOW/sampled poses at the playhead, keyframe track summaries, lighting,
+> and viewfinder FX.
+>
+> Actions include `describe` for questions-only ("how's the bounce") — set
+> `describe_topic` and `describe_message`; the Producer logs the message with zero
+> command packets.
+>
+> Rules: rotations in RADIANS; colors `#rrggbb`; pronouns → history or `selectedId`;
+> NOW vs BASE for motion vs placement.
 
 ## Context isolation
 
-The prompt contains only: the intent vocabulary, unit rules, current object
-names/ids and camera fov. No conversation history, no other agents' outputs —
-this is what keeps the parse deterministic-ish and prevents hallucinated targets.
+The prompt contains: intent vocabulary, unit rules, **scene briefing** from
+`format_scene_brief(scene)`, and recent direction history. No other agents' outputs.
+
+Scene source priority: embedded `user_command.scene` (full) overrides the debounced
+heartbeat in `scene_state.latest()`.
 
 ## Failure modes
 
 - LLM returns intents referencing nonexistent objects → applier's target
   resolution fails client-side; the console logs `target not found`.
 - Empty parse (both paths) → Producer emits an `error` for the command.
+- Describe-only parse → `agent_log` with `describe_message`, no error.

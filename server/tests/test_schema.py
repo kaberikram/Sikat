@@ -69,7 +69,12 @@ def test_client_message_discrimination():
         {
             "type": "scene_state",
             "objects": [{"id": "x1", "name": "CORE_SPHERE"}],
-            "camera": {"position": [0, 1, 6], "rotation": [0, 0, 0], "fov": 50},
+            "virtualCamera": {"position": [0, 1, 6], "rotation": [0, 0, 0], "fov": 50},
+            "lighting": {
+                "ambient": {"color": "#ffffff", "intensity": 0.8},
+                "key": {"color": "#ffffff", "intensity": 1.5, "position": [5, 10, 7]},
+                "background": "#f2f2f2",
+            },
         }
     )
     assert isinstance(scene, SceneState)

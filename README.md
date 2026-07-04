@@ -116,10 +116,13 @@ cd server && uv sync && uv run uvicorn app.main:app --port 8000
 npm run dev
 ```
 
-Works with **no API key** via a deterministic command grammar. Set
-`ANTHROPIC_API_KEY` for free-form phrasing (Claude structured outputs; the
-grammar remains the fallback). Chromium-based browsers also get a mic button
-for spoken direction.
+Works with **no API key** via a deterministic command grammar. For LLM parsing:
+
+- Set **`DEEPSEEK_API_KEY`** for text commands (default when both keys are present)
+- Set **`ANTHROPIC_API_KEY`** for viewfinder vision (`?look`, “too dark”, …)
+- With **both keys**, the server hybrid-routes automatically: DeepSeek for text, Anthropic when a JPEG is attached
+
+Override with `DIRECTOR_LLM_PROVIDER=anthropic|deepseek|none`. Chromium-based browsers also get a mic button for spoken direction.
 
 Extras:
 

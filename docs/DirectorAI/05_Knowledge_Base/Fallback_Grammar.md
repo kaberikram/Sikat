@@ -17,7 +17,7 @@ before verb matching).
 
 | # | trigger | intent |
 |---|---|---|
-| 1 | `play`/`action` · `pause`/`stop`/`cut` · `go to N` · `rewind` | playback |
+| 1 | `play`/`action`/`go` · `pause`/`stop`/`cut`/`hold`/`freeze` · `back to one`/`top of scene` (seek 0 + pause) · `go to N` · `rewind`/`go to start` (seek 0 only) | playback |
 | 2 | mood word (noir/moody, sunset/golden hour, studio/neutral, neon/cyberpunk) + mood context (`mood/scene/vibe/feel/make it/...`) or bare | set_scene |
 | 3 | FX word (bloom/glow, pixelate, glitch, dither, cell shading/outline) + on/off/more/less/`<param> to N` | update_fx |
 | 4 | light words (dim, brighten, lights off, warm/cool, background `<color>`, intensity to N) | update_lights |

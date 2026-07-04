@@ -2,16 +2,8 @@
 import math
 
 from app.fallback_parser import parse
-from app.schema import CameraSnapshot, ObjectSnapshot, SceneState
 
-
-def scene_with(*names: str) -> SceneState:
-    return SceneState(
-        objects=[
-            ObjectSnapshot(id=f"id{i}", name=name) for i, name in enumerate(names)
-        ],
-        camera=CameraSnapshot(fov=50),
-    )
+from tests.helpers import scene_with
 
 
 def test_spawn_red_box():
@@ -119,7 +111,7 @@ def test_playback_play_pause_seek():
 
 def test_camera_zoom_uses_scene_fov():
     scene = scene_with()
-    scene.camera.fov = 60
+    scene.virtualCamera.fov = 60
     (i,) = parse("zoom in", scene)
     assert i.action == "move_camera"
     assert i.fov == 45
@@ -168,6 +160,18 @@ def test_disable_bloom():
     assert i.action == "update_fx"
     assert i.section == "bloom"
     assert i.fx_enabled is False
+
+
+def test_look_at_shot_describe():
+    (i,) = parse("look at the shot")
+    assert i.action == "describe"
+    assert i.describe_topic == "scene"
+
+
+def test_too_dark_warm_lights():
+    (i,) = parse("too dark, warm it up")
+    assert i.action == "update_lights"
+    assert i.ambient_color == "#ffd9a8"
 
 
 def test_warm_lights():

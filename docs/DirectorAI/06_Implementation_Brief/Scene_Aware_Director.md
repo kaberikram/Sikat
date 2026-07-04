@@ -435,10 +435,12 @@ Split text on `then`, `,`, `;` — parse/build/emit per clause without waiting f
 
 Reuse clause split from `fallback_parser` / `clause_handlers.py`.
 
+Multi-clause `Producer.direct()` streams each fallback-parsed clause immediately. When an LLM key is configured, the full-sentence parse runs in parallel; intents for clauses the rule grammar already handled are skipped.
+
 ## Acceptance criteria
 
-- [ ] "add red box then enable bloom" — box packet before bloom
-- [ ] Fallback clauses stream while LLM processes remainder
+- [x] "add red box then enable bloom" — box packet before bloom
+- [x] Fallback clauses stream while LLM processes remainder
 
 ---
 

@@ -12,26 +12,29 @@ uv run uvicorn app.main:app --port 8000
 ```
 
 Optional LLM parsing (falls back to the deterministic rule grammar without it).
-Two providers are supported; the parser is chosen at request time:
+Two providers are supported with **hybrid auto-routing** when both keys are set:
 
 ```sh
-# DeepSeek (OpenAI-compatible, JSON mode) — preferred when its key is present
-DEEPSEEK_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
-# model override (default deepseek-v4-flash; use deepseek-v4-pro for complex):
-DIRECTOR_MODEL=deepseek-v4-pro DEEPSEEK_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
+# Recommended: both keys — DeepSeek for text, Anthropic for viewfinder vision
+DEEPSEEK_API_KEY=sk-... ANTHROPIC_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
 
-# Anthropic (native structured outputs)
+# DeepSeek only (text commands; vision triggers fall back to rule grammar)
+DEEPSEEK_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
+
+# Anthropic only (text + vision)
 ANTHROPIC_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
-# model override (default claude-sonnet-5): DIRECTOR_MODEL=claude-opus-4-8
 ```
+
+Model overrides: `DIRECTOR_MODEL=deepseek-v4-pro` or `DIRECTOR_MODEL=claude-sonnet-5`
 
 Provider resolution:
 
 | variable | effect |
 |---|---|
 | `DIRECTOR_LLM_PROVIDER` | force `deepseek` \| `anthropic` \| `none` (skip the LLM) |
-| `DEEPSEEK_API_KEY` | auto-selects DeepSeek when set (and no override) |
-| `ANTHROPIC_API_KEY` | auto-selects Anthropic when DeepSeek is absent |
+| both keys, no override | DeepSeek for text-only; Anthropic when a viewfinder JPEG is attached |
+| `DEEPSEEK_API_KEY` only | DeepSeek for text; vision → fallback grammar |
+| `ANTHROPIC_API_KEY` only | Anthropic for text and vision |
 | `DIRECTOR_MODEL` | model override for the selected provider |
 
 With no key (or `DIRECTOR_LLM_PROVIDER=none`) the rule grammar runs the show.

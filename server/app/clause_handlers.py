@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from . import session_context
 from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
+from .scene_context import describe_fallback_message
 from .schema import FxSetting, Intent, SceneState, Transition
 
 COLOR_WORDS: dict[str, str] = {
@@ -150,10 +151,17 @@ def _find_vec3_after(clause: str, anchor: str) -> tuple[float, float, float] | N
 def _parse_playback(
     clause: str, _scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
-    if re.fullmatch(r"(play|action|roll(?:ing)?(?: it)?)", clause):
+    if re.fullmatch(r"(play|action|go|roll(?:ing)?(?: it)?)", clause):
         return Intent(action="playback", playback_action="play")
     if re.fullmatch(r"(pause|stop|cut|freeze|hold)", clause):
         return Intent(action="playback", playback_action="pause")
+    if re.fullmatch(r"(back to one|top of (the )?scene|back to the top of the scene)", clause):
+        return Intent(
+            action="playback",
+            playback_action="seek",
+            seek_time=0,
+            playback_pause_after_seek=True,
+        )
     m = re.search(rf"\b(?:go to|seek(?: to)?|jump to)\s+{_NUM}", clause)
     if m:
         return Intent(action="playback", playback_action="seek", seek_time=float(m.group(1)))
@@ -257,7 +265,7 @@ def _parse_camera(
         or re.search(r"\b(push in|pull back|pull out)\b", clause)
     ):
         return None
-    cur_fov = scene.camera.fov if scene else 50.0
+    cur_fov = scene.virtualCamera.fov if scene else 50.0
     cam_transition = transition or Transition(durationSec=1.5)
     m = re.search(rf"\bfov\s*(?:to|at|=)?\s*{_NUM}", clause)
     if m:
@@ -482,8 +490,54 @@ def _parse_move(
     )
 
 
+def _parse_describe(
+    clause: str, scene: SceneState | None, _transition: Transition | None
+) -> Intent | None:
+    topic: str | None = None
+    target: str | None = None
+
+    if re.search(r"\bprint the take\b", clause):
+        topic = "scene"
+    elif re.search(r"\bwhat'?s happening\b", clause):
+        topic = "scene"
+    elif re.search(r"\bdescribe the (shot|scene)\b", clause):
+        topic = "scene"
+    elif re.search(r"\bhow'?s the animation\b", clause) or re.search(
+        r"\bhow does (the )?animation\b", clause
+    ):
+        topic = "animation"
+    elif m := re.search(r"how'?s the bounce on (?:the )?([a-z0-9_ ]+)", clause):
+        topic = "animation"
+        target = _find_target(m.group(1), scene)
+    elif re.search(r"\bhow'?s the (lighting|lights)\b", clause):
+        topic = "lighting"
+    elif re.search(r"\bhow'?s the (fx|effects|viewfinder)\b", clause):
+        topic = "fx"
+    elif re.search(r"\bhow'?s the (camera|shot|frame)\b", clause):
+        topic = "camera"
+    elif re.search(r"\b(look at|check) (the )?(shot|frame|viewfinder)\b", clause):
+        topic = "scene"
+    elif re.search(r"\bhow does (this|it) look\b", clause):
+        topic = "scene"
+    elif re.search(r"\btoo (dark|bright|moody|flat)\b", clause):
+        if re.search(r"\b(fix|warm|cool|dim|brighten|lighter|darker|adjust)\b", clause):
+            return None
+        topic = "scene"
+    else:
+        return None
+
+    message = describe_fallback_message(clause, scene, topic, target)
+    return Intent(
+        action="describe",
+        describe_topic=topic,  # type: ignore[arg-type]
+        describe_message=message,
+        target=target,
+    )
+
+
 HANDLERS: list[Handler] = [
     _parse_playback,
+    _parse_describe,
     _parse_mood,
     _parse_fx,
     _parse_lights,

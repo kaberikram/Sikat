@@ -11,6 +11,9 @@ import {
   type SceneSnapshot,
   parseServerMessage,
 } from './protocol'
+import { buildFullSnapshot } from './scene-state-sync'
+import { shouldAttachVision } from './vision-triggers'
+import { captureViewfinderFrame } from './viewfinder-capture'
 
 export type SocketStatus = 'connecting' | 'open' | 'closed'
 
@@ -107,13 +110,20 @@ export class DirectorSocket {
   }
 
   /** Returns the commandId used, or null when the socket is not open. */
-  sendUserCommand(text: string): string | null {
+  async sendUserCommand(
+    text: string,
+    opts?: { forceVision?: boolean }
+  ): Promise<string | null> {
     const commandId = crypto.randomUUID()
+    const attachVision = opts?.forceVision === true || shouldAttachVision(text)
+    const frame = attachVision ? await captureViewfinderFrame() : null
     const sent = this.sendRaw({
       type: 'user_command',
       timestamp: Date.now() / 1000,
       text,
       commandId,
+      scene: { type: 'scene_state', timestamp: Date.now() / 1000, ...buildFullSnapshot() },
+      ...(frame ? { frame } : {}),
     })
     return sent ? commandId : null
   }

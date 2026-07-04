@@ -111,29 +111,99 @@ export type CommandPacket = PacketBase &
 // Client -> server
 // ---------------------------------------------------------------------------
 
+export interface MaterialOverrideSnapshot {
+  color?: string | null
+  emissive?: string | null
+  emissiveIntensity?: number | null
+  opacity?: number | null
+}
+
+export interface KeyframeTrackSummary {
+  property: 'position' | 'rotation' | 'scale' | 'fov'
+  keyframeCount: number
+}
+
+export interface KeyframePoint {
+  time: number
+  value: Vec3
+}
+
+export interface KeyframeTrackFull {
+  property: 'position' | 'rotation' | 'scale' | 'fov'
+  keyframes: KeyframePoint[]
+}
+
+export type KeyframeTrack = KeyframeTrackSummary | KeyframeTrackFull
+
+export interface SampledTransform {
+  position: Vec3
+  rotation: Vec3
+  scale: Vec3
+}
+
 export interface ObjectSnapshot {
   id: string
   name: string
   position: Vec3
   rotation: Vec3
   scale: Vec3
+  sampled: SampledTransform
   keyframedProperties: string[]
+  tracks: KeyframeTrack[]
+  materialOverride?: MaterialOverrideSnapshot | null
+}
+
+export interface FxSummary {
+  enabledSections: FxSection[]
+  bloomStrength?: number | null
+  ditherLevels?: number | null
+}
+
+export interface VirtualCameraSnapshot {
+  position: Vec3
+  rotation: Vec3
+  fov: number
+  sampled: SampledTransform
+  sampledFov: number
+  keyframedProperties: string[]
+  tracks: KeyframeTrack[]
+  fx: FxSummary
+}
+
+export interface SceneLightingSnapshot {
+  ambient: { color?: string | null; intensity?: number | null }
+  key: { color?: string | null; intensity?: number | null; position?: Vec3 | null }
+  background: string
 }
 
 export interface SceneSnapshot {
   type: 'scene_state'
   timestamp: number
-  objects: ObjectSnapshot[]
-  camera: { position: Vec3; rotation: Vec3; fov: number }
+  mode: 'heartbeat' | 'full'
+  currentTime: number
   duration: number
   isPlaying: boolean
+  selectedId?: string | null
+  objects: ObjectSnapshot[]
+  virtualCamera: VirtualCameraSnapshot
+  lighting: SceneLightingSnapshot
+}
+
+export interface SceneFrame {
+  mime: 'image/jpeg'
+  width: number
+  height: number
+  data: string
+  capturedAt: number
 }
 
 export interface UserCommandMessage {
   type: 'user_command'
   timestamp: number
   text: string
-  commandId: string
+  commandId?: string | null
+  scene?: Omit<SceneSnapshot, 'type' | 'timestamp'> | null
+  frame?: SceneFrame | null
 }
 
 // ---------------------------------------------------------------------------

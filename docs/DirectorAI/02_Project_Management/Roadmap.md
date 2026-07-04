@@ -1,5 +1,17 @@
 # Roadmap
 
+## Shipped — Scene-Aware Director (Phases A–E)
+
+Phased brief: `06_Implementation_Brief/Scene_Aware_Director.md`. All phases complete:
+
+- [x] **Phase A** — Rich scene context (heartbeat + full snapshot, sampled poses, `describe` intent)
+- [x] **Phase C** — Set radio (browser TTS ACKs on agent active)
+- [x] **Phase B** — Vision on command (viewfinder JPEG; Anthropic multimodal)
+- [x] **Phase D** — Hold / Action / Cut (playback transport semantics)
+- [x] **Phase E** — Streaming partial intents (per-clause emit; LLM in parallel)
+
+Hybrid LLM routing: DeepSeek for text-only, Anthropic when viewfinder JPEG attached.
+
 ## Shipped — Phase 2+3 of the PRD (this branch)
 
 The core loop: **text/voice command → agent swarm → JSON over WebSocket → live scene mutation.**
@@ -19,18 +31,6 @@ The core loop: **text/voice command → agent swarm → JSON over WebSocket → 
 - Scripted shoot sequence ("Set scene" / "Action" / "Cut" as one verbal program)
 - Synchronized playback log correlating telemetry frames with asset mutations
 - System-clock sync between telemetry and render frames
-
-## Next — Scene-Aware Director ([[Scene_Aware_Director]])
-
-Phased implementation brief in `06_Implementation_Brief/`. Order:
-
-1. **Phase A — Rich scene context** (heartbeat + full snapshot, sampled poses, `describe` intent, scene-aware LLM prompt)
-2. **Phase C — Set radio** (browser TTS ACKs on agent active)
-3. **Phase B — Vision on command** (viewfinder JPEG when director asks to "look")
-4. **Phase D — Hold / Action / Cut** (playback semantics + optional command gate)
-5. **Phase E — Streaming partial intents** (stretch)
-
-Explicitly **not** adopting Gemini Live — data + on-demand snapshots cover the use case.
 
 ## Later (editor roadmap)
 

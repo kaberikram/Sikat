@@ -1,16 +1,4 @@
-"""Pluggable LLM intent parsing for the Director's Assistant.
-
-Provider is selected at parse time (``DIRECTOR_LLM_PROVIDER`` override, else
-DeepSeek when ``DEEPSEEK_API_KEY`` is present, else Anthropic when
-``ANTHROPIC_API_KEY`` is present, else none). With no provider — or on any
-failure — this module returns None and the deterministic fallback parser takes
-over, so the whole pipeline runs key-free.
-
-DeepSeek is OpenAI-compatible (base_url https://api.deepseek.com) and speaks
-JSON mode (``response_format={"type": "json_object"}``); the response schema is
-described in the prompt because DeepSeek has no strict json_schema mode. The
-Anthropic path uses native structured outputs, unchanged.
-"""
+"""Pluggable LLM intent parsing for the Director's Assistant."""
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +6,8 @@ import logging
 import os
 
 from . import session_context
-from .schema import IntentList, SceneState
+from .scene_context import format_scene_brief
+from .schema import IntentList, SceneFrame, SceneState
 
 log = logging.getLogger("director.llm")
 
@@ -26,12 +15,90 @@ ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
+SYSTEM_PROMPT_TEMPLATE = """You are the Director's Assistant on a virtual film set (RADIO_EDIT.EXE).
+Parse the director's instruction into structured intents. You see the scene
+briefing below — it includes BASE transforms (editable values) and NOW
+(sampled/interpolated at the playhead). Keyframe tracks describe animation.
 
-def select_provider() -> str | None:
-    """Resolve which provider to use, or None for the rule-grammar fallback.
+## Output shape
+Return JSON: {{"intents": [ {{...}}, ... ]}}
+Each intent has `action` plus only relevant fields. Multiple intents for
+compound instructions ("add X then dim lights" → 2 intents).
 
-    ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) forces the choice; an
-    unknown value falls through to auto-selection by which API key is present.
+## Actions
+| action | use when | key fields |
+|--------|----------|------------|
+| spawn | new primitive | primitive, color, name, text, position |
+| remove | delete object | target (name) |
+| transform | move/rotate/scale | target, position/rotation/scale, mode (absolute\\|relative), transition |
+| animate | preset motion | target, preset (turnaround\\|orbit\\|bounce), transition |
+| move_camera | frame shot | position, look_at (object name), fov, transition |
+| update_lights | relight | ambient_color, ambient_intensity (0-4), key_color, key_intensity (0-8), key_position, background |
+| set_material | surface look | target, color, emissive, emissive_intensity, opacity |
+| update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
+| playback | transport | playback_action (play\\|pause\\|seek), seek_time, playback_pause_after_seek |
+| set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
+| describe | question only | describe_topic, describe_message |
+
+## Set transport (film-set language)
+- hold, cut, freeze, stop → playback_action pause
+- action, roll, go → playback_action play
+- back to one, top of scene → playback_action seek, seek_time 0, playback_pause_after_seek true
+- print the take → describe (log only, no mutation)
+
+## describe action (important)
+Use `describe` when the director asks but does NOT command a change:
+- "what's happening", "how's the bounce", "describe the shot"
+Set describe_topic: scene|animation|lighting|fx|camera|object
+Set describe_message: 1-3 sentences, present tense, cite NOW/sampled values
+and track summaries. Offer one concrete next step as a question.
+If they ask AND command ("too dark, fix it"), emit describe + update_lights.
+
+## Scene grounding rules
+- `target` MUST be an object name from the briefing when referring to existing objects
+- Pronouns ("it", "that") → most recent target from history OR selectedId
+- "selected" / "this one" → selectedId from briefing
+- Rotations are RADIANS. Colors lowercase "#rrggbb".
+- Durations ("over 3 seconds") → transition.durationSec
+- Relative corrections ("a bit more", "go back") → mode "relative" on same target
+- Prefer set_scene for whole-mood requests; individual actions otherwise
+- NOW vs BASE: use NOW to answer "how does it look in motion"; use BASE for
+  "move it to..." absolute placement unless they say relative
+
+## Animation awareness
+When describing or editing animation, reference:
+- currentTime, isPlaying
+- track keyframe counts and time ranges
+- sampled NOW position vs BASE (if different, animation is active)
+- preset names only for NEW animation (turnaround/orbit/bounce)
+
+## FX awareness
+FX applies to the VIEWFINDER (virtual camera), not the main viewport.
+Enabled sections are listed under VIRTUAL CAMERA > fx.
+
+## Vision
+If an image is attached to this message, you can see the current viewfinder
+frame (final look with post-processing). Use it for composition, exposure,
+mood. Still emit structured intents — never freeform-only responses.
+
+## Empty result
+If nothing is actionable and it's not a question: {{"intents": []}}
+
+---
+SCENE BRIEFING:
+{scene_brief}
+{history_section}"""
+
+
+def select_provider(frame: SceneFrame | None = None) -> str | None:
+    """Resolve LLM provider, or None for the rule-grammar fallback.
+
+    Hybrid auto-selection when both keys are present:
+    - **Vision** (``frame`` set) → Anthropic (DeepSeek API is text-only)
+    - **Text-only** → DeepSeek when available, else Anthropic
+
+    ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) overrides text-only routing.
+    Vision requests still prefer Anthropic unless the key is missing.
     """
     override = os.environ.get("DIRECTOR_LLM_PROVIDER")
     if override:
@@ -39,8 +106,25 @@ def select_provider() -> str | None:
         if value == "none":
             return None
         if value in ("deepseek", "anthropic"):
+            if frame is not None:
+                if value == "deepseek":
+                    log.warning(
+                        "vision frame present but DIRECTOR_LLM_PROVIDER=deepseek; "
+                        "routing to anthropic"
+                    )
+                if os.environ.get("ANTHROPIC_API_KEY"):
+                    return "anthropic"
+                log.warning("vision frame attached but ANTHROPIC_API_KEY not set")
+                return None
             return value
         log.warning("unknown DIRECTOR_LLM_PROVIDER %r; using auto-selection", override)
+
+    if frame is not None:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            return "anthropic"
+        log.warning("vision frame attached but ANTHROPIC_API_KEY not set")
+        return None
+
     if os.environ.get("DEEPSEEK_API_KEY"):
         return "deepseek"
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -100,44 +184,11 @@ Follow-up rules:
 
 
 def _system_prompt(scene: SceneState | None) -> str:
-    scene_lines = "(scene snapshot unavailable)"
-    fov = 50.0
-    if scene is not None:
-        fov = scene.camera.fov
-        if scene.objects:
-            scene_lines = "\n".join(
-                f'- id "{o.id}" name "{o.name}" at {tuple(o.position)}'
-                for o in scene.objects
-            )
-        else:
-            scene_lines = "(scene is empty)"
-    return f"""You are the Director's Assistant for a virtual film studio. Parse the
-director's spoken instruction into a list of structured intents. Each intent
-has an `action` plus only the fields relevant to that action.
-
-Actions and their fields:
-- spawn: primitive (box|sphere|cone|cylinder|torus|plane|text), color (#rrggbb), name, text, position
-- remove: target (object name)
-- transform: target, position/rotation/scale, mode (absolute|relative), transition
-- animate: target, preset (turnaround|orbit|bounce), transition
-- move_camera: position, look_at (object name), fov, transition
-- update_lights: ambient_color, ambient_intensity (0-4), key_color, key_intensity (0-8), key_position, background (#rrggbb)
-- set_material: target, color, emissive, emissive_intensity, opacity
-- update_fx: section (bloom|pixelate|cellShading|glitch|dither), fx_enabled, fx_set (list of {{key, value}})
-- playback: playback_action (play|pause|seek), seek_time
-- set_scene: mood (noir|sunset|studio|neon)
-
-Rules:
-- rotations are world-space euler XYZ in RADIANS
-- colors are lowercase "#rrggbb" hex
-- durations like "over 3 seconds" go into transition.durationSec
-- prefer set_scene for whole-mood requests, individual actions otherwise
-- target must be one of the scene object names below when the director refers
-  to an existing object
-- current camera fov: {fov}
-
-Current scene objects:
-{scene_lines}{_history_section()}"""
+    scene_brief = format_scene_brief(scene)
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        scene_brief=scene_brief,
+        history_section=_history_section(),
+    )
 
 
 # Compact schema description + one worked example — required for DeepSeek JSON
@@ -153,22 +204,55 @@ Example for "add a red box then dim the lights":
 If nothing is actionable, respond with {"intents": []}. Output JSON only."""
 
 
+def _build_user_content(text: str, frame: SceneFrame | None):
+    if frame is None:
+        return text
+    approx_bytes = len(frame.data) * 3 // 4
+    log.debug(
+        "vision frame attached: %dx%d ~%d bytes",
+        frame.width,
+        frame.height,
+        approx_bytes,
+    )
+    return [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": frame.mime,
+                "data": frame.data,
+            },
+        },
+        {"type": "text", "text": text},
+    ]
+
+
 def _parse_anthropic_sync(
-    client, model: str, text: str, scene: SceneState | None
+    client,
+    model: str,
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None = None,
 ) -> IntentList | None:
     message = client.messages.parse(
         model=model,
         max_tokens=2048,
         system=_system_prompt(scene),
-        messages=[{"role": "user", "content": text}],
+        messages=[{"role": "user", "content": _build_user_content(text, frame)}],
         output_format=IntentList,
     )
     return message.parsed_output
 
 
 def _parse_deepseek_sync(
-    client, model: str, text: str, scene: SceneState | None
+    client,
+    model: str,
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None = None,
 ) -> IntentList | None:
+    if frame is not None:
+        log.warning("DeepSeek path does not support vision; skipping frame attachment")
     system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
     response = client.chat.completions.create(
         model=model,
@@ -183,9 +267,13 @@ def _parse_deepseek_sync(
     return IntentList.model_validate_json(content)
 
 
-async def parse_intents(text: str, scene: SceneState | None) -> IntentList | None:
+async def parse_intents(
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None = None,
+) -> IntentList | None:
     """LLM parse; returns None on any failure so callers can fall back."""
-    provider = select_provider()
+    provider = select_provider(frame)
     if provider is None:
         return None
     if provider == "deepseek":
@@ -198,7 +286,7 @@ async def parse_intents(text: str, scene: SceneState | None) -> IntentList | Non
         return None
     model = _model_for(provider)
     try:
-        return await asyncio.to_thread(parse_fn, client, model, text, scene)
+        return await asyncio.to_thread(parse_fn, client, model, text, scene, frame)
     except ImportError:
         log.warning("LLM SDK not installed; using fallback parser")
         return None

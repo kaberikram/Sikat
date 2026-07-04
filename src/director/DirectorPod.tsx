@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react'
-import { Mic, Plus, X } from 'lucide-react'
+import { Mic, Plus, Volume2, VolumeX, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
 import { startSceneStateSync } from './scene-state-sync'
@@ -10,6 +10,7 @@ import {
   setRuntimeLogger,
 } from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
+import { isRadioEnabled, setRadioEnabled, speakAck } from './set-radio'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
 import { ContextProperties } from '../ui/context-properties'
@@ -92,6 +93,7 @@ export function DirectorPod() {
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
+  const [radioOn, setRadioOn] = useState(() => isRadioEnabled())
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -105,6 +107,7 @@ export function DirectorPod() {
   // the current state to decide whether to auto-restart.
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const listeningRef = useRef(false)
+  const micVisionRef = useRef(false)
   const stopMicRef = useRef<() => void>(() => {})
 
   const speechAvailable = getSpeechRecognition() !== null
@@ -125,8 +128,10 @@ export function DirectorPod() {
     setRuntimeLogger(pushLog)
     const offPacket = socket.onPacket(enqueuePacket)
     const offAgentStatus = socket.onAgentStatus((msg) => {
-      if (msg.status === 'active') markAgentActive(msg.agent, msg.note)
-      else markAgentIdle(msg.agent)
+      if (msg.status === 'active') {
+        markAgentActive(msg.agent, msg.note)
+        speakAck(msg.agent, msg.note ?? undefined, msg.forCommandId)
+      } else markAgentIdle(msg.agent)
     })
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
     const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
@@ -168,7 +173,15 @@ export function DirectorPod() {
     }
   })
 
-  const submit = (text: string) => {
+  const toggleRadio = useCallback(() => {
+    setRadioOn((prev) => {
+      const next = !prev
+      setRadioEnabled(next)
+      return next
+    })
+  }, [])
+
+  const submit = useCallback(async (text: string, opts?: { forceVision?: boolean }) => {
     const trimmed = text.trim()
     if (!trimmed) return
 
@@ -181,17 +194,18 @@ export function DirectorPod() {
     }
 
     const socket = getDirectorSocket()
-    const commandId = socket.sendUserCommand(trimmed)
+    const commandId = await socket.sendUserCommand(trimmed, opts)
     if (commandId) {
       pushLog('DIRECTOR', trimmed)
       setInput('')
     } else {
       pushLog('DIRECTOR', 'not connected — command dropped', 'error')
     }
-  }
+  }, [pushLog])
 
   const stopMic = useCallback(() => {
     listeningRef.current = false
+    micVisionRef.current = false
     setListening(false)
     setInterim('')
     const recognition = recognitionRef.current
@@ -209,9 +223,10 @@ export function DirectorPod() {
   }, [])
   stopMicRef.current = stopMic
 
-  const startMic = useCallback(() => {
+  const startMic = useCallback((opts?: { forceVision?: boolean }) => {
     const Recognition = getSpeechRecognition()
     if (!Recognition || listeningRef.current) return
+    if (opts?.forceVision) micVisionRef.current = true
     const recognition = new Recognition()
     recognition.lang = 'en-US'
     recognition.continuous = true
@@ -222,7 +237,7 @@ export function DirectorPod() {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
         const transcript = result[0]?.transcript ?? ''
-        if (result.isFinal) submit(transcript)
+        if (result.isFinal) void submit(transcript, { forceVision: micVisionRef.current })
         else ghost += transcript
       }
       setInterim(ghost)
@@ -254,7 +269,8 @@ export function DirectorPod() {
     }
   }, [stopMic, submit])
 
-  const toggleMic = () => (listeningRef.current ? stopMic() : startMic())
+  const toggleMic = (forceVision = false) =>
+    listeningRef.current ? stopMic() : startMic({ forceVision })
 
   return (
     <div className="director-pod-anchor">
@@ -325,6 +341,15 @@ export function DirectorPod() {
             title={status}
           />
           <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
+          <button
+            type="button"
+            onClick={toggleRadio}
+            title={radioOn ? 'Mute set radio' : 'Unmute set radio'}
+            aria-pressed={!radioOn}
+            className={`p-0.5 shrink-0 ${radioOn ? 'opacity-80 hover:opacity-100' : 'text-jsr-orange'}`}
+          >
+            {radioOn ? <Volume2 size={12} /> : <VolumeX size={12} />}
+          </button>
           <span className="opacity-60 uppercase">{status}</span>
         </div>
 
@@ -369,8 +394,8 @@ export function DirectorPod() {
           {speechAvailable && (
             <button
               type="button"
-              onClick={toggleMic}
-              title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction'}
+              onClick={(e) => toggleMic(e.shiftKey)}
+              title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
               aria-pressed={listening}
               className={`px-2 border-l-2 border-black ${listening ? 'bg-jsr-orange text-white animate-pulse' : 'bg-white hover:bg-black/5'}`}
             >

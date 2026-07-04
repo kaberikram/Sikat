@@ -3,6 +3,7 @@ import pytest
 
 from app import llm
 from app.agents.directors_assistant import DirectorsAssistant
+from app.schema import SceneFrame
 
 _ENV_KEYS = ("ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "DIRECTOR_LLM_PROVIDER", "DIRECTOR_MODEL")
 
@@ -42,9 +43,9 @@ class _FakeDeepSeek:
         ({}, None),
         ({"ANTHROPIC_API_KEY": "a"}, "anthropic"),
         ({"DEEPSEEK_API_KEY": "d"}, "deepseek"),
-        # DeepSeek wins the auto race when both keys are present.
+        # Text-only hybrid: DeepSeek when both keys are present.
         ({"DEEPSEEK_API_KEY": "d", "ANTHROPIC_API_KEY": "a"}, "deepseek"),
-        # Explicit override beats key presence.
+        # Explicit override beats key presence (text-only).
         ({"DIRECTOR_LLM_PROVIDER": "anthropic", "DEEPSEEK_API_KEY": "d"}, "anthropic"),
         ({"DIRECTOR_LLM_PROVIDER": "none", "DEEPSEEK_API_KEY": "d"}, None),
         ({"DIRECTOR_LLM_PROVIDER": "deepseek"}, "deepseek"),
@@ -52,10 +53,23 @@ class _FakeDeepSeek:
         ({"DIRECTOR_LLM_PROVIDER": "bogus", "ANTHROPIC_API_KEY": "a"}, "anthropic"),
     ],
 )
-def test_select_provider(monkeypatch, env, expected):
+def test_select_provider_text_only(monkeypatch, env, expected):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    assert llm.select_provider() == expected
+    assert llm.select_provider(None) == expected
+
+
+def test_select_provider_vision_routes_anthropic_when_both_keys(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    frame = SceneFrame(width=64, height=64, data="abc=", capturedAt=1.0)
+    assert llm.select_provider(frame) == "anthropic"
+
+
+def test_select_provider_vision_without_anthropic_key_returns_none(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "d")
+    frame = SceneFrame(width=64, height=64, data="abc=", capturedAt=1.0)
+    assert llm.select_provider(frame) is None
 
 
 def test_no_provider_short_circuits_parse():

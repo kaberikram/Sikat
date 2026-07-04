@@ -320,28 +320,108 @@ command_packet_adapter: TypeAdapter = TypeAdapter(CommandPacket)
 # ---------------------------------------------------------------------------
 
 
+class MaterialOverrideSnapshot(BaseModel):
+    color: HexColor | None = None
+    emissive: HexColor | None = None
+    emissiveIntensity: float | None = None
+    opacity: float | None = None
+
+
+class KeyframeTrackSummary(BaseModel):
+    property: Literal["position", "rotation", "scale", "fov"]
+    keyframeCount: int
+
+
+class KeyframePoint(BaseModel):
+    time: float
+    value: Vec3
+
+
+class KeyframeTrackFull(BaseModel):
+    property: Literal["position", "rotation", "scale", "fov"]
+    keyframes: list[KeyframePoint]
+
+
+KeyframeTrack = Annotated[
+    Union[KeyframeTrackSummary, KeyframeTrackFull],
+    Field(discriminator=None),
+]
+
+
+class SampledTransform(BaseModel):
+    position: Vec3
+    rotation: Vec3
+    scale: Vec3
+
+
 class ObjectSnapshot(BaseModel):
     id: str
     name: str
     position: Vec3 = (0.0, 0.0, 0.0)
     rotation: Vec3 = (0.0, 0.0, 0.0)
     scale: Vec3 = (1.0, 1.0, 1.0)
+    sampled: SampledTransform = Field(
+        default_factory=lambda: SampledTransform(
+            position=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)
+        )
+    )
     keyframedProperties: list[str] = Field(default_factory=list)
+    tracks: list[KeyframeTrackSummary | KeyframeTrackFull] = Field(default_factory=list)
+    materialOverride: MaterialOverrideSnapshot | None = None
 
 
-class CameraSnapshot(BaseModel):
+class FxSummary(BaseModel):
+    enabledSections: list[FxSection] = Field(default_factory=list)
+    bloomStrength: float | None = None
+    ditherLevels: int | None = None
+
+
+class VirtualCameraSnapshot(BaseModel):
     position: Vec3 = (0.0, 1.25, 6.0)
     rotation: Vec3 = (0.0, 0.0, 0.0)
     fov: float = 50.0
+    sampled: SampledTransform = Field(
+        default_factory=lambda: SampledTransform(
+            position=(0.0, 1.25, 6.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)
+        )
+    )
+    sampledFov: float = 50.0
+    keyframedProperties: list[str] = Field(default_factory=list)
+    tracks: list[KeyframeTrackSummary | KeyframeTrackFull] = Field(default_factory=list)
+    fx: FxSummary = Field(default_factory=FxSummary)
+
+
+class SceneLightingSnapshot(BaseModel):
+    ambient: AmbientLightPatch
+    key: KeyLightPatch
+    background: HexColor
 
 
 class SceneState(BaseModel):
     type: Literal["scene_state"] = "scene_state"
     timestamp: float = Field(default_factory=now)
-    objects: list[ObjectSnapshot] = Field(default_factory=list)
-    camera: CameraSnapshot = Field(default_factory=CameraSnapshot)
+    mode: Literal["heartbeat", "full"] = "heartbeat"
+    currentTime: float = 0.0
     duration: float = 10.0
     isPlaying: bool = False
+    selectedId: str | None = None
+    objects: list[ObjectSnapshot] = Field(default_factory=list)
+    virtualCamera: VirtualCameraSnapshot = Field(default_factory=VirtualCameraSnapshot)
+    lighting: SceneLightingSnapshot = Field(
+        default_factory=lambda: SceneLightingSnapshot(
+            ambient=AmbientLightPatch(color="#ffffff", intensity=0.8),
+            key=KeyLightPatch(color="#ffffff", intensity=1.5, position=(5.0, 10.0, 7.0)),
+            background="#f2f2f2",
+        )
+    )
+
+
+class SceneFrame(BaseModel):
+    mime: Literal["image/jpeg"] = "image/jpeg"
+    width: int
+    height: int
+    data: str
+    capturedAt: float
 
 
 class UserCommand(BaseModel):
@@ -349,6 +429,8 @@ class UserCommand(BaseModel):
     timestamp: float = Field(default_factory=now)
     text: str = Field(min_length=1)
     commandId: str | None = None
+    scene: SceneState | None = None
+    frame: SceneFrame | None = None
 
 
 class TelemetryPose(BaseModel):
@@ -437,6 +519,7 @@ IntentAction = Literal[
     "update_fx",
     "playback",
     "set_scene",
+    "describe",
 ]
 
 
@@ -489,8 +572,14 @@ class Intent(BaseModel):
     # playback
     playback_action: Literal["play", "pause", "seek"] | None = None
     seek_time: float | None = None
+    playback_pause_after_seek: bool | None = None
     # set_scene
     mood: str | None = None
+    # describe
+    describe_topic: (
+        Literal["scene", "animation", "lighting", "fx", "camera", "object"] | None
+    ) = None
+    describe_message: str | None = None
 
 
 class IntentList(BaseModel):
