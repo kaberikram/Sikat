@@ -28,7 +28,23 @@ before verb matching).
 | 9 | add/spawn/create/make/drop/place + primitive word (`called X` names it, `at x y z` places it, quoted text for tags) | spawn |
 | 10 | scale/grow/shrink/double/halve (`by N` relative multiply, `to N` absolute) | transform (scale) |
 | 11 | rotate/spin/turn + `N degrees` (axis words x/pitch, z/roll; default yaw) → radians | transform (rotation) |
-| 12 | move/raise/lower/nudge + direction (up/down/left/right/forward/back) + amount, or `to x y z` | transform (position) |
+| 12 | **amendment** — bare direction (`go back a bit`) or `again`/`a bit more`, no named target | transform on last target |
+| 13 | move/raise/lower/nudge + direction (up/down/left/right/forward/back) + amount, or `to x y z` | transform (position) |
+
+## Conversation memory (session_context.py)
+
+Director Mode keeps a short rolling window (last 8 exchanges) so follow-ups
+resolve like directing a person on set. Targets are threaded both *within* a
+command (across `then` clauses) and *across* commands.
+
+- **Pronouns** — `it` / `that` / `this one` / `this` / `them` / `those` resolve
+  to the most recently addressed object (`_find_target`).
+- **Amendments** (rule 12, before the normal move) — a bare direction with no
+  named target becomes a small relative nudge on the last target. Softeners set
+  the amount: `a bit`/`a little`/`slightly` → 0.25, plain → 0.5, `more` → 1.0.
+  e.g. after "move the ball up 1.5", "go back a bit" → relative +0.25 on Z.
+- **Repeat** — bare `again` / `a bit more` re-issues the last transform verbatim.
+- With no history a bare amendment resolves to nothing and the clause is dropped.
 
 ## Lookup tables
 

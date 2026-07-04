@@ -20,6 +20,7 @@ import {
   buildBouncePositionKeyframes,
   buildOrbitPositionKeyframes,
   buildTurnaroundRotationKeyframes,
+  type PresetKeyframes,
 } from '../animation-presets'
 import { buildSpawnMesh } from './spawn-factory'
 import { startTween } from './tween'
@@ -52,6 +53,33 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
 }
 
 type VectorProperty = 'position' | 'rotation' | 'scale'
+
+/** Which track a preset writes, and the keyframes it produces.
+ *
+ * Extracted so the instant-apply path (ANIMATE_OBJECT below) and the runtime's
+ * live path-tracing choreography build byte-identical tracks from one place. */
+export function presetKeyframes(
+  obj: MotionObject,
+  preset: 'turnaround' | 'orbit' | 'bounce',
+  durationSec: number
+): { property: 'position' | 'rotation'; keyframes: PresetKeyframes } {
+  if (preset === 'turnaround') {
+    return {
+      property: 'rotation',
+      keyframes: buildTurnaroundRotationKeyframes(obj.rotation, durationSec),
+    }
+  }
+  if (preset === 'orbit') {
+    return {
+      property: 'position',
+      keyframes: buildOrbitPositionKeyframes(obj.position, durationSec),
+    }
+  }
+  return {
+    property: 'position',
+    keyframes: buildBouncePositionKeyframes(obj.position, durationSec),
+  }
+}
 
 function combine(base: Vec3, value: Vec3, mode: 'absolute' | 'relative', property: VectorProperty): Vec3 {
   if (mode === 'absolute') return value
@@ -185,25 +213,8 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const obj = resolveTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       const duration = p.durationSec ?? st.duration
-      if (p.preset === 'turnaround') {
-        st.setObjectPropertyKeyframes(
-          obj.id,
-          'rotation',
-          buildTurnaroundRotationKeyframes(obj.rotation, duration)
-        )
-      } else if (p.preset === 'orbit') {
-        st.setObjectPropertyKeyframes(
-          obj.id,
-          'position',
-          buildOrbitPositionKeyframes(obj.position, duration)
-        )
-      } else {
-        st.setObjectPropertyKeyframes(
-          obj.id,
-          'position',
-          buildBouncePositionKeyframes(obj.position, duration)
-        )
-      }
+      const { property, keyframes } = presetKeyframes(obj, p.preset, duration)
+      st.setObjectPropertyKeyframes(obj.id, property, keyframes)
       st.setTime(0)
       if (!st.isPlaying) st.togglePlay()
       return `${p.preset} on ${obj.name}`

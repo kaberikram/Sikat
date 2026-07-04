@@ -19,6 +19,8 @@ def scene() -> SceneState:
 @pytest.fixture
 def producer(monkeypatch) -> Producer:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DIRECTOR_LLM_PROVIDER", raising=False)
     return Producer()
 
 

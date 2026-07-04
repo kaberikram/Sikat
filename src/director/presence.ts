@@ -17,7 +17,7 @@ export const CURSOR_FLIGHT_MS = 600 // glide from the previous spot to the targe
 export const CURSOR_WORK_MS = 220 // hover on target before the change commits
 export const CURSOR_SETTLE_MS = 260 // linger after committing before the next task
 
-export type CursorPhase = 'idle' | 'flying' | 'working' | 'settling'
+export type CursorPhase = 'idle' | 'flying' | 'tracing' | 'working' | 'settling'
 
 export interface AgentMeta {
   /** Cursor tint + label background. */
@@ -54,14 +54,22 @@ export interface AgentPresence {
   /** `performance.now()` when `target` last changed — the scene reads this to
    *  start a fresh flight ease from wherever the cursor currently is. */
   moveStartedAt: number
+  /** Duration of the current flight, so short nudges and fast keyframe hops
+   *  ease quicker than a full cross-stage glide. Set per move by `flyTo`. */
+  moveDurationMs: number
+  /** What the agent is doing right now, shown under the cursor label (e.g.
+   *  "tracing bounce 12/25"); null when idle/settled. */
+  note: string | null
 }
 
 interface PresenceState {
   agents: Record<string, AgentPresence>
   setActive: (agent: string, active: boolean) => void
-  /** Point the cursor at a new target and (re)start its flight clock. */
-  flyTo: (agent: string, target: Vec3, phase: CursorPhase) => void
+  /** Point the cursor at a new target and (re)start its flight clock. The
+   *  optional duration lets callers pace a hop (defaults to a full flight). */
+  flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
   setPhase: (agent: string, phase: CursorPhase) => void
+  setNote: (agent: string, note: string | null) => void
 }
 
 function seed(agent: string): AgentPresence {
@@ -71,6 +79,8 @@ function seed(agent: string): AgentPresence {
     phase: 'idle',
     target: stationFor(agent),
     moveStartedAt: 0,
+    moveDurationMs: CURSOR_FLIGHT_MS,
+    note: null,
   }
 }
 
@@ -86,7 +96,15 @@ function patch(
 export const presenceStore = create<PresenceState>((set) => ({
   agents: {},
   setActive: (agent, active) => set((s) => patch(s, agent, { active })),
-  flyTo: (agent, target, phase) =>
-    set((s) => patch(s, agent, { target, phase, moveStartedAt: performance.now() })),
+  flyTo: (agent, target, phase, durationMs = CURSOR_FLIGHT_MS) =>
+    set((s) =>
+      patch(s, agent, {
+        target,
+        phase,
+        moveStartedAt: performance.now(),
+        moveDurationMs: durationMs,
+      })
+    ),
   setPhase: (agent, phase) => set((s) => patch(s, agent, { phase })),
+  setNote: (agent, note) => set((s) => patch(s, agent, { note })),
 }))

@@ -1,7 +1,15 @@
-"""Anthropic-backed intent parsing for the Director's Assistant.
+"""Pluggable LLM intent parsing for the Director's Assistant.
 
-The client is lazy: without ANTHROPIC_API_KEY this module returns None and the
-deterministic fallback parser takes over, so the whole pipeline runs key-free.
+Provider is selected at parse time (``DIRECTOR_LLM_PROVIDER`` override, else
+DeepSeek when ``DEEPSEEK_API_KEY`` is present, else Anthropic when
+``ANTHROPIC_API_KEY`` is present, else none). With no provider — or on any
+failure — this module returns None and the deterministic fallback parser takes
+over, so the whole pipeline runs key-free.
+
+DeepSeek is OpenAI-compatible (base_url https://api.deepseek.com) and speaks
+JSON mode (``response_format={"type": "json_object"}``); the response schema is
+described in the prompt because DeepSeek has no strict json_schema mode. The
+Anthropic path uses native structured outputs, unchanged.
 """
 from __future__ import annotations
 
@@ -9,15 +17,44 @@ import asyncio
 import logging
 import os
 
+from . import session_context
 from .schema import IntentList, SceneState
 
 log = logging.getLogger("director.llm")
 
-DEFAULT_MODEL = "claude-sonnet-5"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5"
+DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
-def get_client():
-    """Return an Anthropic client, or None when no API key is configured."""
+def select_provider() -> str | None:
+    """Resolve which provider to use, or None for the rule-grammar fallback.
+
+    ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) forces the choice; an
+    unknown value falls through to auto-selection by which API key is present.
+    """
+    override = os.environ.get("DIRECTOR_LLM_PROVIDER")
+    if override:
+        value = override.strip().lower()
+        if value == "none":
+            return None
+        if value in ("deepseek", "anthropic"):
+            return value
+        log.warning("unknown DIRECTOR_LLM_PROVIDER %r; using auto-selection", override)
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "deepseek"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    return None
+
+
+def _model_for(provider: str) -> str:
+    default = DEEPSEEK_DEFAULT_MODEL if provider == "deepseek" else ANTHROPIC_DEFAULT_MODEL
+    return os.environ.get("DIRECTOR_MODEL", default)
+
+
+def get_anthropic_client():
+    """Anthropic client, or None when the key or SDK is missing."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     try:
@@ -26,6 +63,40 @@ def get_client():
         log.warning("anthropic package not installed; using fallback parser")
         return None
     return anthropic.Anthropic()
+
+
+def get_deepseek_client():
+    """DeepSeek client (OpenAI SDK against the DeepSeek base URL), or None."""
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    try:
+        from openai import OpenAI
+    except ImportError:
+        log.warning("openai package not installed; using fallback parser")
+        return None
+    return OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+
+
+def _history_section() -> str:
+    hist = session_context.history()
+    if not hist:
+        return ""
+    lines = "\n".join(
+        f'- "{ex.text}" -> {", ".join(ex.intent_summaries) or "(no action)"}'
+        for ex in hist
+    )
+    return f"""
+
+Recent direction (oldest first):
+{lines}
+
+Follow-up rules:
+- Pronouns ("it", "that", "this one") and an omitted target refer to the most
+  recently mentioned object above.
+- Small corrections like "go back a bit" or "a little more" are RELATIVE
+  transforms on that same object (mode "relative"), not new absolute moves.
+"""
 
 
 def _system_prompt(scene: SceneState | None) -> str:
@@ -66,13 +137,27 @@ Rules:
 - current camera fov: {fov}
 
 Current scene objects:
-{scene_lines}
-"""
+{scene_lines}{_history_section()}"""
 
 
-def _parse_sync(client, text: str, scene: SceneState | None) -> IntentList | None:
+# Compact schema description + one worked example — required for DeepSeek JSON
+# mode, which needs the shape described in the prompt (no strict json_schema).
+_JSON_SCHEMA_HINT = """
+Respond with a single JSON object of exactly this shape:
+{"intents": [ {"action": "<one of the actions above>", ...only relevant fields...}, ... ]}
+Example for "add a red box then dim the lights":
+{"intents": [
+  {"action": "spawn", "primitive": "box", "color": "#ff3b30"},
+  {"action": "update_lights", "ambient_intensity": 0.3, "key_intensity": 0.7}
+]}
+If nothing is actionable, respond with {"intents": []}. Output JSON only."""
+
+
+def _parse_anthropic_sync(
+    client, model: str, text: str, scene: SceneState | None
+) -> IntentList | None:
     message = client.messages.parse(
-        model=os.environ.get("DIRECTOR_MODEL", DEFAULT_MODEL),
+        model=model,
         max_tokens=2048,
         system=_system_prompt(scene),
         messages=[{"role": "user", "content": text}],
@@ -81,15 +166,41 @@ def _parse_sync(client, text: str, scene: SceneState | None) -> IntentList | Non
     return message.parsed_output
 
 
+def _parse_deepseek_sync(
+    client, model: str, text: str, scene: SceneState | None
+) -> IntentList | None:
+    system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": text},
+        ],
+    )
+    content = response.choices[0].message.content
+    return IntentList.model_validate_json(content)
+
+
 async def parse_intents(text: str, scene: SceneState | None) -> IntentList | None:
     """LLM parse; returns None on any failure so callers can fall back."""
-    client = get_client()
+    provider = select_provider()
+    if provider is None:
+        return None
+    if provider == "deepseek":
+        client = get_deepseek_client()
+        parse_fn = _parse_deepseek_sync
+    else:
+        client = get_anthropic_client()
+        parse_fn = _parse_anthropic_sync
     if client is None:
         return None
+    model = _model_for(provider)
     try:
-        return await asyncio.to_thread(_parse_sync, client, text, scene)
+        return await asyncio.to_thread(parse_fn, client, model, text, scene)
     except ImportError:
-        log.warning("anthropic package not installed; using fallback parser")
+        log.warning("LLM SDK not installed; using fallback parser")
         return None
     except Exception as exc:
         exc_name = type(exc).__name__

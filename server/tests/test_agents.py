@@ -19,8 +19,10 @@ def scene() -> SceneState:
 
 @pytest.fixture
 def producer(monkeypatch) -> Producer:
-    # Force the fallback path even if a key is present in the environment.
+    # Force the fallback path even if a key/provider is set in the environment.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DIRECTOR_LLM_PROVIDER", raising=False)
     return Producer()
 
 
