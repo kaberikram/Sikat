@@ -6,6 +6,7 @@
 import {
   type CommandPacket,
   type AgentLogMessage,
+  type AgentStatusMessage,
   type ErrorMessage,
   type SceneSnapshot,
   parseServerMessage,
@@ -31,6 +32,7 @@ export class DirectorSocket {
 
   private packetListeners = new Set<Listener<CommandPacket>>()
   private logListeners = new Set<Listener<AgentLogMessage>>()
+  private agentStatusListeners = new Set<Listener<AgentStatusMessage>>()
   private errorListeners = new Set<Listener<ErrorMessage>>()
   private statusListeners = new Set<Listener<SocketStatus>>()
   private openListeners = new Set<() => void>()
@@ -62,6 +64,8 @@ export class DirectorSocket {
       if (!msg) return
       if (msg.type === 'agent_command') for (const cb of this.packetListeners) cb(msg.packet)
       else if (msg.type === 'agent_log') for (const cb of this.logListeners) cb(msg)
+      else if (msg.type === 'agent_status')
+        for (const cb of this.agentStatusListeners) cb(msg)
       else for (const cb of this.errorListeners) cb(msg)
     }
     this.ws.onclose = () => {
@@ -126,6 +130,11 @@ export class DirectorSocket {
   onLog(cb: Listener<AgentLogMessage>): () => void {
     this.logListeners.add(cb)
     return () => this.logListeners.delete(cb)
+  }
+
+  onAgentStatus(cb: Listener<AgentStatusMessage>): () => void {
+    this.agentStatusListeners.add(cb)
+    return () => this.agentStatusListeners.delete(cb)
   }
 
   onError(cb: Listener<ErrorMessage>): () => void {

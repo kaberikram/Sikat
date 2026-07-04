@@ -3,7 +3,12 @@ import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
 import { startSceneStateSync } from './scene-state-sync'
-import { applyCommandPacket } from './command-applier'
+import {
+  enqueuePacket,
+  markAgentActive,
+  markAgentIdle,
+  setRuntimeLogger,
+} from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
@@ -92,17 +97,13 @@ export function DirectorPod() {
   useMountEffect(() => {
     const socket = getDirectorSocket()
     const offStatus = socket.onStatus(setStatus)
-    const offPacket = socket.onPacket((packet) => {
-      try {
-        const result = applyCommandPacket(packet)
-        pushLog(packet.target_agent, `${packet.command}: ${result}`)
-      } catch (e) {
-        pushLog(
-          packet.target_agent,
-          `${packet.command} failed: ${e instanceof Error ? e.message : e}`,
-          'error'
-        )
-      }
+    // Packets no longer apply on arrival — the agent runtime queues them and
+    // paces each apply behind its cursor's flight, logging as it commits.
+    setRuntimeLogger(pushLog)
+    const offPacket = socket.onPacket(enqueuePacket)
+    const offAgentStatus = socket.onAgentStatus((msg) => {
+      if (msg.status === 'active') markAgentActive(msg.agent)
+      else markAgentIdle(msg.agent)
     })
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
     const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
@@ -133,8 +134,10 @@ export function DirectorPod() {
     return () => {
       offStatus()
       offPacket()
+      offAgentStatus()
       offLog()
       offError()
+      setRuntimeLogger(() => {})
       window.clearInterval(placeholderTimer)
       window.removeEventListener('keydown', onKeyDown)
     }

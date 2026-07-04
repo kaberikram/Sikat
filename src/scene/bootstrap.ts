@@ -8,6 +8,7 @@ import { ensureShadowsOnObjectMeshes } from './shadows'
 import { setupGizmo } from './setup-gizmo'
 import { setupPicking } from './setup-picking'
 import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
+import { createAgentCursors } from './agent-cursors'
 
 export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivElement) {
   container.replaceChildren()
@@ -125,6 +126,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   const unsubShadows = subscribeShadowSync()
   ensureShadowsOnObjectMeshes(useEditorStore.getState().objects)
 
+  const agentCursors = createAgentCursors(scene)
+
   const stopAnimate = createAnimateLoop({
     scene,
     userCamera,
@@ -136,6 +139,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     transformControl,
     ambientLight,
     directionalLight,
+    agentCursors,
   })
 
   const handleMainResize = () => {
@@ -165,6 +169,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   return () => {
     teardownPicking()
     stopAnimate()
+    agentCursors.dispose()
     unsubStore()
     unsubShadows()
     roMain.disconnect()

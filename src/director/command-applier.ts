@@ -34,7 +34,7 @@ import type {
 
 const EASE_SAMPLES = 8
 
-function resolveTarget(target: Target | null | undefined): MotionObject | null {
+export function resolveTarget(target: Target | null | undefined): MotionObject | null {
   if (!target) return null
   const objects = useEditorStore.getState().objects
   if (target.id) {

@@ -38,3 +38,37 @@ def test_websocket_user_command_broadcast():
                     break
             else:
                 raise AssertionError(f"expected agent_command, got {seen}")
+
+
+def test_websocket_streams_presence_lifecycle():
+    """The staged stream carries agent_status active → command → idle."""
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json(
+                {"type": "user_command", "text": "add a red box", "commandId": "ws-2"}
+            )
+            events: list[tuple] = []
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                msg = ws.receive_json()
+                if msg["type"] == "agent_status":
+                    events.append((msg["type"], msg["agent"], msg["status"]))
+                elif msg["type"] == "agent_command":
+                    events.append((msg["type"], msg["packet"]["target_agent"]))
+                if any(e[0] == "agent_status" and e[2] == "idle" for e in events):
+                    break
+            else:
+                raise AssertionError(f"never saw idle status, got {events}")
+
+    kinds = [e for e in events if e[0] != "agent_log"]
+    assert ("agent_status", "AssetAnimator", "active") in kinds
+    assert ("agent_command", "AssetAnimator") in kinds
+    assert ("agent_status", "AssetAnimator", "idle") in kinds
+    # active must precede the command, which must precede idle.
+    order = [e for e in kinds if e[0] in ("agent_status", "agent_command")]
+    assert order.index(("agent_status", "AssetAnimator", "active")) < order.index(
+        ("agent_command", "AssetAnimator")
+    )
+    assert order.index(("agent_command", "AssetAnimator")) < order.index(
+        ("agent_status", "AssetAnimator", "idle")
+    )
