@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from . import session_context
 from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
+from .motion_vocab import extract_motion, extract_motion_params
 from .scene_context import describe_fallback_message
 from .schema import FxSetting, Intent, SceneState, Transition
 
@@ -27,6 +28,12 @@ COLOR_WORDS: dict[str, str] = {
     "gold": "#ffd700",
     "teal": "#64d2ff",
     "brown": "#a2845e",
+    "silver": "#c0c0c0",
+    "navy": "#001f3f",
+    "lime": "#32cd32",
+    "coral": "#ff7f50",
+    "violet": "#8a2be2",
+    "cream": "#fffdd0",
 }
 
 PRIMITIVE_WORDS: dict[str, str] = {
@@ -49,6 +56,15 @@ PRIMITIVE_WORDS: dict[str, str] = {
     "tag": "text",
     "sign": "text",
     "label": "text",
+    "word": "text",
+    "title": "text",
+    "headline": "text",
+    "block": "box",
+    "disc": "cylinder",
+    "pill": "cylinder",
+    "wheel": "torus",
+    "product": "sphere",
+    "hero": "sphere",
 }
 
 MOOD_WORDS: dict[str, str] = {
@@ -62,6 +78,14 @@ MOOD_WORDS: dict[str, str] = {
     "default": "studio",
     "neon": "neon",
     "cyberpunk": "neon",
+    "dramatic": "noir",
+    "cinematic": "noir",
+    "dark": "noir",
+    "dreamy": "sunset",
+    "clean": "studio",
+    "minimal": "studio",
+    "vibrant": "neon",
+    "bright": "studio",
 }
 
 DIRECTIONS: dict[str, tuple[float, float, float]] = {
@@ -165,10 +189,16 @@ def _find_color(clause: str) -> str | None:
 def _find_scene_target(clause: str, scene: SceneState | None) -> str | None:
     if scene is None:
         return None
+    clause_words = set(re.findall(r"[a-z]+", clause))
+    # Colloquial "ball" → any sphere-like object in the scene.
+    if "ball" in clause_words or "balls" in clause_words:
+        for obj in scene.objects:
+            name_lower = obj.name.lower()
+            if "sphere" in name_lower or "ball" in name_lower or "orb" in name_lower:
+                return obj.name
     for obj in scene.objects:
         if obj.name.lower() in clause:
             return obj.name
-    clause_words = set(re.findall(r"[a-z]+", clause))
     for obj in scene.objects:
         name_tokens = {t for t in re.split(r"[^a-z]+", obj.name.lower()) if len(t) >= 3}
         for word in clause_words:
@@ -212,11 +242,17 @@ def _parse_playback(
         return Intent(action="playback", playback_action="record")
     if re.search(r"roll\s+(?:camera|sound|it)\b", clause):
         return Intent(action="playback", playback_action="record")
-    if re.search(r"\bcut\b", clause) or re.search(r"that'?s\s+a\s+cut", clause):
+    if re.search(r"\bcut\b", clause) or re.search(r"that'?s\s+a\s+(cut|wrap)", clause):
         return Intent(action="playback", playback_action="cut")
     if re.search(r"stop\s+recording", clause):
         return Intent(action="playback", playback_action="cut")
-    if re.fullmatch(r"(play|go|roll(?:ing)?(?: it)?)", clause):
+    if re.fullmatch(r"(loop|loop it|keep looping|on repeat)", clause):
+        return Intent(action="playback", playback_action="loop_on")
+    if re.fullmatch(r"(play once|no loop|don'?t loop|once only)", clause):
+        return Intent(action="playback", playback_action="loop_off")
+    if re.fullmatch(r"(restart|from the top)", clause):
+        return Intent(action="playback", playback_action="seek", seek_time=0)
+    if re.fullmatch(r"(play|go|roll(?:ing)?(?: it)?|continue|resume)", clause):
         return Intent(action="playback", playback_action="play")
     if re.fullmatch(r"(pause|stop|freeze|hold)", clause):
         return Intent(action="playback", playback_action="pause")
@@ -228,6 +264,9 @@ def _parse_playback(
             playback_pause_after_seek=True,
         )
     m = re.search(rf"\b(?:go to|seek(?: to)?|jump to)\s+{_NUM}", clause)
+    if m:
+        return Intent(action="playback", playback_action="seek", seek_time=float(m.group(1)))
+    m = re.search(rf"\bat\s+{_NUM}\s*(?:s|sec|secs|seconds)\b", clause)
     if m:
         return Intent(action="playback", playback_action="seek", seek_time=float(m.group(1)))
     if re.fullmatch(r"(rewind|go to start|from the top|back to the top)", clause):
@@ -358,23 +397,34 @@ def _parse_camera(
 def _parse_animate(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(turnaround|turn around|360|spin around|orbit|bounce)\b", clause):
+    if re.search(rf"{_NUM}\s*(?:deg|degrees?|°)", clause):
         return None
-    preset = "turnaround"
-    if "orbit" in clause:
-        preset = "orbit"
-    elif "bounce" in clause:
-        preset = "bounce"
+    if re.search(r"\b(add|spawn|create|text saying|saying)\b", clause):
+        return None
+    motion = extract_motion(clause)
+    if not motion:
+        return None
     target = _find_target(clause, scene)
     if not target:
         return None
-    return Intent(action="animate", preset=preset, target=target, transition=transition)  # type: ignore[arg-type]
+    params = extract_motion_params(clause, motion, scene.stage.radius if scene else 25.0)
+    repeat = bool(re.search(r"\b(loop|repeat|on repeat)\b", clause))
+    preset = motion if motion in ("turnaround", "orbit", "bounce") else None
+    return Intent(
+        action="animate",
+        preset=preset,  # type: ignore[arg-type]
+        motion=motion,
+        motion_params=params or None,
+        animate_repeat=repeat,
+        target=target,
+        transition=transition,
+    )
 
 
 def _parse_remove(
     clause: str, scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(remove|delete|destroy|get rid of)\b", clause):
+    if not re.search(r"\b(remove|delete|destroy|hide|clear|lose)\b", clause):
         return None
     target = _find_target(clause, scene)
     if not target:
@@ -401,7 +451,9 @@ def _parse_material(
 def _parse_spawn(
     clause: str, _scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(add|spawn|create|make|drop|place|give me)\b", clause):
+    if not re.search(
+        r"\b(add|spawn|create|make|drop|place|give me|insert|reveal|introduce|put)\b", clause
+    ):
         return None
     for word, primitive in PRIMITIVE_WORDS.items():
         if re.search(rf"\b{word}\b", clause):
@@ -421,10 +473,34 @@ def _parse_spawn(
     return None
 
 
+def _parse_squash(
+    clause: str, scene: SceneState | None, transition: Transition | None
+) -> Intent | None:
+    if not re.search(
+        r"\b(squash(?:ing|ed)?|squish(?:ing|ed)?|flatten(?:ing|ed)?|compress(?:ing|ed)?|pancake)\b",
+        clause,
+    ):
+        return None
+    target = _find_target(clause, scene)
+    if not target:
+        return None
+    flat = 0.15 if re.search(r"\b(flat|pancake|paper thin)\b", clause) else 0.35
+    return Intent(
+        action="transform",
+        target=target,
+        scale=(1.0, flat, 1.0),
+        mode="absolute",
+        transition=transition,
+    )
+
+
 def _parse_scale(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(scale|grow|shrink|bigger|smaller|larger|double|halve|half)\b", clause):
+    if not re.search(
+        r"\b(scale|grow|shrink|bigger|smaller|larger|double|halve|half|enlarge|expand|tiny|huge|massive|minimize)\b",
+        clause,
+    ):
         return None
     target = _find_target(clause, scene)
     if not target:
@@ -437,8 +513,10 @@ def _parse_scale(
         factor = 2.0
     elif re.search(r"\b(halve|half)\b", clause):
         factor = 0.5
-    elif re.search(r"\b(shrink|smaller)\b", clause):
+    elif re.search(r"\b(shrink|smaller|tiny|minimize)\b", clause):
         factor = 0.667
+    elif re.search(r"\b(bigger|larger|huge|massive|enlarge|expand)\b", clause):
+        factor = 1.5
     else:
         factor = 1.5
     return Intent(
@@ -453,7 +531,10 @@ def _parse_scale(
 def _parse_rotate(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(rotate|spin|turn|tilt)\b", clause):
+    if not re.search(r"\b(rotate|tilt)\b", clause) and not (
+        re.search(r"\b(spin|turn)\b", clause)
+        and re.search(rf"{_NUM}\s*(?:deg|degrees?|°)", clause)
+    ):
         return None
     target = _find_target(clause, scene)
     if not target:
@@ -520,7 +601,7 @@ def _parse_amendment(
 def _parse_move(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(move|shift|slide|raise|lower|lift|nudge|bring)\b", clause):
+    if not re.search(r"\b(move|shift|slide|raise|lower|lift|nudge|bring|push|pull|send|position)\b", clause):
         return None
     target = _find_target(clause, scene)
     if not target:
@@ -613,6 +694,7 @@ HANDLERS: list[Handler] = [
     _parse_remove,
     _parse_material,
     _parse_spawn,
+    _parse_squash,
     _parse_scale,
     _parse_rotate,
     _parse_amendment,

@@ -104,8 +104,13 @@ class TransformObjectPayload(BaseModel):
 
 class AnimateObjectPayload(BaseModel):
     target: Target
-    preset: Literal["turnaround", "orbit", "bounce"]
+    preset: Literal["turnaround", "orbit", "bounce"] | None = None
+    """Legacy preset ids — use `motion` for generative tracks."""
+    motion: str | None = None
+    """Parametric motion id (float, drop, arc, pulse, …) or alias."""
+    params: dict[str, float] | None = None
     durationSec: Annotated[float, _clamp(0.5, 60.0)] | None = None
+    repeat: bool | None = False
 
 
 class MoveCameraPayload(BaseModel):
@@ -229,7 +234,7 @@ class SetKeyframesPayload(BaseModel):
 
 
 class PlaybackPayload(BaseModel):
-    action: Literal["play", "pause", "seek", "record", "cut"]
+    action: Literal["play", "pause", "seek", "record", "cut", "loop_on", "loop_off"]
     time: float | None = None
 
 
@@ -384,13 +389,26 @@ class FxSummary(BaseModel):
     ditherLevels: int | None = None
 
 
+STAGE_RADIUS = 25.0
+
+
+def _default_virtual_camera_position() -> tuple[float, float, float]:
+    return (0.0, STAGE_RADIUS * 0.5, STAGE_RADIUS * 2.4)
+
+
+def _default_key_light_position() -> tuple[float, float, float]:
+    return (STAGE_RADIUS * 2, STAGE_RADIUS * 4, STAGE_RADIUS * 2.8)
+
+
 class VirtualCameraSnapshot(BaseModel):
-    position: Vec3 = (0.0, 1.25, 6.0)
+    position: Vec3 = Field(default_factory=lambda: _default_virtual_camera_position())
     rotation: Vec3 = (0.0, 0.0, 0.0)
     fov: float = 50.0
     sampled: SampledTransform = Field(
         default_factory=lambda: SampledTransform(
-            position=(0.0, 1.25, 6.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)
+            position=_default_virtual_camera_position(),
+            rotation=(0.0, 0.0, 0.0),
+            scale=(1.0, 1.0, 1.0),
         )
     )
     sampledFov: float = 50.0
@@ -407,7 +425,7 @@ class SceneLightingSnapshot(BaseModel):
 
 class StageSnapshot(BaseModel):
     position: Vec3 = (0.0, 0.0, 0.0)
-    radius: float = 2.5
+    radius: float = STAGE_RADIUS
 
 
 class SceneState(BaseModel):
@@ -426,7 +444,11 @@ class SceneState(BaseModel):
     lighting: SceneLightingSnapshot = Field(
         default_factory=lambda: SceneLightingSnapshot(
             ambient=AmbientLightPatch(color="#ffffff", intensity=0.8),
-            key=KeyLightPatch(color="#ffffff", intensity=1.5, position=(5.0, 10.0, 7.0)),
+            key=KeyLightPatch(
+                color="#ffffff",
+                intensity=1.5,
+                position=_default_key_light_position(),
+            ),
             background="#f2f2f2",
         )
     )
@@ -568,8 +590,13 @@ class Intent(BaseModel):
     rotation: Vec3 | None = None
     scale: Vec3 | None = None
     mode: Literal["absolute", "relative"] | None = None
-    # animate
+    # animate — preset (legacy) or generative motion + params
     preset: Literal["turnaround", "orbit", "bounce"] | None = None
+    motion: str | None = None
+    motion_params: dict[str, float] | None = None
+    animate_repeat: bool | None = None
+    track_property: Literal["position", "rotation", "scale"] | None = None
+    track_keyframes: list[Keyframe] | None = None
     # move_camera
     look_at: str | None = None
     fov: float | None = None
@@ -589,7 +616,7 @@ class Intent(BaseModel):
     fx_enabled: bool | None = None
     fx_set: list[FxSetting] | None = None
     # playback
-    playback_action: Literal["play", "pause", "seek", "record", "cut"] | None = None
+    playback_action: Literal["play", "pause", "seek", "record", "cut", "loop_on", "loop_off"] | None = None
     seek_time: float | None = None
     playback_pause_after_seek: bool | None = None
     # set_scene

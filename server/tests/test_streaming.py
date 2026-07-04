@@ -73,9 +73,10 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     async def emit_status(agent, status, command_id=None, note=None):
         return None
 
+    # First clause hits instant grammar; second does not — LLM stays pending.
     task = asyncio.create_task(
         producer.direct(
-            "add a red box then enable bloom",
+            "add a red box then xyzzy fuzz the mood",
             scene,
             "cmd-parallel",
             emit_log,

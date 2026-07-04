@@ -8,8 +8,12 @@ from ..schema import (
     Intent,
     MoveCameraPacket,
     MoveCameraPayload,
+    PlaybackPacket,
+    PlaybackPayload,
     RemoveObjectPacket,
     RemoveObjectPayload,
+    SetKeyframesPacket,
+    SetKeyframesPayload,
     SpawnObjectPacket,
     SpawnObjectPayload,
     Target,
@@ -62,16 +66,34 @@ class AssetAnimator:
                 )
             ]
         if intent.action == "animate":
-            if not intent.target or not intent.preset:
+            motion = intent.motion or intent.preset
+            if not intent.target:
+                return []
+            if intent.track_keyframes and intent.track_property:
+                packets: list[CommandPacket] = [
+                    SetKeyframesPacket(
+                        payload=SetKeyframesPayload(
+                            target=Target(name=intent.target),
+                            property=intent.track_property,
+                            keyframes=intent.track_keyframes,
+                        )
+                    )
+                ]
+                packets.append(PlaybackPacket(payload=PlaybackPayload(action="play")))
+                return packets
+            if not motion:
                 return []
             return [
                 AnimateObjectPacket(
                     payload=AnimateObjectPayload(
                         target=Target(name=intent.target),
                         preset=intent.preset,
+                        motion=motion,
+                        params=intent.motion_params,
                         durationSec=intent.transition.durationSec
                         if intent.transition
                         else None,
+                        repeat=intent.animate_repeat or False,
                     )
                 )
             ]

@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { applyLiveCameraPose } from '../director/camera-pose'
-import { useEditorStore } from '../store'
+import { STAGE_RADIUS, useEditorStore } from '../store'
 
-const MOVE_SPEED = 2.5
+const MOVE_SPEED = STAGE_RADIUS
 const FAST_MULT = 3
 const LOOK_SENS = 0.004
 

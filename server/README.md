@@ -12,7 +12,18 @@ uv run uvicorn app.main:app --port 8000
 ```
 
 Optional LLM parsing (falls back to the deterministic rule grammar without it).
-Two providers are supported with **hybrid auto-routing** when both keys are set:
+Two providers are supported with **hybrid auto-routing** when both keys are set.
+
+**Recommended:** copy `.env.example` → `.env` in this folder and paste your keys.
+`.env` is gitignored; only `.env.example` is tracked.
+
+```sh
+cp .env.example .env
+# edit .env — add DEEPSEEK_API_KEY=sk-...
+uv run uvicorn app.main:app --port 8000
+```
+
+Or pass keys inline (same vars, no file):
 
 ```sh
 # Recommended: both keys — DeepSeek for text, Anthropic for viewfinder vision

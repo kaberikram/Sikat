@@ -14,11 +14,11 @@ import type { Vec3 } from './protocol'
 
 /** Choreography timings, shared so the runtime's paced apply and the scene's
  *  flight easing agree to the millisecond. */
-export const CURSOR_FLIGHT_MS = 600 // glide from the previous spot to the target
-export const CURSOR_WORK_MS = 220 // hover on target before the change commits
-export const CURSOR_SETTLE_MS = 260 // linger after committing before the next task
+export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the target
+export const CURSOR_WORK_MS = 120 // hover on target before the change commits
+export const CURSOR_SETTLE_MS = 140 // linger after committing before the next task
 
-export type CursorPhase = 'idle' | 'flying' | 'tracing' | 'working' | 'settling'
+export type CursorPhase = 'idle' | 'flying' | 'working' | 'settling'
 
 export interface AgentMeta {
   /** Cursor tint + label background. */
@@ -92,9 +92,10 @@ export interface AgentPresence {
   /** Duration of the current flight, so short nudges and fast keyframe hops
    *  ease quicker than a full cross-stage glide. Set per move by `flyTo`. */
   moveDurationMs: number
-  /** What the agent is doing right now, shown under the cursor label (e.g.
-   *  "tracing bounce 12/25"); null when idle/settled. */
+  /** What the agent is doing right now, shown under the cursor label; null when idle. */
   note: string | null
+  /** When set, the scene cursor tracks this object's live position each frame. */
+  followObjectId: string | null
 }
 
 interface PresenceState {
@@ -105,6 +106,7 @@ interface PresenceState {
   flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
   setPhase: (agent: string, phase: CursorPhase) => void
   setNote: (agent: string, note: string | null) => void
+  followObject: (agent: string, objectId: string | null) => void
 }
 
 function seed(agent: string): AgentPresence {
@@ -116,6 +118,7 @@ function seed(agent: string): AgentPresence {
     moveStartedAt: 0,
     moveDurationMs: CURSOR_FLIGHT_MS,
     note: null,
+    followObjectId: null,
   }
 }
 
@@ -142,4 +145,5 @@ export const presenceStore = create<PresenceState>((set) => ({
     ),
   setPhase: (agent, phase) => set((s) => patch(s, agent, { phase })),
   setNote: (agent, note) => set((s) => patch(s, agent, { note })),
+  followObject: (agent, objectId) => set((s) => patch(s, agent, { followObjectId: objectId })),
 }))

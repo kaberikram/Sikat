@@ -16,12 +16,12 @@ import {
   type MotionObject,
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
+import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
 import {
-  buildBouncePositionKeyframes,
-  buildOrbitPositionKeyframes,
-  buildTurnaroundRotationKeyframes,
-  type PresetKeyframes,
-} from '../animation-presets'
+  canCompositeOntoPath,
+  compositeMotionOntoPath,
+  existingPositionPath,
+} from '../motion-composite'
 import { buildSpawnMesh } from './spawn-factory'
 import { startTween } from './tween'
 import { getEaseFn } from '../easing'
@@ -36,6 +36,20 @@ import type {
 
 const EASE_SAMPLES = 8
 
+function beginClipPlayback(clipEnd: number, repeat: boolean): void {
+  const st = useEditorStore.getState()
+  st.setTime(0)
+  st.setClipLoopEnd(clipEnd)
+  if (repeat) {
+    st.setPlayOnceEnd(null)
+    st.setPlaybackLoop(true)
+  } else {
+    st.setPlayOnceEnd(clipEnd)
+    st.setPlaybackLoop(false)
+  }
+  if (!st.isPlaying) st.togglePlay()
+}
+
 export function resolveTarget(target: Target | null | undefined): MotionObject | null {
   if (!target) return null
   const objects = useEditorStore.getState().objects
@@ -45,6 +59,13 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
   }
   if (target.name) {
     const needle = target.name.toLowerCase()
+    if (needle === 'ball' || needle === 'the ball') {
+      const ballLike = objects.find((o) => {
+        const n = o.name.toLowerCase()
+        return n.includes('sphere') || n.includes('ball') || n.includes('orb')
+      })
+      if (ballLike) return ballLike
+    }
     const exact = objects.find((o) => o.name.toLowerCase() === needle)
     if (exact) return exact
     const partial = objects.find((o) => o.name.toLowerCase().includes(needle))
@@ -55,32 +76,23 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
 
 type VectorProperty = 'position' | 'rotation' | 'scale'
 
-/** Which track a preset writes, and the keyframes it produces.
- *
- * Extracted so the instant-apply path (ANIMATE_OBJECT below) and the runtime's
- * live path-tracing choreography build byte-identical tracks from one place. */
+/** @deprecated use motionKeyframes from motion-synth.ts */
 export function presetKeyframes(
   obj: MotionObject,
   preset: 'turnaround' | 'orbit' | 'bounce',
   durationSec: number,
-  orbitCenter: Vec3 = [0, 0, 0]
-): { property: 'position' | 'rotation'; keyframes: PresetKeyframes } {
-  if (preset === 'turnaround') {
-    return {
-      property: 'rotation',
-      keyframes: buildTurnaroundRotationKeyframes(obj.rotation, durationSec),
-    }
-  }
-  if (preset === 'orbit') {
-    return {
-      property: 'position',
-      keyframes: buildOrbitPositionKeyframes(obj.position, durationSec, orbitCenter),
-    }
-  }
-  return {
-    property: 'position',
-    keyframes: buildBouncePositionKeyframes(obj.position, durationSec),
-  }
+  stage: { center: Vec3; radius: number } = { center: [0, 0, 0], radius: 25 }
+): { property: 'position' | 'rotation' | 'scale'; keyframes: ReturnType<typeof motionKeyframes>['keyframes'] } {
+  const track = motionKeyframes(
+    obj.position,
+    obj.rotation,
+    obj.scale,
+    preset,
+    durationSec,
+    {},
+    stage
+  )
+  return { property: track.property, keyframes: track.keyframes }
 }
 
 function combine(base: Vec3, value: Vec3, mode: 'absolute' | 'relative', property: VectorProperty): Vec3 {
@@ -148,6 +160,20 @@ function applyObjectVector(
   }
   st.updateObject(obj.id, { [property]: to })
   if (hasKeyframes || isRolling) st.addKeyframe(obj.id, st.currentTime, property, to)
+}
+
+function resolveLookAtPosition(
+  lookAt: Vec3 | null | undefined,
+  lookAtTarget: Target | null | undefined,
+  st: ReturnType<typeof useEditorStore.getState>
+): Vec3 | null {
+  if (lookAt) return lookAt
+  if (!lookAtTarget) return null
+  const name = lookAtTarget.name?.toLowerCase()
+  if (name === 'stage') return st.stage.position
+  const obj = resolveTarget(lookAtTarget)
+  if (!obj) return null
+  return interpolateKeyframes(obj.keyframes, st.currentTime, 'position', obj.position)
 }
 
 function lookAtToEuler(eye: Vec3, targetPos: Vec3): Vec3 {
@@ -224,17 +250,46 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const p = packet.payload
       const obj = resolveTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
-      const duration = p.durationSec ?? st.duration
-      const { property, keyframes } = presetKeyframes(
-        obj,
-        p.preset,
-        duration,
-        st.stage.position
-      )
+      const motion = p.motion ?? p.preset ?? 'bounce'
+      const params = (p.params ?? {}) as MotionParams
+      const stage = { center: st.stage.position, radius: st.stage.radius }
+      const existingPath = existingPositionPath(obj.keyframes)
+      const useComposite = canCompositeOntoPath(motion, existingPath, st.stage.radius)
+      const pathDuration = existingPath[existingPath.length - 1]?.time
+      const duration =
+        p.durationSec ??
+        (useComposite && pathDuration != null && pathDuration > 0
+          ? pathDuration
+          : defaultMotionDuration(motion, params))
+
+      let property: 'position' | 'rotation' | 'scale'
+      let keyframes: ReturnType<typeof motionKeyframes>['keyframes']
+
+      if (useComposite) {
+        property = 'position'
+        keyframes = compositeMotionOntoPath(existingPath, motion, {
+          ...params,
+          hops: params.hops ?? Math.max(2, Math.round(duration / 0.45)),
+        })
+      } else {
+        const track = motionKeyframes(
+          obj.position,
+          obj.rotation,
+          obj.scale,
+          motion,
+          duration,
+          params,
+          stage
+        )
+        property = track.property
+        keyframes = track.keyframes
+      }
+
+      const clipEnd = keyframes[keyframes.length - 1]?.time ?? duration
       st.setObjectPropertyKeyframes(obj.id, property, keyframes)
-      st.setTime(0)
-      if (!st.isPlaying) st.togglePlay()
-      return `${p.preset} on ${obj.name}`
+      beginClipPlayback(clipEnd, p.repeat === true)
+      const mode = useComposite ? `${motion} along path` : motion
+      return `${mode} on ${obj.name} (${duration.toFixed(1)}s${p.repeat ? ', loop' : ''})`
     }
 
     case 'MOVE_CAMERA': {
@@ -244,12 +299,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
       if (p.position) applyCameraVector('position', p.position, packet.transition)
       let rotation = p.rotation ?? null
       if (!rotation && (p.lookAt || p.lookAtTarget)) {
-        let lookTarget = p.lookAt ?? null
-        if (!lookTarget && p.lookAtTarget) {
-          const name = p.lookAtTarget.name?.toLowerCase()
-          if (name === 'stage') lookTarget = st.stage.position
-          else lookTarget = resolveTarget(p.lookAtTarget)?.position ?? null
-        }
+        const lookTarget = resolveLookAtPosition(p.lookAt, p.lookAtTarget, st)
         if (lookTarget) rotation = lookAtToEuler(eye, lookTarget)
       }
       if (rotation) applyCameraVector('rotation', rotation, packet.transition)
@@ -334,6 +384,8 @@ export function applyCommandPacket(packet: CommandPacket): string {
         p.property,
         p.keyframes.map((k) => ({ time: k.time, value: k.value }))
       )
+      const last = p.keyframes[p.keyframes.length - 1]?.time
+      if (last != null) beginClipPlayback(last, false)
       return `${obj.name} ${p.property} keyframes set`
     }
 
@@ -355,6 +407,17 @@ export function applyCommandPacket(packet: CommandPacket): string {
       if (p.action === 'seek') {
         st.setTime(Math.max(0, Math.min(st.duration, p.time ?? 0)))
         return `seek ${p.time ?? 0}s`
+      }
+      if (p.action === 'loop_on') {
+        st.setPlayOnceEnd(null)
+        st.setPlaybackLoop(true)
+        if (!st.isPlaying) st.togglePlay()
+        return 'loop on'
+      }
+      if (p.action === 'loop_off') {
+        st.setPlaybackLoop(false)
+        st.setClipLoopEnd(null)
+        return 'loop off'
       }
       const wantPlaying = p.action === 'play'
       if (st.isPlaying !== wantPlaying) st.togglePlay()

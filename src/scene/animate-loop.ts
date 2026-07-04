@@ -36,14 +36,25 @@ export function createAnimateLoop(ctx: {
     const { isPlaying, isRolling, cameraOpMode } = useEditorStore.getState()
     if (isPlaying) {
       useEditorStore.setState((state) => {
-        const nextTime = state.isRolling
-          ? state.currentTime + delta
-          : (state.currentTime + delta) % state.duration
+        const nextTime = state.currentTime + delta
         if (state.isRolling) {
           return {
             currentTime: nextTime,
             duration: Math.max(state.duration, nextTime),
           }
+        }
+        if (state.playOnceEnd != null) {
+          if (nextTime >= state.playOnceEnd) {
+            return { currentTime: state.playOnceEnd, isPlaying: false, playOnceEnd: null }
+          }
+          return { currentTime: nextTime }
+        }
+        const loopAt = state.clipLoopEnd ?? state.duration
+        if (state.playbackLoop) {
+          return { currentTime: nextTime % loopAt }
+        }
+        if (nextTime >= loopAt) {
+          return { currentTime: loopAt, isPlaying: false }
         }
         return { currentTime: nextTime }
       })
@@ -60,11 +71,9 @@ export function createAnimateLoop(ctx: {
     const selectedId = useEditorStore.getState().selectedId
     const vcamData = useEditorStore.getState().virtualCamera
     const lighting = useEditorStore.getState().lighting
-    const stage = useEditorStore.getState().stage
     const liveCamOp = cameraOpMode || isRolling
 
-    ctx.controls.enabled = !liveCamOp
-    ctx.controls.target.set(...stage.position)
+    ctx.controls.enabled = !cameraOpMode
 
     ctx.ambientLight.color.set(lighting.ambient.color)
     ctx.ambientLight.intensity = lighting.ambient.intensity

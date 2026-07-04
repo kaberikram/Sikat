@@ -206,11 +206,17 @@ export function DirectorPod() {
     }
 
     const socket = getDirectorSocket()
-    const commandId = await socket.sendUserCommand(trimmed, opts)
-    if (commandId) {
+    const commandId = crypto.randomUUID()
+    // Instant set reaction — don't wait for LLM parse or network round-trip.
+    markAgentActive('Producer', 'copy')
+    speakAck('Producer', 'copy', commandId)
+
+    const sent = await socket.sendUserCommand(trimmed, { ...opts, commandId })
+    if (sent) {
       pushLog('DIRECTOR', trimmed)
       setInput('')
     } else {
+      markAgentIdle('Producer')
       pushLog('DIRECTOR', 'not connected — command dropped', 'error')
     }
   }, [pushLog])

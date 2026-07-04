@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from . import session_context
+from .director_vocab import normalize_clause
 from .clause_handlers import parse_clause
 from .schema import Intent, SceneState
 
@@ -22,7 +23,7 @@ def split_clauses(text: str) -> list[str]:
 
 def parse_one_clause(clause: str, scene: SceneState | None = None) -> Intent | None:
     """Parse a single clause and thread session context for follow-ups."""
-    intent = parse_clause(clause, scene)
+    intent = parse_clause(normalize_clause(clause), scene)
     if intent is not None:
         session_context.note_target(intent.target)
         session_context.note_transform(intent)

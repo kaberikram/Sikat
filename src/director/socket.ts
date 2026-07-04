@@ -112,9 +112,9 @@ export class DirectorSocket {
   /** Returns the commandId used, or null when the socket is not open. */
   async sendUserCommand(
     text: string,
-    opts?: { forceVision?: boolean }
+    opts?: { forceVision?: boolean; commandId?: string }
   ): Promise<string | null> {
-    const commandId = crypto.randomUUID()
+    const commandId = opts?.commandId ?? crypto.randomUUID()
     const attachVision = opts?.forceVision === true || shouldAttachVision(text)
     const frame = attachVision ? await captureViewfinderFrame() : null
     const sent = this.sendRaw({

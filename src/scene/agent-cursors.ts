@@ -1,21 +1,8 @@
 /**
  * Renders the AI crew as Figma-style multiplayer cursors in the 3D scene.
  *
- * One cursor per agent: a tip-down cone that hovers over whatever the agent is
- * touching, a billboarded name label, plus a small note sprite ("tracing
- * bounce 12/25") under it. While an agent traces an animation path, the cursor
- * leaves a fading agent-tinted trail. Cursors, notes and trails ride render
- * layer 1 and are tagged scene-infrastructure, so they are:
- *   - invisible in the viewfinder PiP and export (virtCamera is locked to layer
- *     0 in bootstrap.ts), yet visible in the main viewport (userCamera enables
- *     both layers),
- *   - skipped by object picking (setup-picking.ts) and scene pruning
- *     (bootstrap.ts).
- *
- * The scene owns motion only: it reads the presence store (written by the agent
- * runtime) and eases each cursor toward its target over the move's duration —
- * the same clock the runtime waits before committing a change, so the cursor is
- * on target exactly when the scene updates.
+ * Cursors glide to a target, then track the affected object's live position
+ * while it animates — the main viewport and viewfinder show the real motion.
  */
 import * as THREE from 'three'
 import {
@@ -24,43 +11,23 @@ import {
   agentMetaFor,
   type CursorPhase,
 } from '../director/presence'
+import { sampleObjectAtTime } from '../director/scene-state-sync'
+import { useEditorStore } from '../store'
 import { getEaseFn } from '../easing'
 import { tagSceneInfrastructure } from './infrastructure'
 
-const HOVER_HEIGHT = 1.15 // how far above the target the cursor floats
-const CONE_TIP_DROP = 0.23 // cone half-height; the drawing tip is this far below the group
+const HOVER_HEIGHT = 1.15
 const flightEase = getEaseFn('easeOut')
-
-const MAX_TRAIL_POINTS = 256 // preallocated; a preset track is well under this
-const TRAIL_MIN_STEP = 0.04 // min tip travel before a new trail vertex is laid
-const TRAIL_FADE_MS = 1500 // fade-out after tracing ends
-const TRAIL_RISE_MS = 200 // fade-in as tracing begins
-
-const _tip = new THREE.Vector3()
 
 interface Cursor {
   group: THREE.Group
   coneMat: THREE.MeshBasicMaterial
   labelMat: THREE.SpriteMaterial
-  /** Eased base point (the target itself, before hover offset). */
   base: THREE.Vector3
-  /** Where the current flight started from. */
   from: THREE.Vector3
-  /** Mirrors presence.moveStartedAt so we know when to reseat `from`. */
   moveStartedAt: number
-  /** Bob phase offset so cursors don't pulse in lockstep. */
   seed: number
-  /** Fade level, eased toward 1 (active) / 0 (idle). */
   opacity: number
-  /** World-space path the cursor drew while tracing. */
-  trail: THREE.Line
-  trailMat: THREE.LineBasicMaterial
-  trailPositions: Float32Array
-  trailCount: number
-  trailOpacity: number
-  lastTrailPoint: THREE.Vector3 | null
-  wasTracing: boolean
-  /** Note sprite under the label + its backing canvas (redrawn on text change). */
   noteMat: THREE.SpriteMaterial
   noteCanvas: HTMLCanvasElement
   noteText: string
@@ -93,7 +60,6 @@ function makeLabel(name: string, color: string): {
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   const label = name.toUpperCase()
-  // Shrink to fit long crew names (e.g. ASSETANIMATOR) inside the pill.
   let fontPx = 34
   do {
     ctx.font = `bold ${fontPx}px "Arial Black", sans-serif`
@@ -122,11 +88,10 @@ function makeNote(): {
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, opacity: 0 })
   const sprite = new THREE.Sprite(material)
   sprite.scale.set(0.95, 0.148, 1)
-  sprite.position.set(0, 0.31, 0) // just under the name label (label sits at y=0.5)
+  sprite.position.set(0, 0.31, 0)
   return { sprite, material, canvas }
 }
 
-/** Redraw the note pill only when its text changes (canvas work is not free). */
 function drawNote(cursor: Cursor, text: string): void {
   if (cursor.noteText === text) return
   cursor.noteText = text
@@ -153,7 +118,7 @@ function buildCursor(agent: string, seed: number): Cursor {
 
   const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true })
   const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.46, 24), coneMat)
-  cone.rotation.x = Math.PI // tip points down, at the target below
+  cone.rotation.x = Math.PI
   cone.castShadow = false
   cone.receiveShadow = false
   group.add(cone)
@@ -170,19 +135,6 @@ function buildCursor(agent: string, seed: number): Cursor {
   tagSceneInfrastructure(group)
   group.visible = false
 
-  // Trail: a world-space polyline the cursor draws while tracing. Kept OUT of
-  // the group (which moves with the cursor) so its vertices stay in world space.
-  const trailPositions = new Float32Array(MAX_TRAIL_POINTS * 3)
-  const trailGeom = new THREE.BufferGeometry()
-  trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3))
-  trailGeom.setDrawRange(0, 0)
-  const trailMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0, depthTest: false })
-  const trail = new THREE.Line(trailGeom, trailMat)
-  trail.renderOrder = 998
-  trail.layers.set(1)
-  tagSceneInfrastructure(trail)
-  trail.visible = false
-
   return {
     group,
     coneMat,
@@ -192,13 +144,6 @@ function buildCursor(agent: string, seed: number): Cursor {
     moveStartedAt: 0,
     seed,
     opacity: 0,
-    trail,
-    trailMat,
-    trailPositions,
-    trailCount: 0,
-    trailOpacity: 0,
-    lastTrailPoint: null,
-    wasTracing: false,
     noteMat,
     noteCanvas,
     noteText: '',
@@ -220,7 +165,6 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     cursor = buildCursor(agent, cursorSeed++)
     cursors.set(agent, cursor)
     scene.add(cursor.group)
-    scene.add(cursor.trail)
     return cursor
   }
 
@@ -228,66 +172,20 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     ensureCursor(agent)
   })
 
-  let prevNow = performance.now()
-
   const pulse = (phase: CursorPhase | undefined, now: number): number => {
-    if (phase === 'working' || phase === 'tracing') return 1 + 0.09 * Math.sin(now / 70)
+    if (phase === 'working') return 1 + 0.09 * Math.sin(now / 70)
     if (phase === 'settling') return 1.04
     return 1
   }
 
-  const pushTrailPoint = (cursor: Cursor, pt: THREE.Vector3) => {
-    if (cursor.trailCount >= MAX_TRAIL_POINTS) return
-    const i = cursor.trailCount * 3
-    cursor.trailPositions[i] = pt.x
-    cursor.trailPositions[i + 1] = pt.y
-    cursor.trailPositions[i + 2] = pt.z
-    cursor.trailCount += 1
-    cursor.trail.geometry.setDrawRange(0, cursor.trailCount)
-    cursor.trail.geometry.attributes.position.needsUpdate = true
-    cursor.trail.geometry.computeBoundingSphere()
-    cursor.lastTrailPoint = (cursor.lastTrailPoint ?? new THREE.Vector3()).copy(pt)
-  }
-
-  const resetTrail = (cursor: Cursor) => {
-    cursor.trailCount = 0
-    cursor.lastTrailPoint = null
-    cursor.trailOpacity = 0
-    cursor.trail.geometry.setDrawRange(0, 0)
-  }
-
-  const updateTrail = (cursor: Cursor, tracing: boolean, dt: number) => {
-    if (tracing && !cursor.wasTracing) resetTrail(cursor) // fresh trace starts clean
-    cursor.wasTracing = tracing
-
-    if (tracing) {
-      cursor.trailOpacity = Math.min(1, cursor.trailOpacity + dt / TRAIL_RISE_MS)
-      // Sample the drawing tip (bottom of the cone), thresholded to avoid flooding.
-      _tip.set(cursor.group.position.x, cursor.group.position.y - CONE_TIP_DROP, cursor.group.position.z)
-      if (!cursor.lastTrailPoint || cursor.lastTrailPoint.distanceTo(_tip) > TRAIL_MIN_STEP) {
-        pushTrailPoint(cursor, _tip)
-      }
-    } else if (cursor.trailCount > 0) {
-      cursor.trailOpacity -= dt / TRAIL_FADE_MS
-      if (cursor.trailOpacity <= 0) resetTrail(cursor)
-    }
-
-    cursor.trailMat.opacity = cursor.trailOpacity
-    cursor.trail.visible = cursor.trailCount > 1 && cursor.trailOpacity > 0.001
-  }
-
   const update = (now: number) => {
-    const dt = Math.max(0, now - prevNow)
-    prevNow = now
     const agents = presenceStore.getState().agents
+    const editor = useEditorStore.getState()
     for (const agent of Object.keys(agents)) ensureCursor(agent)
     for (const [agent, cursor] of cursors) {
       const p = agents[agent]
       const wantOpacity = p?.active ? 1 : 0
       cursor.opacity += (wantOpacity - cursor.opacity) * 0.16
-
-      const tracing = p?.phase === 'tracing' && cursor.opacity > 0.01
-      updateTrail(cursor, tracing, dt)
 
       if (wantOpacity === 0 && cursor.opacity < 0.01) {
         cursor.group.visible = false
@@ -295,8 +193,13 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
       }
       cursor.group.visible = true
 
-      if (p) {
-        // A changed clock means a new flight: ease from wherever we are now.
+      if (p?.followObjectId) {
+        const obj = editor.objects.find((o) => o.id === p.followObjectId)
+        if (obj) {
+          const sampled = sampleObjectAtTime(obj, editor.currentTime)
+          cursor.base.set(sampled.position[0], sampled.position[1], sampled.position[2])
+        }
+      } else if (p) {
         if (p.moveStartedAt !== cursor.moveStartedAt) {
           cursor.from.copy(cursor.base)
           cursor.moveStartedAt = p.moveStartedAt
@@ -329,9 +232,6 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const dispose = () => {
     for (const cursor of cursors.values()) {
       scene.remove(cursor.group)
-      scene.remove(cursor.trail)
-      cursor.trail.geometry.dispose()
-      cursor.trailMat.dispose()
       cursor.group.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           o.geometry.dispose()

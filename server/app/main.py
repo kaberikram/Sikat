@@ -1,12 +1,20 @@
 """Director Mode WebSocket server.
 
 Run from server/:  uv run uvicorn app.main:app --port 8000
+
+Loads optional secrets from server/.env (gitignored). Copy .env.example to .env.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# server/.env — never committed (.gitignore). .env.example is the template.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -75,8 +83,6 @@ async def _handle_user_command(msg: UserCommand) -> None:
         await manager.broadcast(agent_status_message(agent, status, command_id, note))
 
     try:
-        # direct() streams packets + presence status over time via the callbacks
-        # above; it returns the full plan so we can still detect a no-op command.
         packets, describe_only = await producer.direct(
             msg.text,
             msg.scene or scene_state.latest(),
@@ -88,11 +94,17 @@ async def _handle_user_command(msg: UserCommand) -> None:
         )
         if not packets and not describe_only:
             await manager.broadcast(
-                error_message(f"no actionable direction in: {msg.text!r}", msg.commandId)
+                error_message(
+                    f"couldn't interpret {msg.text!r} — name an object in the scene "
+                    f"(e.g. 'squash the sphere') or check the server log",
+                    msg.commandId,
+                )
             )
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)
         await manager.broadcast(error_message(str(exc), msg.commandId))
+    finally:
+        await emit_status("Producer", "idle", msg.commandId, None)
 
 
 async def _handle_telemetry(msg: Telemetry) -> None:

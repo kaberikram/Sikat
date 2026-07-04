@@ -111,7 +111,7 @@ export interface SceneLighting {
 export function createDefaultLighting(): SceneLighting {
   return {
     ambient: { color: '#ffffff', intensity: 0.8 },
-    key: { color: '#ffffff', intensity: 1.5, position: [5, 10, 7] },
+    key: { color: '#ffffff', intensity: 1.5, position: defaultKeyLightPosition() },
     background: '#f2f2f2',
   };
 }
@@ -148,11 +148,26 @@ export interface VirtualCamera {
 /** World-space euler XYZ. Identity = camera on +Z side of scene looking toward -Z (Three.js default view axis). */
 const DEFAULT_VIRTUAL_CAM_ROTATION: [number, number, number] = [0, 0, 0]
 
+/** Default performance floor radius (m). Cameras and lights scale from this. */
+export const STAGE_RADIUS = 25
+
+export function defaultUserCameraPosition(radius = STAGE_RADIUS): [number, number, number] {
+  return [radius * 3, radius * 1.7, radius * 3]
+}
+
+export function defaultVirtualCameraPosition(radius = STAGE_RADIUS): [number, number, number] {
+  return [0, radius * 0.5, radius * 2.4]
+}
+
+export function defaultKeyLightPosition(radius = STAGE_RADIUS): [number, number, number] {
+  return [radius * 2, radius * 4, radius * 2.8]
+}
+
 export function createDefaultVirtualCamera(): VirtualCamera {
   return {
     id: VIRTUAL_CAMERA_ID,
     name: 'VIRTUAL_CAMERA',
-    position: [0, 1.25, 6],
+    position: defaultVirtualCameraPosition(),
     rotation: [...DEFAULT_VIRTUAL_CAM_ROTATION],
     fov: 50,
     postProcessing: mergePostProcessing(),
@@ -168,7 +183,7 @@ export interface StageAnchor {
 
 export const DEFAULT_STAGE: StageAnchor = {
   position: [0, 0, 0],
-  radius: 2.5,
+  radius: STAGE_RADIUS,
   visible: true,
 }
 
@@ -202,6 +217,12 @@ interface EditorState {
   currentTime: number;
   duration: number;
   isPlaying: boolean;
+  /** When set, preview playback stops at this time instead of looping (director motions). */
+  playOnceEnd: number | null;
+  /** Timeline / clip loops while playing (say "loop"). */
+  playbackLoop: boolean;
+  /** When set with playbackLoop, wrap at this time instead of full duration. */
+  clipLoopEnd: number | null;
   isRolling: boolean;
   takeNumber: number;
   takeStartTime: number;
@@ -226,6 +247,9 @@ interface EditorState {
   setSelected: (id: string | null) => void
   setTime: (time: number) => void
   togglePlay: () => void
+  setPlayOnceEnd: (time: number | null) => void
+  setPlaybackLoop: (loop: boolean) => void
+  setClipLoopEnd: (time: number | null) => void
   setCameraOpMode: (on: boolean) => void
   startTake: () => void
   endTake: () => void
@@ -259,6 +283,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   currentTime: 0,
   duration: 10,
   isPlaying: false,
+  playOnceEnd: null,
+  playbackLoop: true,
+  clipLoopEnd: null,
   isRolling: false,
   takeNumber: 0,
   takeStartTime: 0,
@@ -393,6 +420,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setSelected: (id) => set({ selectedId: id }),
   setTime: (time) => set({ currentTime: time }),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
+  setPlayOnceEnd: (time) => set({ playOnceEnd: time }),
+  setPlaybackLoop: (loop) => set({ playbackLoop: loop }),
+  setClipLoopEnd: (time) => set({ clipLoopEnd: time }),
   addKeyframe: (objectId, time, property, value) => set((state) => ({
     objects: state.objects.map(obj => {
       if (obj.id !== objectId) return obj

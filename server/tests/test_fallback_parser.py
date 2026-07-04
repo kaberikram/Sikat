@@ -231,4 +231,4 @@ def test_clause_split_semicolon():
 
 
 def test_fx_substring_non_match():
-    assert parse("spotlight on the stage") == []
+    assert parse("stage wash rig") == []

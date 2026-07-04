@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
+import { defaultUserCameraPosition, useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { createViewfinderComposer } from '../pip-composer'
 import { registerSceneForExport } from '../scene-export-registry'
 import { tagSceneInfrastructure } from './infrastructure'
@@ -18,15 +18,16 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   const scene = new THREE.Scene()
   scene.background = new THREE.Color('#f2f2f2')
 
-  const userCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
-  const stagePos = useEditorStore.getState().stage.position
-  const defaultSceneFocus = new THREE.Vector3(...stagePos)
-  userCamera.position.set(7.5, 4.25, 7.5)
+  const { stage } = useEditorStore.getState()
+  const cameraFar = Math.max(5000, stage.radius * 200)
+  const userCamera = new THREE.PerspectiveCamera(75, 1, 0.1, cameraFar)
+  const defaultSceneFocus = new THREE.Vector3(...stage.position)
+  userCamera.position.set(...defaultUserCameraPosition(stage.radius))
   userCamera.lookAt(defaultSceneFocus)
   userCamera.layers.enable(0)
   userCamera.layers.enable(1)
 
-  const virtCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 1000)
+  const virtCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, cameraFar)
   virtCamera.layers.set(0)
   virtCamera.userData.id = VIRTUAL_CAMERA_ID
   const vc0 = useEditorStore.getState().virtualCamera
@@ -36,7 +37,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   virtCamera.updateProjectionMatrix()
   scene.add(virtCamera)
 
-  const camAxes = new THREE.AxesHelper(0.75)
+  const camAxes = new THREE.AxesHelper(Math.max(0.75, stage.radius * 0.03))
   camAxes.layers.set(1)
   virtCamera.add(camAxes)
 
@@ -96,7 +97,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   tagSceneInfrastructure(ambientLight)
   scene.add(ambientLight)
   const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5)
-  directionalLight.position.set(5, 10, 7)
+  const keyPos = useEditorStore.getState().lighting.key.position
+  directionalLight.position.set(...keyPos)
   directionalLight.castShadow = true
   directionalLight.shadow.mapSize.set(1024, 1024)
   tagSceneInfrastructure(directionalLight)

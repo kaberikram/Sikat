@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 
-from .. import llm, performers, session_context
+from .. import fallback_parser, llm, performers, session_context
+from ..creative_parse import defer_clause_to_llm
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
+from ..motion_variation import enrich_motion_params
 from ..schema import (
     CommandPacket,
     Intent,
@@ -30,8 +32,8 @@ from .vfx_operator import VFXOperator
 # Server-side pacing. Kept intentionally light: the client owns the real
 # choreography (flight/hover/settle). These sleeps only interleave the crew so
 # statuses and packets stream over a few hundred ms instead of one burst.
-AGENT_STEP_DELAY = 0.25  # between successive packets from the same specialist
-AGENT_STAGGER = 0.15  # head-start offset between specialists so cursors fan out
+AGENT_STEP_DELAY = 0.12  # between successive packets from the same specialist
+AGENT_STAGGER = 0.05  # head-start offset between specialists so cursors fan out
 
 # Present-tense verb per command, shown on the agent's cursor as a "note" the
 # instant it goes active — fills the parse latency ("dead air") so the crew's
@@ -104,6 +106,7 @@ class Producer:
         emit: EmitLog = _noop_emit,
         emit_status: EmitStatus = _noop_status,
         command_id: str | None = None,
+        scene: SceneState | None = None,
     ) -> list[CommandPacket]:
         if intent.action == "assign":
             if intent.addressee and intent.target:
@@ -130,10 +133,18 @@ class Producer:
 
         specialist = self._routes.get(intent.action)
         working = intent
-        if intent.addressee and not intent.target:
+        if intent.action == "animate" and not intent.track_keyframes:
+            motion = intent.motion or intent.preset
+            if motion:
+                stage_r = scene.stage.radius if scene else 25.0
+                params = enrich_motion_params(
+                    intent.motion_params, motion, command_id, stage_r
+                )
+                working = intent.model_copy(update={"motion_params": params})
+        if intent.addressee and not working.target:
             assignment = performers.get(intent.addressee)
             if assignment:
-                working = intent.model_copy(update={"target": assignment.target})
+                working = working.model_copy(update={"target": assignment.target})
         built = specialist.build(working) if specialist else []
         if built and specialist:
             await emit(
@@ -155,6 +166,7 @@ class Producer:
         emit: EmitLog = _noop_emit,
         emit_status: EmitStatus = _noop_status,
         command_id: str | None = None,
+        scene: SceneState | None = None,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
@@ -162,7 +174,7 @@ class Producer:
                 continue
             packets.extend(
                 await self._build_packets_for_intent(
-                    intent, emit, emit_status, command_id
+                    intent, emit, emit_status, command_id, scene
                 )
             )
         return packets
@@ -235,7 +247,7 @@ class Producer:
             return [], True
 
         packets = await self._build_packets_for_intents(
-            mutating_intents, emit, emit_status, command_id
+            mutating_intents, emit, emit_status, command_id, scene
         )
         for packet in packets:
             packet.commandId = command_id
@@ -266,6 +278,31 @@ class Producer:
         )
         return packets, False
 
+    async def _stream_intents(
+        self,
+        intents: list[Intent],
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_packet: EmitPacket,
+        emit_status: EmitStatus,
+        scene: SceneState | None = None,
+    ) -> list[CommandPacket]:
+        packets: list[CommandPacket] = []
+        for intent in intents:
+            if intent.action == "describe":
+                await self._emit_describe(intent, emit_log)
+                continue
+            built = await self._build_packets_for_intent(
+                intent, emit_log, emit_status, command_id, scene
+            )
+            for packet in built:
+                packet.commandId = command_id
+            packets.extend(built)
+            await self._stream_packets_staged(
+                built, command_id, emit_log, emit_packet, emit_status
+            )
+        return packets
+
     async def _direct_multi_clause(
         self,
         text: str,
@@ -291,8 +328,23 @@ class Producer:
         all_packets: list[CommandPacket] = []
         describe_only = True
 
+        llm_available = llm.select_provider(frame) is not None
+        deferred = False
         for clause in clauses:
-            intent = parse_one_clause(clause, scene)
+            raw_intent = parse_one_clause(clause, scene)
+            if raw_intent is not None and defer_clause_to_llm(
+                clause, raw_intent, llm_available=llm_available
+            ):
+                deferred = True
+                reason = "motion → LLM" if raw_intent.action == "animate" else "creative → LLM"
+                await emit_log(
+                    self.assistant.name,
+                    f"{reason}: {clause[:72]}{'…' if len(clause) > 72 else ''}",
+                    "info",
+                )
+                intent = None
+            else:
+                intent = raw_intent
             handled.append(intent is not None)
             if intent is None:
                 continue
@@ -302,7 +354,7 @@ class Producer:
                 continue
             describe_only = False
             built = await self._build_packets_for_intent(
-                intent, emit_log, emit_status, command_id
+                intent, emit_log, emit_status, command_id, scene
             )
             for packet in built:
                 packet.commandId = command_id
@@ -312,40 +364,78 @@ class Producer:
             )
 
         if llm_task is not None:
-            llm_result = await llm_task
-            if llm_result and llm_result.intents:
-                source = "llm"
-                for index, intent in enumerate(llm_result.intents):
-                    if index < len(handled) and handled[index]:
-                        continue
-                    all_intents.append(intent)
-                    if intent.action == "describe":
-                        await self._emit_describe(intent, emit_log)
-                        continue
-                    describe_only = False
-                    built = await self._build_packets_for_intent(
-                intent, emit_log, emit_status, command_id
-            )
-                    for packet in built:
-                        packet.commandId = command_id
-                    all_packets.extend(built)
-                    await self._stream_packets_staged(
-                        built, command_id, emit_log, emit_packet, emit_status
-                    )
-            else:
+            if all(handled) and any(handled) and not deferred:
+                llm_task.cancel()
                 source = "fallback"
+                try:
+                    await llm_task
+                except asyncio.CancelledError:
+                    pass
+            else:
+                llm_result = await llm_task
+                if llm_result and llm_result.intents:
+                    source = "llm"
+                    for index, intent in enumerate(llm_result.intents):
+                        if index < len(handled) and handled[index]:
+                            continue
+                        all_intents.append(intent)
+                        if intent.action == "describe":
+                            await self._emit_describe(intent, emit_log)
+                            continue
+                        describe_only = False
+                        built = await self._build_packets_for_intent(
+                            intent, emit_log, emit_status, command_id, scene
+                        )
+                        for packet in built:
+                            packet.commandId = command_id
+                        all_packets.extend(built)
+                        await self._stream_packets_staged(
+                            built, command_id, emit_log, emit_packet, emit_status
+                        )
+                else:
+                    source = "fallback"
         else:
             source = "fallback"
 
         session_context.record(text, all_intents)
-        await emit_log(
-            self.assistant.name,
-            f"parsed {len(all_intents)} intent(s) via {source}",
-            "info" if all_intents else "warn",
-        )
+        if all(handled) and any(handled) and llm_task is not None and not deferred:
+            await emit_log(
+                self.assistant.name,
+                f"instant — {len(all_intents)} intent(s) via grammar (LLM skipped)",
+                "info",
+            )
+        else:
+            await emit_log(
+                self.assistant.name,
+                f"parsed {len(all_intents)} intent(s) via {source}",
+                "info" if all_intents else "warn",
+            )
 
         if describe_only and all_intents:
             return [], True
+
+        if not all_packets and not all_intents:
+            rescue = fallback_parser.parse(text, scene)
+            if rescue:
+                await emit_log(
+                    self.assistant.name,
+                    "LLM missed — applying rule-parser rescue",
+                    "warn",
+                )
+                all_intents.extend(rescue)
+                describe_only = all(i.action == "describe" for i in rescue)
+                rescued = await self._stream_intents(
+                    [i for i in rescue if i.action != "describe"],
+                    command_id,
+                    emit_log,
+                    emit_packet,
+                    emit_status,
+                    scene,
+                )
+                all_packets.extend(rescued)
+                if describe_only and not rescued:
+                    return [], True
+
         return all_packets, False
 
     async def direct(
@@ -367,17 +457,6 @@ class Producer:
         was satisfied with agent_log messages only — no error should be emitted.
         """
         clauses = split_clauses(text)
-        if len(clauses) <= 1:
-            return await self._direct_single_clause(
-                text,
-                scene,
-                command_id,
-                emit_log,
-                emit_packet,
-                emit_status,
-                frame,
-            )
-
         return await self._direct_multi_clause(
             text,
             clauses,

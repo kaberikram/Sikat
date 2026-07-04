@@ -42,8 +42,12 @@ export interface TransformObjectPayload {
 
 export interface AnimateObjectPayload {
   target: Target
-  preset: 'turnaround' | 'orbit' | 'bounce'
+  preset?: 'turnaround' | 'orbit' | 'bounce' | null
+  motion?: string | null
+  params?: Record<string, number> | null
   durationSec?: number | null
+  /** When true, clip loops at end instead of stopping (say "loop the bounce"). */
+  repeat?: boolean | null
 }
 
 export interface MoveCameraPayload {
@@ -82,7 +86,7 @@ export interface SetKeyframesPayload {
 }
 
 export interface PlaybackPayload {
-  action: 'play' | 'pause' | 'seek' | 'record' | 'cut'
+  action: 'play' | 'pause' | 'seek' | 'record' | 'cut' | 'loop_on' | 'loop_off'
   time?: number | null
 }
 

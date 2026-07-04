@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 
 from . import session_context
 from .performers import brief as performers_brief
@@ -32,12 +34,19 @@ compound instructions ("add X then dim lights" → 2 intents).
 | spawn | new primitive | primitive, color, name, text, position |
 | remove | delete object | target (name) |
 | transform | move/rotate/scale | target, position/rotation/scale, mode (absolute\\|relative), transition |
-| animate | preset motion | target, preset (turnaround\\|orbit\\|bounce), transition |
-| move_camera | frame shot | position, look_at (object name), fov, transition |
+| animate | motion on object | target, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
+| move_camera | frame shot | position, rotation, look_at (ONLY when explicitly framing), fov, transition |
+
+## Camera / look-at rules (IMPORTANT)
+- `look_at` / framing ONLY when the director says **look at**, **frame**, **point at**, **aim at**.
+- Zoom / dolly / FOV / "closer" / "wider" → change **fov** and/or **position** only — do NOT set look_at.
+- Moving an object (transform/animate) is NOT a camera command — never emit move_camera for object moves.
+- When framing IS requested, look_at = object name; client aims at the object's **current** path position.
+- Preserve existing camera rotation when only adjusting fov unless they ask to reframe.
 | update_lights | relight | ambient_color, ambient_intensity (0-4), key_color, key_intensity (0-8), key_position, background |
 | set_material | surface look | target, color, emissive, emissive_intensity, opacity |
 | update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
-| playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut), seek_time, playback_pause_after_seek |
+| playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
 | describe | question only | describe_topic, describe_message |
 
@@ -46,6 +55,8 @@ compound instructions ("add X then dim lights" → 2 intents).
 - and action, camera rolling, start recording, we're rolling → playback_action record (start a take)
 - cut, that's a cut, stop recording → playback_action cut (end take)
 - play, go → playback_action play (preview timeline)
+- loop, loop it, keep looping, on repeat → playback_action loop_on (timeline repeats)
+- play once, no loop → playback_action loop_off
 - back to one, top of scene → playback_action seek, seek_time 0, playback_pause_after_seek true
 - print the take → describe (log only, no mutation)
 
@@ -74,12 +85,100 @@ If they ask AND command ("too dark, fix it"), emit describe + update_lights.
 - NOW vs BASE: use NOW to answer "how does it look in motion"; use BASE for
   "move it to..." absolute placement unless they say relative
 
+## Animation — your job is to CHOREOGRAPH, not pick a preset
+
+The client has ~20 parametric motion ids (bounce, wander, orbit, …) as a **fallback**
+for simple shorthand. When the director describes *how it should feel*, a path,
+a journey, emotion, or anything non-literal — **compose custom keyframes**.
+
+### Prefer custom keyframes (most creative)
+Use `action: animate` with:
+- `track_property`: "position" | "rotation" | "scale"
+- `track_keyframes`: [{{"time": 0, "value": [x,y,z]}}, ...]  (4–16 points, times in seconds)
+- Values are **absolute world-space** positions. Read BASE position from the briefing,
+  then place keyframes across the STAGE floor (stay inside STAGE radius unless they
+  say leave the stage). Use Y from BASE unless they ask for height/air.
+- `animate_repeat: true` when they say loop/repeat.
+
+Example — "make the ball nervous, darting around the stage":
+{{"action": "animate", "target": "CORE_SPHERE", "track_property": "position",
+  "track_keyframes": [
+    {{"time": 0, "value": [0, 0.5, 0]}},
+    {{"time": 0.4, "value": [8, 0.6, -5]}},
+    {{"time": 0.9, "value": [-6, 0.5, 7]}},
+    {{"time": 1.5, "value": [3, 0.7, -10]}},
+    {{"time": 2.2, "value": [0, 0.5, 0]}}
+  ]}}
+
+Example — "swoop low left then rise over center":
+{{"action": "animate", "target": "HERO", "track_property": "position",
+  "track_keyframes": [
+    {{"time": 0, "value": [2, 1, 4]}},
+    {{"time": 0.8, "value": [-12, 0.3, -8]}},
+    {{"time": 1.6, "value": [0, 3.5, 0]}},
+    {{"time": 2.4, "value": [2, 1, 4]}}
+  ]}}
+
+### Motion ids (simple shorthand — still vary every take)
+Use `motion` + `motion_params` when the director uses a literal verb (bounce, drop, spin).
+**Never use identical defaults twice** — pick hops, height, decay, amplitude from context
+and the STAGE size. Example "bounce the ball" → hops 2-4, height ~1-2.5, slight drift.
+Only use track_keyframes when the path is scenic/emotional; bounce can stay motion+bounce params.
+
+| motion | feel | key params |
+|--------|------|------------|
+| bounce | hops on Y | height (0.5-4), hops (1-5), decay (0.2-0.9) |
+| float | gentle hover | amplitude (0.1-1), frequency (0.5-3) |
+| drop | fall from above | height (1-5), easing via fast/slow language |
+| rise | lift up | height |
+| pulse | scale breathe | amplitude (0.1-0.5), frequency |
+| sway | side-to-side | amplitude, frequency |
+| spin / turnaround | rotate | turns (0.25-4), axis (0=x,1=y,2=z) |
+| orbit | small circle in place (default) OR stage-wide ring if "orbit the stage" | pivot=1 for stage, radius optional |
+| wander | explore the stage floor — unique path each time, stays inside radius | waypoints (3-8) |
+| drift | slow travel + bob across stage | span, amplitude |
+| arc | parabolic toss | span, height |
+| pop | snappy reveal | height |
+| shake | impact wobble | amplitude, frequency |
+| figure8 | lemniscate path | radius / amplitude |
+
+Drop vs bounce (critical — they must look different):
+- drop: object starts ABOVE rest position, falls ONCE with gravity, lands and STOPS. No repeated hops.
+- bounce: object stays on ground, hops 2-4 times with shrinking parabolic arcs.
+- "three hops" / "high bounce" → bounce with hops=3, height=2.5+
+- "move the ball freely" / "wander" / "explore the stage" → motion wander (NOT orbit)
+- "orbit" alone = small local circle; "orbit the stage" = pivot 1, big ring
+
+Do NOT default to orbit for vague "move it" / "make it move" — compose keyframes
+that match what they said. Read STAGE center + radius from the briefing.
+
+## Custom motion (fallback note)
+`track_keyframes` overrides `motion` when both are set. Never emit freeform-only text.
+
+Also use motion + motion_params for literal one-word verbs; combine params when obvious
+(e.g. float + amplitude 0.6 + frequency 2.5 for energetic hover).
+
+Legacy preset names (turnaround/orbit/bounce) still work but prefer track_keyframes for anything descriptive.
+
 ## Animation awareness
 When describing or editing animation, reference:
 - currentTime, isPlaying
-- track keyframe counts and time ranges
+- track keyframe counts and time ranges (position kf: lines in briefing = the live path)
 - sampled NOW position vs BASE (if different, animation is active)
-- preset names only for NEW animation (turnaround/orbit/bounce)
+
+## Follow-up / layering (CRITICAL — read existing tracks first)
+When an object already has **position keyframes** (a path, wander, drift):
+- "bounce while moving", "bounce on the path", "keep moving but bounce", "add bounce"
+  → Keep the horizontal path. Emit `motion: bounce` with tuned motion_params OR emit
+  `track_keyframes` that follow the existing path positions with added Y hops.
+  The client auto-composites bounce/float/shake onto an existing path when you emit
+  motion bounce — you do NOT need to rebuild XZ from scratch.
+- NEVER snap back to BASE position for a follow-up bounce — that erases the path.
+- Read the object's `position kf:` line in the briefing and preserve its XZ journey.
+- For brand-new motion on a static object, use BASE position as usual.
+
+When describing or editing animation, also reference:
+- motion + motion_params for NEW animation on objects with no position track yet
 
 ## FX awareness
 FX applies to the VIEWFINDER (virtual camera), not the main viewport.
@@ -253,6 +352,29 @@ def _parse_anthropic_sync(
     return message.parsed_output
 
 
+def _coerce_intent_list(content: str) -> IntentList | None:
+    """Best-effort repair when the model returns almost-valid JSON."""
+    if not content:
+        return None
+    try:
+        return IntentList.model_validate_json(content)
+    except Exception:
+        pass
+    match = re.search(r"\{[\s\S]*\}", content)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and "intents" not in data and "action" in data:
+        data = {"intents": [data]}
+    try:
+        return IntentList.model_validate(data)
+    except Exception:
+        return None
+
+
 def _parse_deepseek_sync(
     client,
     model: str,
@@ -272,8 +394,28 @@ def _parse_deepseek_sync(
             {"role": "user", "content": text},
         ],
     )
-    content = response.choices[0].message.content
-    return IntentList.model_validate_json(content)
+    content = response.choices[0].message.content or ""
+    parsed = _coerce_intent_list(content)
+    if parsed is not None:
+        return parsed
+    # One retry with a tighter instruction — transient format slips happen often.
+    retry = client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": text},
+            {
+                "role": "user",
+                "content": (
+                    'Return ONLY {"intents":[...]} JSON. Each intent needs "action". '
+                    "Use object names from the scene briefing for targets."
+                ),
+            },
+        ],
+    )
+    return _coerce_intent_list(retry.choices[0].message.content or "")
 
 
 async def parse_intents(
