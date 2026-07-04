@@ -20,8 +20,8 @@
 import * as THREE from 'three'
 import {
   presenceStore,
-  AGENT_META,
   AGENT_ORDER,
+  agentMetaFor,
   type CursorPhase,
 } from '../director/presence'
 import { getEaseFn } from '../easing'
@@ -148,7 +148,7 @@ function drawNote(cursor: Cursor, text: string): void {
 }
 
 function buildCursor(agent: string, seed: number): Cursor {
-  const { color, station } = AGENT_META[agent]
+  const { color, station } = agentMetaFor(agent)
   const group = new THREE.Group()
 
   const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true })
@@ -212,11 +212,20 @@ export interface AgentCursors {
 
 export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const cursors = new Map<string, Cursor>()
-  AGENT_ORDER.forEach((agent, i) => {
-    const cursor = buildCursor(agent, i * 1.7)
+  let cursorSeed = 0
+
+  function ensureCursor(agent: string): Cursor {
+    let cursor = cursors.get(agent)
+    if (cursor) return cursor
+    cursor = buildCursor(agent, cursorSeed++)
     cursors.set(agent, cursor)
     scene.add(cursor.group)
     scene.add(cursor.trail)
+    return cursor
+  }
+
+  AGENT_ORDER.forEach((agent) => {
+    ensureCursor(agent)
   })
 
   let prevNow = performance.now()
@@ -271,6 +280,7 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     const dt = Math.max(0, now - prevNow)
     prevNow = now
     const agents = presenceStore.getState().agents
+    for (const agent of Object.keys(agents)) ensureCursor(agent)
     for (const [agent, cursor] of cursors) {
       const p = agents[agent]
       const wantOpacity = p?.active ? 1 : 0

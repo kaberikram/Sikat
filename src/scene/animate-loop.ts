@@ -2,9 +2,10 @@ import * as THREE from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
-import { applyObjectTransformAtTime, applyVirtualCameraAtTime } from '../timeline-apply'
+import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCameraBase } from '../timeline-apply'
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
+import { updateStageMarker } from './stage-marker'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
 
@@ -22,6 +23,7 @@ export function createAnimateLoop(ctx: {
   ambientLight: THREE.AmbientLight
   directionalLight: THREE.DirectionalLight
   agentCursors: AgentCursors
+  stageMarker: THREE.Group
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
@@ -31,11 +33,20 @@ export function createAnimateLoop(ctx: {
     const delta = (now - lastTime) / 1000
     lastTime = now
 
-    const { isPlaying } = useEditorStore.getState()
+    const { isPlaying, isRolling, cameraOpMode } = useEditorStore.getState()
     if (isPlaying) {
-      useEditorStore.setState((state) => ({
-        currentTime: (state.currentTime + delta) % state.duration,
-      }))
+      useEditorStore.setState((state) => {
+        const nextTime = state.isRolling
+          ? state.currentTime + delta
+          : (state.currentTime + delta) % state.duration
+        if (state.isRolling) {
+          return {
+            currentTime: nextTime,
+            duration: Math.max(state.duration, nextTime),
+          }
+        }
+        return { currentTime: nextTime }
+      })
     }
     const t = useEditorStore.getState().currentTime
     const gizmo = ctx.transformControl
@@ -49,6 +60,11 @@ export function createAnimateLoop(ctx: {
     const selectedId = useEditorStore.getState().selectedId
     const vcamData = useEditorStore.getState().virtualCamera
     const lighting = useEditorStore.getState().lighting
+    const stage = useEditorStore.getState().stage
+    const liveCamOp = cameraOpMode || isRolling
+
+    ctx.controls.enabled = !liveCamOp
+    ctx.controls.target.set(...stage.position)
 
     ctx.ambientLight.color.set(lighting.ambient.color)
     ctx.ambientLight.intensity = lighting.ambient.intensity
@@ -58,7 +74,10 @@ export function createAnimateLoop(ctx: {
     ;(ctx.scene.background as THREE.Color).set(lighting.background)
 
     const gizmoCamDrag = gizmo.dragging && gizmo.object === ctx.virtCamera
-    if (!gizmoCamDrag) applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+    if (!gizmoCamDrag) {
+      if (liveCamOp) applyVirtualCameraBase(vcamData, ctx.virtCamera)
+      else applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+    }
 
     for (const obj of liveObjects) {
       if (!obj.mesh) continue
@@ -91,6 +110,7 @@ export function createAnimateLoop(ctx: {
     // Agent cursors ride layer 1 (main viewport only) — update before the main
     // render, and after object transforms so a cursor lands on its live target.
     ctx.agentCursors.update(now)
+    updateStageMarker(ctx.stageMarker)
 
     ctx.controls.update()
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)
@@ -106,7 +126,7 @@ export function createAnimateLoop(ctx: {
       t,
       vcData: vcamData,
       isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
-      skipCameraApply: gizmoCamDrag,
+      skipCameraApply: gizmoCamDrag || liveCamOp,
     })
 
     rafId = requestAnimationFrame(animate)

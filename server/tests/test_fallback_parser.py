@@ -103,7 +103,7 @@ def test_scale_double():
 
 def test_playback_play_pause_seek():
     assert parse("play")[0].playback_action == "play"
-    assert parse("cut")[0].playback_action == "pause"
+    assert parse("cut")[0].playback_action == "cut"
     seek = parse("go to 2.5 seconds")[0]
     assert seek.playback_action == "seek"
     assert seek.seek_time == 2.5

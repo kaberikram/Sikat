@@ -3,15 +3,15 @@ from app.agents.producer import Producer
 from app.fallback_parser import parse
 
 
-def test_cut_pauses():
+def test_cut_ends_take():
     (i,) = parse("cut")
     assert i.action == "playback"
-    assert i.playback_action == "pause"
+    assert i.playback_action == "cut"
 
 
-def test_action_plays():
+def test_action_records():
     (i,) = parse("action")
-    assert i.playback_action == "play"
+    assert i.playback_action == "record"
 
 
 def test_go_plays():
@@ -59,13 +59,13 @@ async def test_producer_back_to_one_emits_seek_then_pause(producer: Producer):
     assert packets[1].payload.action == "pause"
 
 
-async def test_producer_cut_single_pause(producer: Producer):
+async def test_producer_cut_emits_cut(producer: Producer):
     packets, _ = await producer.handle_user_command("cut", None)
     assert len(packets) == 1
-    assert packets[0].payload.action == "pause"
+    assert packets[0].payload.action == "cut"
 
 
-async def test_producer_action_single_play(producer: Producer):
+async def test_producer_action_emits_record(producer: Producer):
     packets, _ = await producer.handle_user_command("action", None)
     assert len(packets) == 1
-    assert packets[0].payload.action == "play"
+    assert packets[0].payload.action == "record"

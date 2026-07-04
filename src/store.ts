@@ -160,6 +160,18 @@ export function createDefaultVirtualCamera(): VirtualCamera {
   }
 }
 
+export interface StageAnchor {
+  position: [number, number, number]
+  radius: number
+  visible: boolean
+}
+
+export const DEFAULT_STAGE: StageAnchor = {
+  position: [0, 0, 0],
+  radius: 2.5,
+  visible: true,
+}
+
 export interface MotionObject {
   id: string;
   name: string;
@@ -185,10 +197,15 @@ interface EditorState {
   objects: MotionObject[];
   virtualCamera: VirtualCamera;
   lighting: SceneLighting;
+  stage: StageAnchor;
   selectedId: string | null;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
+  isRolling: boolean;
+  takeNumber: number;
+  takeStartTime: number;
+  cameraOpMode: boolean;
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
   overlayTimeline: boolean
@@ -203,11 +220,15 @@ interface EditorState {
   setSubMeshTransparent: (objectId: string, meshUuid: string, transparent: boolean) => void
   setSubMeshShadow: (objectId: string, meshUuid: string, castAndReceive: boolean) => void
   updateLighting: (patch: LightingPatch) => void
+  updateStage: (patch: Partial<StageAnchor>) => void
   setObjectMaterial: (id: string, patch: MaterialOverride) => void
   updateCamera: (updates: Partial<VirtualCamera>) => void
   setSelected: (id: string | null) => void
   setTime: (time: number) => void
   togglePlay: () => void
+  setCameraOpMode: (on: boolean) => void
+  startTake: () => void
+  endTake: () => void
   addKeyframe: (
     objectId: string,
     time: number,
@@ -233,10 +254,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   objects: [],
   virtualCamera: createDefaultVirtualCamera(),
   lighting: createDefaultLighting(),
+  stage: { ...DEFAULT_STAGE },
   selectedId: null,
   currentTime: 0,
   duration: 10,
   isPlaying: false,
+  isRolling: false,
+  takeNumber: 0,
+  takeStartTime: 0,
+  cameraOpMode: false,
   isExporting: false,
   overlayTimeline: false,
   overlayObjects: false,
@@ -313,6 +339,29 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       background: patch.background ?? state.lighting.background,
     },
   })),
+  updateStage: (patch) => set((state) => ({
+    stage: { ...state.stage, ...patch },
+  })),
+  setCameraOpMode: (on) => set({ cameraOpMode: on }),
+  startTake: () => set((state) => {
+    if (state.isRolling) return state
+    const takeNumber = state.takeNumber + 1
+    return {
+      isRolling: true,
+      takeNumber,
+      takeStartTime: state.currentTime,
+      isPlaying: true,
+    }
+  }),
+  endTake: () => set((state) => {
+    if (!state.isRolling) return state
+    const endTime = Math.ceil(state.currentTime)
+    return {
+      isRolling: false,
+      isPlaying: false,
+      duration: Math.max(state.duration, endTime),
+    }
+  }),
   setObjectMaterial: (id, patch) => set((state) => {
     const obj = state.objects.find((o) => o.id === id)
     if (!obj?.mesh) return state

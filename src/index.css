@@ -127,6 +127,30 @@
   animation: pulse-dot 1s ease-in-out infinite;
 }
 
+.transport-dot--rec {
+  background: #ff3b30;
+}
+
+.transport-readout--rec {
+  cursor: default;
+  background: #1a1a1a;
+  color: #ff3b30;
+}
+
+.transport-readout--rec:hover {
+  background: #1a1a1a;
+}
+
+.transport-readout--cam-op {
+  cursor: default;
+  background: var(--jsr-yellow);
+  color: black;
+}
+
+.transport-readout--cam-op:hover {
+  background: var(--jsr-yellow);
+}
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

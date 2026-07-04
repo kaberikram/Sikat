@@ -6,6 +6,7 @@ import logging
 import os
 
 from . import session_context
+from .performers import brief as performers_brief
 from .scene_context import format_scene_brief
 from .schema import IntentList, SceneFrame, SceneState
 
@@ -36,15 +37,23 @@ compound instructions ("add X then dim lights" → 2 intents).
 | update_lights | relight | ambient_color, ambient_intensity (0-4), key_color, key_intensity (0-8), key_position, background |
 | set_material | surface look | target, color, emissive, emissive_intensity, opacity |
 | update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
-| playback | transport | playback_action (play\\|pause\\|seek), seek_time, playback_pause_after_seek |
+| playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
 | describe | question only | describe_topic, describe_message |
 
 ## Set transport (film-set language)
-- hold, cut, freeze, stop → playback_action pause
-- action, roll, go → playback_action play
+- hold, freeze, stop → playback_action pause (preview hold)
+- and action, camera rolling, start recording, we're rolling → playback_action record (start a take)
+- cut, that's a cut, stop recording → playback_action cut (end take)
+- play, go → playback_action play (preview timeline)
 - back to one, top of scene → playback_action seek, seek_time 0, playback_pause_after_seek true
 - print the take → describe (log only, no mutation)
+
+## Numbered performers
+Directors may address Agent 1–4. Assignments persist across takes.
+- "Agent 1, you're on the sphere" → assign intent with addressee=1, target=sphere name
+- "Agent 1, go in, scale it up" → transform with addressee=1 (target filled from assignment)
+Use addressee (1–4) on mutating intents when the director names a performer.
 
 ## describe action (important)
 Use `describe` when the director asks but does NOT command a change:
@@ -184,7 +193,7 @@ Follow-up rules:
 
 
 def _system_prompt(scene: SceneState | None) -> str:
-    scene_brief = format_scene_brief(scene)
+    scene_brief = format_scene_brief(scene) + "\n\n" + performers_brief()
     return SYSTEM_PROMPT_TEMPLATE.format(
         scene_brief=scene_brief,
         history_section=_history_section(),

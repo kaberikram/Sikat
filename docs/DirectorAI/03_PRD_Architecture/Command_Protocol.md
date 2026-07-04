@@ -23,7 +23,7 @@ Breaking change: `camera` → **`virtualCamera`**.
 | field | heartbeat | full (on `user_command.scene`) |
 |---|---|---|
 | `mode` | `"heartbeat"` | `"full"` |
-| `currentTime`, `duration`, `isPlaying`, `selectedId?` | ✓ | ✓ |
+| `currentTime`, `duration`, `isPlaying`, `isRolling?`, `takeStartTime?`, `selectedId?`, `stage? {position, radius}` | ✓ | ✓ |
 | `objects[]` | summary tracks (`keyframeCount`) | full keyframes per track |
 | `virtualCamera` | sampled pose, fx summary, track counts | + full keyframe data |
 | `lighting` | `{ambient, key, background}` | ✓ |
@@ -93,7 +93,11 @@ time: id match → case-insensitive exact name → substring.
 | `SET_MATERIAL` | LightingTech | `target`, `color?`, `emissive?`, `emissiveIntensity? 0–5`, `opacity? 0–1` |
 | `UPDATE_FX` | VFXOperator | `section (bloom\|pixelate\|cellShading\|glitch\|dither)`, `patch` — keys/ranges per section below |
 | `SET_KEYFRAMES` | AssetAnimator | `target?` (omit ⇒ virtual camera), `property (position\|rotation\|scale\|fov)`, `keyframes[] {time, value}` |
-| `PLAYBACK` | Producer | `action (play\|pause\|seek)`, `time?` |
+| `PLAYBACK` | Producer | `action (play\|pause\|seek\|record\|cut)`, `time?` |
+
+**Take transport:** `record` starts a keyframe take (sets rolling, auto-samples camera + bakes agent moves). `cut` ends the take. `play`/`pause` are preview transport only.
+
+**Numbered performers:** `Agent1`–`Agent4` are valid `target_agent` values for addressed packets. Assignments are server-side (`assign` intent) and persist across takes.
 
 `SET_SCENE` is intentionally **not** a wire command: the Producer expands mood
 intents (noir, sunset, studio, neon) server-side into `UPDATE_LIGHTS` + `UPDATE_FX`

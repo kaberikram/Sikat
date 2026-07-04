@@ -9,6 +9,7 @@
  * positions each frame.
  */
 import { create } from 'zustand'
+import { useEditorStore } from '../store'
 import type { Vec3 } from './protocol'
 
 /** Choreography timings, shared so the runtime's paced apply and the scene's
@@ -27,6 +28,8 @@ export interface AgentMeta {
   station: Vec3
 }
 
+const PERFORMER_PALETTE = ['#ff6b00', '#0a84ff', '#30d158', '#bf5af2']
+
 /** The crew that gets a cursor. The Director's Assistant only parses text, so
  *  it never shows up on stage. */
 export const AGENT_META: Record<string, AgentMeta> = {
@@ -39,8 +42,40 @@ export const AGENT_META: Record<string, AgentMeta> = {
 /** Cursor order is stable so per-agent visual offsets (bob phase) stay put. */
 export const AGENT_ORDER = Object.keys(AGENT_META)
 
+export function agentMetaFor(agent: string): AgentMeta {
+  const perfMatch = agent.match(/^Agent(\d)$/i)
+  if (perfMatch) {
+    const n = parseInt(perfMatch[1], 10)
+    const stage = useEditorStore.getState().stage
+    const angle = ((n - 1) / 4) * Math.PI * 2 - Math.PI / 2
+    const r = stage.radius + 1.2
+    return {
+      color: PERFORMER_PALETTE[(n - 1) % PERFORMER_PALETTE.length],
+      station: [
+        stage.position[0] + r * Math.cos(angle),
+        stage.position[1] + 1.8,
+        stage.position[2] + r * Math.sin(angle),
+      ],
+    }
+  }
+  const crew = AGENT_META[agent]
+  if (crew) {
+    const stage = useEditorStore.getState().stage
+    return {
+      color: crew.color,
+      station: [
+        stage.position[0] + crew.station[0],
+        stage.position[1] + crew.station[1],
+        stage.position[2] + crew.station[2],
+      ],
+    }
+  }
+  const stage = useEditorStore.getState().stage
+  return { color: '#888888', station: [stage.position[0], stage.position[1] + 4, stage.position[2]] }
+}
+
 export function stationFor(agent: string): Vec3 {
-  return AGENT_META[agent]?.station ?? [0, 4, 0]
+  return agentMetaFor(agent).station
 }
 
 export interface AgentPresence {

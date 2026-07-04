@@ -16,6 +16,17 @@ export function applyVirtualCameraAtTime(
   threeCam.updateProjectionMatrix()
 }
 
+/** Apply store base pose (no keyframe interpolation) — live cam-op / rolling takes. */
+export function applyVirtualCameraBase(
+  vc: VirtualCamera,
+  threeCam: THREE.PerspectiveCamera
+) {
+  threeCam.position.set(...vc.position)
+  threeCam.rotation.set(...vc.rotation)
+  threeCam.fov = vc.fov
+  threeCam.updateProjectionMatrix()
+}
+
 export function applyObjectTransformAtTime(t: number, obj: MotionObject) {
   if (!obj.mesh) return
   const pos = interpolateKeyframes(obj.keyframes, t, 'position', obj.position)

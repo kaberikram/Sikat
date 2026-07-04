@@ -27,21 +27,25 @@ export function buildTurnaroundRotationKeyframes(
 
 const ORBIT_STEPS = 16
 
-/** Circle around the world origin at the object's current radius and height. */
+/** Circle around `center` at the object's current radius and height. */
 export function buildOrbitPositionKeyframes(
   basePosition: [number, number, number],
-  duration: number
+  duration: number,
+  center: [number, number, number] = [0, 0, 0]
 ): PresetKeyframes {
   const [x, y, z] = basePosition
-  const radius = Math.max(0.5, Math.hypot(x, z))
-  const startTheta = Math.atan2(x, z)
+  const [cx, , cz] = center
+  const dx = x - cx
+  const dz = z - cz
+  const radius = Math.max(0.5, Math.hypot(dx, dz))
+  const startTheta = Math.atan2(dx, dz)
   const out: PresetKeyframes = []
   for (let i = 0; i <= ORBIT_STEPS; i++) {
     const alpha = i / ORBIT_STEPS
     const theta = startTheta + alpha * Math.PI * 2
     out.push({
       time: alpha * duration,
-      value: [radius * Math.sin(theta), y, radius * Math.cos(theta)],
+      value: [cx + radius * Math.sin(theta), y, cz + radius * Math.cos(theta)],
     })
   }
   return out

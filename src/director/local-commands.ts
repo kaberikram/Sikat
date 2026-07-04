@@ -6,11 +6,61 @@ export interface LocalCommandResult {
   message?: string
 }
 
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
+const START_CUES = [
+  /^(?:and\s+)?action$/,
+  /^camera'?s?\s+(?:is\s+)?rolling$/,
+  /^start\s+recording$/,
+  /^we'?re\s+rolling$/,
+  /^roll\s+(?:camera|sound|it)$/,
+]
+
+const STOP_CUES = [
+  /^cut$/,
+  /^that'?s\s+a\s+cut$/,
+  /^stop\s+recording$/,
+]
+
+function tryTakeCue(text: string): LocalCommandResult | null {
+  const t = text.trim().toLowerCase()
+  if (wordCount(t) > 6) return null
+  const store = useEditorStore.getState()
+  for (const re of START_CUES) {
+    if (re.test(t)) {
+      store.startTake()
+      return { handled: true, message: `rolling — take ${useEditorStore.getState().takeNumber}` }
+    }
+  }
+  for (const re of STOP_CUES) {
+    if (re.test(t)) {
+      if (store.isRolling) store.endTake()
+      else if (store.isPlaying) store.togglePlay()
+      return { handled: true, message: 'cut' }
+    }
+  }
+  return null
+}
+
 export function tryLocalCommand(text: string): LocalCommandResult {
   const t = text.trim().toLowerCase()
   if (!t) return { handled: false }
 
   const store = useEditorStore.getState()
+
+  const takeCue = tryTakeCue(t)
+  if (takeCue) return takeCue
+
+  if (/^(camera\s+mode|free\s+camera)\s+on$/.test(t) || t === 'camera op on') {
+    store.setCameraOpMode(true)
+    return { handled: true, message: 'camera op on' }
+  }
+  if (/^(camera\s+mode|free\s+camera)\s+off$/.test(t) || t === 'camera op off' || t === 'exit camera mode') {
+    store.setCameraOpMode(false)
+    return { handled: true, message: 'camera op off' }
+  }
 
   for (const cmd of OVERLAY_COMMANDS) {
     if (cmd.openPhrases.some((re) => re.test(t))) {

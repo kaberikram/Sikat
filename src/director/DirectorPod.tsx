@@ -11,6 +11,7 @@ import {
 } from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
 import { isRadioEnabled, setRadioEnabled, speakAck } from './set-radio'
+import { startTakeRecorder } from './take-recorder'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
 import { ContextProperties } from '../ui/context-properties'
@@ -97,10 +98,15 @@ export function DirectorPod() {
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
+  const isRolling = useEditorStore((s) => s.isRolling)
+  const takeNumber = useEditorStore((s) => s.takeNumber)
+  const cameraOpMode = useEditorStore((s) => s.cameraOpMode)
   const currentTime = useEditorStore((s) => s.currentTime)
+  const takeStartTime = useEditorStore((s) => s.takeStartTime)
   const setOverlay = useEditorStore((s) => s.setOverlay)
   const togglePlay = useEditorStore((s) => s.togglePlay)
   const setSelected = useEditorStore((s) => s.setSelected)
+  const setCameraOpMode = useEditorStore((s) => s.setCameraOpMode)
 
   // Live-mic plumbing. The recognition instance persists across renders; the
   // latched flag lives in a ref so the (stale-closured) onend handler can read
@@ -136,6 +142,7 @@ export function DirectorPod() {
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
     const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
     startSceneStateSync(socket)
+    const stopTakeRecorder = startTakeRecorder()
     socket.connect()
     setStatus(socket.status)
 
@@ -153,6 +160,10 @@ export function DirectorPod() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const overlayKey = overlayFromHotkey(e.key)
       if (overlayKey) setOverlay(overlayKey)
+      if (e.key === 'c' || e.key === 'C') {
+        setCameraOpMode(!useEditorStore.getState().cameraOpMode)
+        return
+      }
       if (e.key === ' ') {
         e.preventDefault()
         togglePlay()
@@ -169,6 +180,7 @@ export function DirectorPod() {
       setRuntimeLogger(() => {})
       window.clearInterval(placeholderTimer)
       window.removeEventListener('keydown', onKeyDown)
+      stopTakeRecorder()
       stopMicRef.current() // tear down any live mic on unmount
     }
   })
@@ -274,7 +286,18 @@ export function DirectorPod() {
 
   return (
     <div className="director-pod-anchor">
-      {isPlaying && (
+      {cameraOpMode && (
+        <div className="transport-readout transport-readout--cam-op">
+          CAM OP — WASD · Q/E · drag look · C off
+        </div>
+      )}
+      {isRolling && (
+        <div className="transport-readout transport-readout--rec">
+          <span className="transport-dot transport-dot--rec" />
+          ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
+        </div>
+      )}
+      {isPlaying && !isRolling && (
         <button
           type="button"
           onClick={togglePlay}

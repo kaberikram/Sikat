@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .. import llm, session_context
+from .. import llm, performers, session_context
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..schema import (
@@ -99,8 +99,25 @@ class Producer:
         )
 
     async def _build_packets_for_intent(
-        self, intent: Intent, emit: EmitLog = _noop_emit
+        self,
+        intent: Intent,
+        emit: EmitLog = _noop_emit,
+        emit_status: EmitStatus = _noop_status,
+        command_id: str | None = None,
     ) -> list[CommandPacket]:
+        if intent.action == "assign":
+            if intent.addressee and intent.target:
+                performers.assign(intent.addressee, intent.target, intent.role)
+                agent = f"Agent{intent.addressee}"
+                await emit(
+                    self.name,
+                    f"Agent {intent.addressee} on {intent.target}",
+                    "info",
+                )
+                await emit_status(agent, "active", command_id, "assigned")
+                await emit_status(agent, "idle", command_id, "copy")
+            return []
+
         if intent.action in ("playback", "set_scene"):
             built = self._build_own(intent)
             if intent.action == "set_scene" and intent.mood and not built:
@@ -112,25 +129,42 @@ class Producer:
             return built
 
         specialist = self._routes.get(intent.action)
-        built = specialist.build(intent) if specialist else []
+        working = intent
+        if intent.addressee and not intent.target:
+            assignment = performers.get(intent.addressee)
+            if assignment:
+                working = intent.model_copy(update={"target": assignment.target})
+        built = specialist.build(working) if specialist else []
         if built and specialist:
             await emit(
                 specialist.name,
                 ", ".join(p.command for p in built),
                 "info",
             )
+        if intent.addressee and built:
+            agent = f"Agent{intent.addressee}"
+            for packet in built:
+                packet.target_agent = agent  # type: ignore[assignment]
         if not built:
             await emit(self.name, f"dropped unactionable intent: {intent.action}", "warn")
         return built
 
     async def _build_packets_for_intents(
-        self, intents: list[Intent], emit: EmitLog = _noop_emit
+        self,
+        intents: list[Intent],
+        emit: EmitLog = _noop_emit,
+        emit_status: EmitStatus = _noop_status,
+        command_id: str | None = None,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
             if intent.action == "describe":
                 continue
-            packets.extend(await self._build_packets_for_intent(intent, emit))
+            packets.extend(
+                await self._build_packets_for_intent(
+                    intent, emit, emit_status, command_id
+                )
+            )
         return packets
 
     async def _stream_packets_staged(
@@ -179,6 +213,7 @@ class Producer:
         scene: SceneState | None,
         command_id: str | None = None,
         emit: EmitLog = _noop_emit,
+        emit_status: EmitStatus = _noop_status,
         frame: SceneFrame | None = None,
     ) -> tuple[list[CommandPacket], bool]:
         """Returns (packets, describe_only). describe_only suppresses no-op errors."""
@@ -199,9 +234,15 @@ class Producer:
         if describe_intents and not mutating_intents:
             return [], True
 
-        packets = await self._build_packets_for_intents(mutating_intents, emit)
+        packets = await self._build_packets_for_intents(
+            mutating_intents, emit, emit_status, command_id
+        )
         for packet in packets:
             packet.commandId = command_id
+
+        if not packets and any(i.action == "assign" for i in mutating_intents):
+            return [], True
+
         return packets, False
 
     async def _direct_single_clause(
@@ -215,7 +256,7 @@ class Producer:
         frame: SceneFrame | None,
     ) -> tuple[list[CommandPacket], bool]:
         packets, describe_only = await self.handle_user_command(
-            text, scene, command_id, emit_log, frame
+            text, scene, command_id, emit_log, emit_status, frame
         )
         if not packets:
             return packets, describe_only
@@ -260,7 +301,9 @@ class Producer:
                 await self._emit_describe(intent, emit_log)
                 continue
             describe_only = False
-            built = await self._build_packets_for_intent(intent, emit_log)
+            built = await self._build_packets_for_intent(
+                intent, emit_log, emit_status, command_id
+            )
             for packet in built:
                 packet.commandId = command_id
             all_packets.extend(built)
@@ -280,7 +323,9 @@ class Producer:
                         await self._emit_describe(intent, emit_log)
                         continue
                     describe_only = False
-                    built = await self._build_packets_for_intent(intent, emit_log)
+                    built = await self._build_packets_for_intent(
+                intent, emit_log, emit_status, command_id
+            )
                     for packet in built:
                         packet.commandId = command_id
                     all_packets.extend(built)

@@ -192,6 +192,7 @@ def format_scene_brief(scene: SceneState | None) -> str:
     selected = scene.selectedId or "none"
     lines = [
         f"TIMELINE: t={scene.currentTime:.2f}s / {scene.duration:g}s | {play_state} | selected={selected}",
+        f"STAGE: center {_fmt_vec(scene.stage.position)} radius {scene.stage.radius:g}",
         "",
         f"OBJECTS ({len(scene.objects)}):",
     ]

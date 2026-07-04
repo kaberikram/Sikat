@@ -90,6 +90,57 @@ _AMEND_DIR = re.compile(
 # "again" / "a bit more" with no direction -> repeat the last transform verbatim.
 _AMEND_REPEAT = re.compile(r"(again|a bit more|more|same again|do it again)")
 
+_NUMBER_WORDS: dict[str, int] = {"one": 1, "two": 2, "three": 3, "four": 4}
+_PERFORMER_ADDR = re.compile(
+    r"^(?:agent|performer|number)\s+(one|two|three|four|\d+)\s*[,:.\s]+(.*)$",
+    re.I,
+)
+_BARE_PERFORMER = re.compile(
+    r"^(?:agent|performer|number)\s+(one|two|three|four|\d+)\s*\.?$",
+    re.I,
+)
+_ASSIGN_VERB = re.compile(
+    r"\b(you'?re on|you take|you handle|take the|handle the)\b",
+    re.I,
+)
+
+
+def _performer_num(token: str) -> int | None:
+    token = token.lower()
+    if token.isdigit():
+        n = int(token)
+        return n if 1 <= n <= 4 else None
+    return _NUMBER_WORDS.get(token)
+
+
+def _resolve_performer_clause(
+    clause: str, scene: SceneState | None
+) -> tuple[Intent | None, str | None, int | None]:
+    bare = _BARE_PERFORMER.fullmatch(clause.strip())
+    if bare:
+        n = _performer_num(bare.group(1))
+        if n:
+            session_context.note_addressee(n)
+        return None, None, n
+
+    m = _PERFORMER_ADDR.match(clause.strip())
+    if not m:
+        return None, clause, None
+
+    n = _performer_num(m.group(1))
+    if not n:
+        return None, clause, None
+    rest = m.group(2).strip()
+    session_context.note_addressee(n)
+
+    if _ASSIGN_VERB.search(rest):
+        target = _find_target(rest, scene) or session_context.last_target()
+        if not target:
+            return None, None, n
+        return Intent(action="assign", addressee=n, target=target, role=target), None, n
+
+    return None, rest, n
+
 
 def _extract_transition(clause: str) -> tuple[Transition | None, str]:
     m = re.search(
@@ -151,9 +202,23 @@ def _find_vec3_after(clause: str, anchor: str) -> tuple[float, float, float] | N
 def _parse_playback(
     clause: str, _scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
-    if re.fullmatch(r"(play|action|go|roll(?:ing)?(?: it)?)", clause):
+    if re.search(r"(?:^|\b)(?:and\s+)?action(?:\s|$)", clause):
+        return Intent(action="playback", playback_action="record")
+    if re.search(r"camera'?s?\s+(?:is\s+)?rolling", clause):
+        return Intent(action="playback", playback_action="record")
+    if re.search(r"start\s+recording", clause):
+        return Intent(action="playback", playback_action="record")
+    if re.search(r"we'?re\s+rolling", clause):
+        return Intent(action="playback", playback_action="record")
+    if re.search(r"roll\s+(?:camera|sound|it)\b", clause):
+        return Intent(action="playback", playback_action="record")
+    if re.search(r"\bcut\b", clause) or re.search(r"that'?s\s+a\s+cut", clause):
+        return Intent(action="playback", playback_action="cut")
+    if re.search(r"stop\s+recording", clause):
+        return Intent(action="playback", playback_action="cut")
+    if re.fullmatch(r"(play|go|roll(?:ing)?(?: it)?)", clause):
         return Intent(action="playback", playback_action="play")
-    if re.fullmatch(r"(pause|stop|cut|freeze|hold)", clause):
+    if re.fullmatch(r"(pause|stop|freeze|hold)", clause):
         return Intent(action="playback", playback_action="pause")
     if re.fullmatch(r"(back to one|top of (the )?scene|back to the top of the scene)", clause):
         return Intent(
@@ -278,6 +343,8 @@ def _parse_camera(
         return Intent(
             action="move_camera", fov=min(110.0, cur_fov + 15.0), transition=cam_transition
         )
+    if re.search(r"\b(?:look at|point at|aim at)\s+(?:the\s+)?stage\b", clause):
+        return Intent(action="move_camera", look_at="STAGE", transition=cam_transition)
     pos = _find_vec3_after(clause, "to")
     m = re.search(r"\b(?:look at|point at|aim at)\s+(?:the\s+)?([a-z0-9_ ]+)", clause)
     look_at = _find_target(m.group(1), scene) if m else None
@@ -557,9 +624,19 @@ def parse_clause(clause: str, scene: SceneState | None) -> Intent | None:
     clause = clause.strip().lower()
     if not clause:
         return None
-    transition, clause = _extract_transition(clause)
+
+    early, work, addressee = _resolve_performer_clause(clause, scene)
+    if early is not None:
+        return early
+    if work is None:
+        return None
+
+    transition, work = _extract_transition(work)
     for handler in HANDLERS:
-        intent = handler(clause, scene, transition)
+        intent = handler(work, scene, transition)
         if intent is not None:
+            addr = addressee or session_context.pending_addressee()
+            if addr is not None:
+                intent = intent.model_copy(update={"addressee": addr})
             return intent
     return None

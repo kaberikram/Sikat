@@ -9,6 +9,8 @@ import { setupGizmo } from './setup-gizmo'
 import { setupPicking } from './setup-picking'
 import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
 import { createAgentCursors } from './agent-cursors'
+import { createStageMarker, disposeStageMarker } from './stage-marker'
+import { bindFlyControls } from './fly-controls'
 
 export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivElement) {
   container.replaceChildren()
@@ -17,7 +19,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   scene.background = new THREE.Color('#f2f2f2')
 
   const userCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
-  const defaultSceneFocus = new THREE.Vector3(1.5, 0.6, 1.5)
+  const stagePos = useEditorStore.getState().stage.position
+  const defaultSceneFocus = new THREE.Vector3(...stagePos)
   userCamera.position.set(7.5, 4.25, 7.5)
   userCamera.lookAt(defaultSceneFocus)
   userCamera.layers.enable(0)
@@ -127,6 +130,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   ensureShadowsOnObjectMeshes(useEditorStore.getState().objects)
 
   const agentCursors = createAgentCursors(scene)
+  const stageMarker = createStageMarker(scene)
+  const unbindFly = bindFlyControls(mainRenderer.domElement)
 
   const stopAnimate = createAnimateLoop({
     scene,
@@ -140,6 +145,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     ambientLight,
     directionalLight,
     agentCursors,
+    stageMarker,
   })
 
   const handleMainResize = () => {
@@ -170,6 +176,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     teardownPicking()
     stopAnimate()
     agentCursors.dispose()
+    disposeStageMarker(stageMarker, scene)
+    unbindFly()
     unsubStore()
     unsubShadows()
     roMain.disconnect()

@@ -82,7 +82,7 @@ export interface SetKeyframesPayload {
 }
 
 export interface PlaybackPayload {
-  action: 'play' | 'pause' | 'seek'
+  action: 'play' | 'pause' | 'seek' | 'record' | 'cut'
   time?: number | null
 }
 
@@ -176,6 +176,11 @@ export interface SceneLightingSnapshot {
   background: string
 }
 
+export interface StageSnapshot {
+  position: Vec3
+  radius: number
+}
+
 export interface SceneSnapshot {
   type: 'scene_state'
   timestamp: number
@@ -183,7 +188,10 @@ export interface SceneSnapshot {
   currentTime: number
   duration: number
   isPlaying: boolean
+  isRolling?: boolean
+  takeStartTime?: number
   selectedId?: string | null
+  stage?: StageSnapshot
   objects: ObjectSnapshot[]
   virtualCamera: VirtualCameraSnapshot
   lighting: SceneLightingSnapshot

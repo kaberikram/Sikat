@@ -19,8 +19,14 @@ export function packetTargetPosition(packet: CommandPacket): Vec3 {
   const station = stationFor(packet.target_agent)
 
   switch (packet.command) {
-    case 'SPAWN_OBJECT':
-      return packet.payload.position ?? [0, 0.5, 0]
+    case 'SPAWN_OBJECT': {
+      const stage = useEditorStore.getState().stage
+      return packet.payload.position ?? [
+        stage.position[0],
+        stage.position[1] + 0.5,
+        stage.position[2],
+      ]
+    }
 
     case 'REMOVE_OBJECT':
     case 'TRANSFORM_OBJECT':
@@ -37,7 +43,10 @@ export function packetTargetPosition(packet: CommandPacket): Vec3 {
       const p = packet.payload
       if (p.position) return p.position
       if (p.lookAt) return p.lookAt
-      if (p.lookAtTarget) return resolveTarget(p.lookAtTarget)?.position ?? st.virtualCamera.position
+      if (p.lookAtTarget) {
+        if (p.lookAtTarget.name?.toLowerCase() === 'stage') return st.stage.position
+        return resolveTarget(p.lookAtTarget)?.position ?? st.virtualCamera.position
+      }
       return st.virtualCamera.position
     }
 

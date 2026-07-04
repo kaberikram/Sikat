@@ -33,7 +33,15 @@ Easing = Literal["linear", "easeIn", "easeOut", "easeInOut"]
 FxSection = Literal["bloom", "pixelate", "cellShading", "glitch", "dither"]
 Primitive = Literal["box", "sphere", "cone", "cylinder", "torus", "plane", "text"]
 AgentName = Literal[
-    "Producer", "DirectorsAssistant", "LightingTech", "AssetAnimator", "VFXOperator"
+    "Producer",
+    "DirectorsAssistant",
+    "LightingTech",
+    "AssetAnimator",
+    "VFXOperator",
+    "Agent1",
+    "Agent2",
+    "Agent3",
+    "Agent4",
 ]
 
 
@@ -221,7 +229,7 @@ class SetKeyframesPayload(BaseModel):
 
 
 class PlaybackPayload(BaseModel):
-    action: Literal["play", "pause", "seek"]
+    action: Literal["play", "pause", "seek", "record", "cut"]
     time: float | None = None
 
 
@@ -397,6 +405,11 @@ class SceneLightingSnapshot(BaseModel):
     background: HexColor
 
 
+class StageSnapshot(BaseModel):
+    position: Vec3 = (0.0, 0.0, 0.0)
+    radius: float = 2.5
+
+
 class SceneState(BaseModel):
     type: Literal["scene_state"] = "scene_state"
     timestamp: float = Field(default_factory=now)
@@ -404,7 +417,10 @@ class SceneState(BaseModel):
     currentTime: float = 0.0
     duration: float = 10.0
     isPlaying: bool = False
+    isRolling: bool = False
+    takeStartTime: float = 0.0
     selectedId: str | None = None
+    stage: StageSnapshot = Field(default_factory=StageSnapshot)
     objects: list[ObjectSnapshot] = Field(default_factory=list)
     virtualCamera: VirtualCameraSnapshot = Field(default_factory=VirtualCameraSnapshot)
     lighting: SceneLightingSnapshot = Field(
@@ -520,6 +536,7 @@ IntentAction = Literal[
     "playback",
     "set_scene",
     "describe",
+    "assign",
 ]
 
 
@@ -538,6 +555,8 @@ class Intent(BaseModel):
 
     action: IntentAction
     target: str | None = None
+    addressee: int | None = None
+    role: str | None = None
     transition: Transition | None = None
     # spawn
     primitive: Primitive | None = None
@@ -570,7 +589,7 @@ class Intent(BaseModel):
     fx_enabled: bool | None = None
     fx_set: list[FxSetting] | None = None
     # playback
-    playback_action: Literal["play", "pause", "seek"] | None = None
+    playback_action: Literal["play", "pause", "seek", "record", "cut"] | None = None
     seek_time: float | None = None
     playback_pause_after_seek: bool | None = None
     # set_scene

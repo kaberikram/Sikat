@@ -26,6 +26,7 @@ import { buildSpawnMesh } from './spawn-factory'
 import { startTween } from './tween'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
+import { applyLiveCameraPose } from './camera-pose'
 import type {
   CommandPacket,
   Target,
@@ -61,7 +62,8 @@ type VectorProperty = 'position' | 'rotation' | 'scale'
 export function presetKeyframes(
   obj: MotionObject,
   preset: 'turnaround' | 'orbit' | 'bounce',
-  durationSec: number
+  durationSec: number,
+  orbitCenter: Vec3 = [0, 0, 0]
 ): { property: 'position' | 'rotation'; keyframes: PresetKeyframes } {
   if (preset === 'turnaround') {
     return {
@@ -72,7 +74,7 @@ export function presetKeyframes(
   if (preset === 'orbit') {
     return {
       property: 'position',
-      keyframes: buildOrbitPositionKeyframes(obj.position, durationSec),
+      keyframes: buildOrbitPositionKeyframes(obj.position, durationSec, orbitCenter),
     }
   }
   return {
@@ -119,12 +121,13 @@ function applyObjectVector(
 ) {
   const st = useEditorStore.getState()
   const hasKeyframes = obj.keyframes.some((k) => k.property === property)
+  const isRolling = st.isRolling
   const current = hasKeyframes
     ? interpolateKeyframes(obj.keyframes, st.currentTime, property, obj[property])
     : obj[property]
   const to = combine(current, value, mode, property)
 
-  if (transition && hasKeyframes) {
+  if (transition && (hasKeyframes || isRolling)) {
     bakeEasedKeyframes(obj, property, to, transition)
     return
   }
@@ -139,9 +142,12 @@ function applyObjectVector(
     })
     return
   }
+  if (isRolling) {
+    const tAnchor = Math.max(0, st.currentTime - 0.001)
+    st.addKeyframe(obj.id, tAnchor, property, current)
+  }
   st.updateObject(obj.id, { [property]: to })
-  // Mirror the Properties panel: a keyframed property gets a keyframe commit.
-  if (hasKeyframes) st.addKeyframe(obj.id, st.currentTime, property, to)
+  if (hasKeyframes || isRolling) st.addKeyframe(obj.id, st.currentTime, property, to)
 }
 
 function lookAtToEuler(eye: Vec3, targetPos: Vec3): Vec3 {
@@ -167,7 +173,7 @@ function applyCameraVector(
       set: (v) => useEditorStore.getState().updateCamera({ [property]: v as Vec3 }),
     })
   } else {
-    st.updateCamera({ [property]: to })
+    applyLiveCameraPose({ [property]: to })
   }
 }
 
@@ -179,12 +185,18 @@ export function applyCommandPacket(packet: CommandPacket): string {
     case 'SPAWN_OBJECT': {
       const p = packet.payload
       const { mesh, name } = buildSpawnMesh(p)
+      const stage = st.stage
+      const spawnPos: Vec3 = p.position ?? [
+        stage.position[0],
+        stage.position[1] + 0.5,
+        stage.position[2],
+      ]
       st.addObject({
         id: p.id ?? undefined,
         name,
         type: 'mesh',
         mesh,
-        position: p.position ?? [0, 0.5, 0],
+        position: spawnPos,
         rotation: p.rotation ?? [0, 0, 0],
         scale: p.scale ?? [1, 1, 1],
       })
@@ -213,7 +225,12 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const obj = resolveTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       const duration = p.durationSec ?? st.duration
-      const { property, keyframes } = presetKeyframes(obj, p.preset, duration)
+      const { property, keyframes } = presetKeyframes(
+        obj,
+        p.preset,
+        duration,
+        st.stage.position
+      )
       st.setObjectPropertyKeyframes(obj.id, property, keyframes)
       st.setTime(0)
       if (!st.isPlaying) st.togglePlay()
@@ -227,7 +244,12 @@ export function applyCommandPacket(packet: CommandPacket): string {
       if (p.position) applyCameraVector('position', p.position, packet.transition)
       let rotation = p.rotation ?? null
       if (!rotation && (p.lookAt || p.lookAtTarget)) {
-        const lookTarget = p.lookAt ?? resolveTarget(p.lookAtTarget)?.position
+        let lookTarget = p.lookAt ?? null
+        if (!lookTarget && p.lookAtTarget) {
+          const name = p.lookAtTarget.name?.toLowerCase()
+          if (name === 'stage') lookTarget = st.stage.position
+          else lookTarget = resolveTarget(p.lookAtTarget)?.position ?? null
+        }
         if (lookTarget) rotation = lookAtToEuler(eye, lookTarget)
       }
       if (rotation) applyCameraVector('rotation', rotation, packet.transition)
@@ -242,7 +264,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
             set: (v) => useEditorStore.getState().updateCamera({ fov: v[0] }),
           })
         } else {
-          st.updateCamera({ fov: p.fov })
+          applyLiveCameraPose({ fov: p.fov })
         }
       }
       return 'camera updated'
@@ -317,13 +339,26 @@ export function applyCommandPacket(packet: CommandPacket): string {
 
     case 'PLAYBACK': {
       const p = packet.payload
+      if (p.action === 'record') {
+        st.startTake()
+        const n = useEditorStore.getState().takeNumber
+        return `rolling — take ${n}`
+      }
+      if (p.action === 'cut') {
+        if (st.isRolling) {
+          st.endTake()
+          return 'cut'
+        }
+        if (st.isPlaying) st.togglePlay()
+        return 'cut'
+      }
       if (p.action === 'seek') {
         st.setTime(Math.max(0, Math.min(st.duration, p.time ?? 0)))
         return `seek ${p.time ?? 0}s`
       }
       const wantPlaying = p.action === 'play'
       if (st.isPlaying !== wantPlaying) st.togglePlay()
-      return wantPlaying ? 'rolling' : 'cut'
+      return wantPlaying ? 'preview play' : 'hold'
     }
 
     default:

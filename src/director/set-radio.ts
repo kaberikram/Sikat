@@ -56,6 +56,17 @@ export function speakAck(
   if (!radioEnabled || !synthesisAvailable()) return
   if (forCommandId && !trackAgentSpoken(forCommandId, agent)) return
 
+  const perfMatch = agent.match(/^Agent(\d)$/i)
+  if (perfMatch) {
+    const phrase = `Agent ${perfMatch[1]}, copy.`
+    const utterance = new SpeechSynthesisUtterance(phrase)
+    utterance.rate = 1.05
+    utterance.pitch = 0.95
+    utterance.volume = 0.85
+    window.speechSynthesis.speak(utterance)
+    return
+  }
+
   const phrase = AGENT_ACKS[agent] ?? 'Copy.'
   const utterance = new SpeechSynthesisUtterance(phrase)
   utterance.rate = 1.05

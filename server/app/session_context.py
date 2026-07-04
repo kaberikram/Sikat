@@ -34,6 +34,7 @@ _history: deque[Exchange] = deque(maxlen=_MAX)
 # later clause ("...then go back a bit") can resolve before the whole command
 # is committed to history.
 _pending_target: str | None = None
+_pending_addressee: int | None = None
 _last_transform: Intent | None = None
 
 
@@ -46,6 +47,17 @@ def _summarize(intent: Intent) -> str:
     if intent.mood:
         parts.append(intent.mood)
     return " ".join(parts)
+
+
+def note_addressee(addressee: int | None) -> None:
+    """Remember a numbered performer mid-command (sticky across utterances)."""
+    global _pending_addressee
+    if addressee is not None:
+        _pending_addressee = addressee
+
+
+def pending_addressee() -> int | None:
+    return _pending_addressee
 
 
 def note_target(target: str | None) -> None:
@@ -64,13 +76,14 @@ def note_transform(intent: Intent) -> None:
 
 def record(text: str, intents: list[Intent]) -> None:
     """Commit a finished exchange, clearing the mid-command pending target."""
-    global _pending_target
+    global _pending_target, _pending_addressee
     summaries = [_summarize(i) for i in intents]
     targets = [i.target for i in intents if i.target]
     _history.append(Exchange(text=text, intent_summaries=summaries, targets=targets))
     for intent in intents:
         note_transform(intent)
     _pending_target = None
+    _pending_addressee = None
 
 
 def history() -> list[Exchange]:
@@ -92,7 +105,8 @@ def last_transform() -> Intent | None:
 
 
 def clear() -> None:
-    global _pending_target, _last_transform
+    global _pending_target, _last_transform, _pending_addressee
     _history.clear()
     _pending_target = None
+    _pending_addressee = None
     _last_transform = None

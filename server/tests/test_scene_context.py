@@ -11,6 +11,7 @@ def test_format_scene_brief_empty_scene():
     assert "(empty)" in brief
     assert "VIRTUAL CAMERA" in brief
     assert "LIGHTING:" in brief
+    assert "STAGE:" in brief
 
 
 def test_format_scene_brief_heartbeat_vs_full():
