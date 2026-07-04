@@ -6,6 +6,7 @@ import { applyObjectTransformAtTime, applyVirtualCameraAtTime } from '../timelin
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
 import type { createViewfinderComposer } from '../pip-composer'
+import type { AgentCursors } from './agent-cursors'
 
 type ViewfinderComposer = ReturnType<typeof createViewfinderComposer>
 
@@ -20,6 +21,7 @@ export function createAnimateLoop(ctx: {
   transformControl: TransformControls
   ambientLight: THREE.AmbientLight
   directionalLight: THREE.DirectionalLight
+  agentCursors: AgentCursors
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
@@ -85,6 +87,10 @@ export function createAnimateLoop(ctx: {
         lastGizmoObject = null
       }
     }
+
+    // Agent cursors ride layer 1 (main viewport only) — update before the main
+    // render, and after object transforms so a cursor lands on its live target.
+    ctx.agentCursors.update(now)
 
     ctx.controls.update()
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)

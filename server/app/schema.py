@@ -379,6 +379,27 @@ def agent_command_message(packet) -> dict:
     return {"type": "agent_command", "timestamp": now(), "packet": packet.model_dump()}
 
 
+def agent_status_message(
+    agent: str,
+    status: str,
+    for_command_id: str | None = None,
+    note: str | None = None,
+) -> dict:
+    """Cursor-presence lifecycle event: an agent became ``active`` or ``idle``.
+
+    Semantic only — the client derives the cursor's 3D target from the
+    ``agent_command`` packets that ride alongside these events.
+    """
+    return {
+        "type": "agent_status",
+        "timestamp": now(),
+        "agent": agent,
+        "status": status,
+        "forCommandId": for_command_id,
+        "note": note,
+    }
+
+
 def agent_log_message(
     agent: str, message: str, level: str = "info", for_command_id: str | None = None
 ) -> dict:

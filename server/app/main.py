@@ -21,6 +21,7 @@ from .schema import (
     UserCommand,
     agent_command_message,
     agent_log_message,
+    agent_status_message,
     client_message_adapter,
     error_message,
 )
@@ -62,20 +63,32 @@ async def healthz() -> dict:
 
 
 async def _handle_user_command(msg: UserCommand) -> None:
-    async def emit(agent: str, message: str, level: str = "info") -> None:
+    async def emit_log(agent: str, message: str, level: str = "info") -> None:
         await manager.broadcast(agent_log_message(agent, message, level, msg.commandId))
 
+    async def emit_packet(packet) -> None:
+        await manager.broadcast(agent_command_message(packet))
+
+    async def emit_status(
+        agent: str, status: str, command_id: str | None = None, note: str | None = None
+    ) -> None:
+        await manager.broadcast(agent_status_message(agent, status, command_id, note))
+
     try:
-        packets = await producer.handle_user_command(
-            msg.text, scene_state.latest(), msg.commandId, emit
+        # direct() streams packets + presence status over time via the callbacks
+        # above; it returns the full plan so we can still detect a no-op command.
+        packets = await producer.direct(
+            msg.text,
+            scene_state.latest(),
+            msg.commandId,
+            emit_log,
+            emit_packet,
+            emit_status,
         )
         if not packets:
             await manager.broadcast(
                 error_message(f"no actionable direction in: {msg.text!r}", msg.commandId)
             )
-            return
-        for packet in packets:
-            await manager.broadcast(agent_command_message(packet))
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)
         await manager.broadcast(error_message(str(exc), msg.commandId))

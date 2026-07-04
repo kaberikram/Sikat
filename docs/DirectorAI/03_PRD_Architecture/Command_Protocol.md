@@ -21,8 +21,25 @@ Implementations: `server/app/schema.py` (pydantic, authoritative validation) and
 | type | fields |
 |---|---|
 | `agent_command` | `packet` (CommandPacket below) |
+| `agent_status` | `agent`, `status (active\|idle)`, `forCommandId?`, `note?` |
 | `agent_log` | `agent`, `level (info\|warn\|error)`, `message`, `forCommandId?` |
 | `error` | `message`, `forCommandId?` |
+
+### Staged execution & agent cursors
+
+A `user_command` is planned deterministically (parse → build), then the crew's
+packets are **streamed over time** rather than in one burst. The Producer groups
+packets by `target_agent` and runs each specialist as a concurrent worker that
+emits `agent_status` `active`, its `agent_command` packets (≈0.25 s apart), then
+`agent_status` `idle`. Specialists are staggered (~0.15 s) so their statuses
+interleave.
+
+`agent_status` is **semantic presence only** — it carries no coordinates. The
+client owns choreography: it queues each agent's packets and, per packet, flies
+that agent's on-stage cursor to a 3D target it derives from the packet itself
+(spawn position, resolved object transform, key-light position, …), hovers,
+commits the change, then settles. `active` shows the cursor; `idle` fades it
+once the client-side queue drains.
 
 ## CommandPacket
 

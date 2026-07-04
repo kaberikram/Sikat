@@ -155,6 +155,21 @@ export interface AgentLogMessage {
   forCommandId?: string | null
 }
 
+/**
+ * Cursor-presence lifecycle. `active` = the agent picked up work (its cursor
+ * should appear); `idle` = it stood down (cursor may fade once its client-side
+ * queue drains). The cursor's 3D target is derived client-side from the
+ * `agent_command` packets that stream alongside these events.
+ */
+export interface AgentStatusMessage {
+  type: 'agent_status'
+  timestamp: number
+  agent: string
+  status: 'active' | 'idle'
+  forCommandId?: string | null
+  note?: string | null
+}
+
 export interface ErrorMessage {
   type: 'error'
   timestamp: number
@@ -162,7 +177,11 @@ export interface ErrorMessage {
   forCommandId?: string | null
 }
 
-export type ServerMessage = AgentCommandMessage | AgentLogMessage | ErrorMessage
+export type ServerMessage =
+  | AgentCommandMessage
+  | AgentLogMessage
+  | AgentStatusMessage
+  | ErrorMessage
 
 /** Cheap structural check — the server already pydantic-validated the packet. */
 export function parseServerMessage(raw: unknown): ServerMessage | null {
@@ -172,6 +191,8 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     return raw as AgentCommandMessage
   if (msg.type === 'agent_log' && typeof (raw as AgentLogMessage).message === 'string')
     return raw as AgentLogMessage
+  if (msg.type === 'agent_status' && typeof (raw as AgentStatusMessage).agent === 'string')
+    return raw as AgentStatusMessage
   if (msg.type === 'error' && typeof (raw as ErrorMessage).message === 'string')
     return raw as ErrorMessage
   return null
