@@ -5,6 +5,7 @@ import math
 import re
 from collections.abc import Callable
 
+from . import session_context
 from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
 from .schema import FxSetting, Intent, SceneState, Transition
 
@@ -77,6 +78,17 @@ DIRECTIONS: dict[str, tuple[float, float, float]] = {
 _NUM = r"(-?\d+(?:\.\d+)?)"
 Handler = Callable[[str, SceneState | None, Transition | None], Intent | None]
 
+# Pronouns that refer back to the last object the director touched.
+_PRONOUN = re.compile(r"\b(it|that|this one|this|them|those)\b")
+# A bare relative correction: an optional verb + a direction + optional softener.
+_AMEND_DIR = re.compile(
+    r"(?:go|move|nudge|shift|pull|push|bring)?\s*"
+    r"(up|down|left|right|back|backward|backwards|forward|forwards)"
+    r"\s*(a bit|a little|slightly|more)?"
+)
+# "again" / "a bit more" with no direction -> repeat the last transform verbatim.
+_AMEND_REPEAT = re.compile(r"(again|a bit more|more|same again|do it again)")
+
 
 def _extract_transition(clause: str) -> tuple[Transition | None, str]:
     m = re.search(
@@ -122,6 +134,9 @@ def _find_target(clause: str, scene: SceneState | None) -> str | None:
     for word in PRIMITIVE_WORDS:
         if re.search(rf"\b{word}\b", clause):
             return word
+    # Pronoun ("move it up") -> whatever the director last addressed.
+    if _PRONOUN.search(clause):
+        return session_context.last_target()
     return None
 
 
@@ -386,6 +401,47 @@ def _parse_rotate(
     )
 
 
+def _parse_amendment(
+    clause: str, scene: SceneState | None, transition: Transition | None
+) -> Intent | None:
+    """Small live corrections with no named target, e.g. 'go back a bit'.
+
+    Resolves against the last object the director touched (this command or a
+    recent one). Kept ahead of _parse_move so a bare direction becomes a nudge
+    on the running target instead of being dropped for lack of a target.
+    """
+    clause = clause.strip()
+    # A named/typed target means this is an ordinary move, not an amendment.
+    if _find_scene_target(clause, scene):
+        return None
+    if any(re.search(rf"\b{word}\b", clause) for word in PRIMITIVE_WORDS):
+        return None
+    target = session_context.last_target()
+    if not target:
+        return None
+    if _AMEND_REPEAT.fullmatch(clause):
+        last = session_context.last_transform()
+        return last.model_copy(deep=True) if last is not None else None
+    match = _AMEND_DIR.fullmatch(clause)
+    if not match:
+        return None
+    direction = DIRECTIONS[match.group(1)]
+    qualifier = match.group(2)
+    if qualifier in ("a bit", "a little", "slightly"):
+        amount = 0.25
+    elif qualifier == "more":
+        amount = 1.0
+    else:
+        amount = 0.5
+    return Intent(
+        action="transform",
+        target=target,
+        position=(direction[0] * amount, direction[1] * amount, direction[2] * amount),
+        mode="relative",
+        transition=transition,
+    )
+
+
 def _parse_move(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
@@ -438,6 +494,7 @@ HANDLERS: list[Handler] = [
     _parse_spawn,
     _parse_scale,
     _parse_rotate,
+    _parse_amendment,
     _parse_move,
 ]
 

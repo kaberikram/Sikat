@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef } from 'react'
 import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
@@ -40,14 +40,29 @@ const PLACEHOLDERS = [
   'show timeline',
 ]
 
+interface SpeechAlternativeLike {
+  transcript: string
+}
+interface SpeechResultLike extends ArrayLike<SpeechAlternativeLike> {
+  isFinal: boolean
+}
+interface SpeechResultEvent {
+  resultIndex: number
+  results: ArrayLike<SpeechResultLike>
+}
+interface SpeechErrorEvent {
+  error: string
+}
 interface SpeechRecognitionLike {
   lang: string
+  continuous: boolean
   interimResults: boolean
   maxAlternatives: number
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null
+  onresult: ((event: SpeechResultEvent) => void) | null
   onend: (() => void) | null
-  onerror: (() => void) | null
+  onerror: ((event: SpeechErrorEvent) => void) | null
   start: () => void
+  stop: () => void
 }
 
 function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
@@ -73,6 +88,7 @@ export function DirectorPod() {
   const [log, setLog] = useState<LogEntry[]>([])
   const [input, setInput] = useState('')
   const [listening, setListening] = useState(false)
+  const [interim, setInterim] = useState('')
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
@@ -83,6 +99,13 @@ export function DirectorPod() {
   const setOverlay = useEditorStore((s) => s.setOverlay)
   const togglePlay = useEditorStore((s) => s.togglePlay)
   const setSelected = useEditorStore((s) => s.setSelected)
+
+  // Live-mic plumbing. The recognition instance persists across renders; the
+  // latched flag lives in a ref so the (stale-closured) onend handler can read
+  // the current state to decide whether to auto-restart.
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const listeningRef = useRef(false)
+  const stopMicRef = useRef<() => void>(() => {})
 
   const speechAvailable = getSpeechRecognition() !== null
   const hasContext = selectedId !== null
@@ -102,7 +125,7 @@ export function DirectorPod() {
     setRuntimeLogger(pushLog)
     const offPacket = socket.onPacket(enqueuePacket)
     const offAgentStatus = socket.onAgentStatus((msg) => {
-      if (msg.status === 'active') markAgentActive(msg.agent)
+      if (msg.status === 'active') markAgentActive(msg.agent, msg.note)
       else markAgentIdle(msg.agent)
     })
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
@@ -119,6 +142,7 @@ export function DirectorPod() {
       if (e.key === 'Escape') {
         setSelected(null)
         setMenuOpen(false)
+        stopMicRef.current() // drop the live mic on Escape
         return
       }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -140,6 +164,7 @@ export function DirectorPod() {
       setRuntimeLogger(() => {})
       window.clearInterval(placeholderTimer)
       window.removeEventListener('keydown', onKeyDown)
+      stopMicRef.current() // tear down any live mic on unmount
     }
   })
 
@@ -165,22 +190,71 @@ export function DirectorPod() {
     }
   }
 
-  const startListening = () => {
+  const stopMic = useCallback(() => {
+    listeningRef.current = false
+    setListening(false)
+    setInterim('')
+    const recognition = recognitionRef.current
+    recognitionRef.current = null
+    if (recognition) {
+      recognition.onresult = null
+      recognition.onend = null // detach before stop so it doesn't auto-restart
+      recognition.onerror = null
+      try {
+        recognition.stop()
+      } catch {
+        /* already stopped */
+      }
+    }
+  }, [])
+  stopMicRef.current = stopMic
+
+  const startMic = useCallback(() => {
     const Recognition = getSpeechRecognition()
-    if (!Recognition || listening) return
+    if (!Recognition || listeningRef.current) return
     const recognition = new Recognition()
     recognition.lang = 'en-US'
-    recognition.interimResults = false
+    recognition.continuous = true
+    recognition.interimResults = true
     recognition.maxAlternatives = 1
     recognition.onresult = (event) => {
-      const transcript = event.results[0]?.[0]?.transcript
-      if (transcript) submit(transcript)
+      let ghost = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        const transcript = result[0]?.transcript ?? ''
+        if (result.isFinal) submit(transcript)
+        else ghost += transcript
+      }
+      setInterim(ghost)
     }
-    recognition.onend = () => setListening(false)
-    recognition.onerror = () => setListening(false)
+    recognition.onerror = (event) => {
+      // A denied/unavailable mic is terminal; other errors let onend restart.
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        stopMic()
+      }
+    }
+    recognition.onend = () => {
+      // Browsers end the session periodically; restart while still latched.
+      if (listeningRef.current && recognitionRef.current === recognition) {
+        try {
+          recognition.start()
+        } catch {
+          stopMic()
+        }
+      }
+    }
+    recognitionRef.current = recognition
+    listeningRef.current = true
     setListening(true)
-    recognition.start()
-  }
+    setInterim('')
+    try {
+      recognition.start()
+    } catch {
+      stopMic()
+    }
+  }, [stopMic, submit])
+
+  const toggleMic = () => (listeningRef.current ? stopMic() : startMic())
 
   return (
     <div className="director-pod-anchor">
@@ -289,15 +363,16 @@ export function DirectorPod() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={listening ? 'listening…' : PLACEHOLDERS[placeholderIdx]}
+            placeholder={interim || (listening ? 'listening…' : PLACEHOLDERS[placeholderIdx])}
             className="flex-1 px-2 py-1.5 text-[10px] font-mono outline-none min-w-0"
           />
           {speechAvailable && (
             <button
               type="button"
-              onClick={startListening}
-              title="Voice direction"
-              className={`px-2 border-l-2 border-black ${listening ? 'bg-jsr-orange text-white' : 'bg-white hover:bg-black/5'}`}
+              onClick={toggleMic}
+              title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction'}
+              aria-pressed={listening}
+              className={`px-2 border-l-2 border-black ${listening ? 'bg-jsr-orange text-white animate-pulse' : 'bg-white hover:bg-black/5'}`}
             >
               <Mic size={12} />
             </button>

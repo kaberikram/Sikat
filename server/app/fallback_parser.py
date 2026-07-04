@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from . import session_context
 from .clause_handlers import parse_clause
 from .schema import Intent, SceneState
 
@@ -20,4 +21,9 @@ def parse(text: str, scene: SceneState | None = None) -> list[Intent]:
         intent = parse_clause(clause, scene)
         if intent is not None:
             intents.append(intent)
+            # Thread the resolved target across clauses so a later clause in the
+            # same command ("...then go back a bit") can resolve a pronoun or
+            # amendment before the whole exchange is committed to history.
+            session_context.note_target(intent.target)
+            session_context.note_transform(intent)
     return intents
