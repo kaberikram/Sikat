@@ -57,12 +57,22 @@ export function setupGizmo(
   transformControl.addEventListener('mouseUp', () => {
     controls.enabled = true
     const o = transformControl.object
-    if (!o) return
+    if (!o || !gizmoDragged) return
     const id = o.userData?.id as string | undefined
     if (!id) return
-    const t = useEditorStore.getState().currentTime
-    if (id === VIRTUAL_CAMERA_ID) useEditorStore.getState().snapshotCameraKeyframes(t)
-    else useEditorStore.getState().snapshotObjectKeyframes(id, t)
+    // Auto-keyframe on release ONLY while a take is rolling or when the
+    // entity is already animated. Baking keyframes on a plain drag makes the
+    // base pose dead — the entity looks "locked" to wherever the playhead
+    // interpolates it, and later base-pose writes (agent MOVE_CAMERA/
+    // TRANSFORM tweens, fov sliders) become invisible.
+    const st = useEditorStore.getState()
+    const t = st.currentTime
+    if (id === VIRTUAL_CAMERA_ID) {
+      if (st.isRolling || st.virtualCamera.keyframes.length > 0) st.snapshotCameraKeyframes(t)
+    } else {
+      const obj = st.objects.find((ob) => ob.id === id)
+      if (st.isRolling || (obj && obj.keyframes.length > 0)) st.snapshotObjectKeyframes(id, t)
+    }
   })
 
   return {

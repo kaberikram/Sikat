@@ -3,7 +3,7 @@
  * replacing it — e.g. "bounce while moving along the path you set".
  */
 import { interpolateKeyframes } from './keyframe-interpolation'
-import type { PresetKeyframes } from '../animation-presets'
+import type { PresetKeyframes } from './animation-presets'
 import { resolveMotionId, type MotionId, type MotionParams } from './motion-synth'
 
 export type Vec3 = [number, number, number]

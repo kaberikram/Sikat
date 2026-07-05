@@ -393,7 +393,12 @@ STAGE_RADIUS = 25.0
 
 
 def _default_virtual_camera_position() -> tuple[float, float, float]:
-    return (0.0, STAGE_RADIUS * 0.5, STAGE_RADIUS * 2.4)
+    # Mirrors defaultVirtualCameraPosition in src/store.ts.
+    return (0.0, STAGE_RADIUS * 0.16, STAGE_RADIUS * 0.64)
+
+
+# Mirrors DEFAULT_VIRTUAL_CAM_ROTATION in src/store.ts (slight downward pitch).
+_DEFAULT_VIRTUAL_CAM_ROTATION = (-0.2, 0.0, 0.0)
 
 
 def _default_key_light_position() -> tuple[float, float, float]:
@@ -402,12 +407,12 @@ def _default_key_light_position() -> tuple[float, float, float]:
 
 class VirtualCameraSnapshot(BaseModel):
     position: Vec3 = Field(default_factory=lambda: _default_virtual_camera_position())
-    rotation: Vec3 = (0.0, 0.0, 0.0)
+    rotation: Vec3 = _DEFAULT_VIRTUAL_CAM_ROTATION
     fov: float = 50.0
     sampled: SampledTransform = Field(
         default_factory=lambda: SampledTransform(
             position=_default_virtual_camera_position(),
-            rotation=(0.0, 0.0, 0.0),
+            rotation=_DEFAULT_VIRTUAL_CAM_ROTATION,
             scale=(1.0, 1.0, 1.0),
         )
     )
