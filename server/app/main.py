@@ -71,10 +71,18 @@ async def healthz() -> dict:
 
 
 async def _handle_user_command(msg: UserCommand) -> None:
+    received_at = time.monotonic()
+    first_packet_logged = False
+
     async def emit_log(agent: str, message: str, level: str = "info") -> None:
         await manager.broadcast(agent_log_message(agent, message, level, msg.commandId))
 
     async def emit_packet(packet) -> None:
+        nonlocal first_packet_logged
+        if not first_packet_logged:
+            first_packet_logged = True
+            elapsed = time.monotonic() - received_at
+            log.info("command %s: first packet in %.2fs (via %s)", msg.commandId, elapsed, packet.target_agent)
         await manager.broadcast(agent_command_message(packet))
 
     async def emit_status(

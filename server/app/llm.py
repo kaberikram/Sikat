@@ -6,11 +6,13 @@ import json
 import logging
 import os
 import re
+import time
+from typing import AsyncIterator
 
 from . import session_context
 from .performers import brief as performers_brief
 from .scene_context import format_scene_brief
-from .schema import IntentList, SceneFrame, SceneState
+from .schema import Intent, IntentList, SceneFrame, SceneState
 
 log = logging.getLogger("director.llm")
 
@@ -27,6 +29,16 @@ briefing below — it includes BASE transforms (editable values) and NOW
 Return JSON: {{"intents": [ {{...}}, ... ]}}
 Each intent has `action` plus only relevant fields. Multiple intents for
 compound instructions ("add X then dim lights" → 2 intents).
+
+## say (every intent, required)
+Every intent — mutating or describe — includes `say`: a ≤8 word, present-tense
+line in the voice of film-set radio chatter, read aloud on the crew's cursor
+the instant the intent completes (fills the parse-latency gap). Reference the
+SPECIFICS of this intent — the object, the motion, the numbers — never a
+generic verb like "animating" or "moving". Never repeat a phrasing you've
+already used this session (vary word choice, structure, energy each take).
+Examples: "taking the sphere up on a three-count", "warming the key, half
+stop", "box in, red, dead center", "cutting bloom, we're flat now".
 
 ## Actions
 | action | use when | key fields |
@@ -65,6 +77,11 @@ Directors may address Agent 1–4. Assignments persist across takes.
 - "Agent 1, you're on the sphere" → assign intent with addressee=1, target=sphere name
 - "Agent 1, go in, scale it up" → transform with addressee=1 (target filled from assignment)
 Use addressee (1–4) on mutating intents when the director names a performer.
+Each performer has a persona and recent-work memory (see PERFORMERS below) —
+when a numbered performer acts, honor their persona and recent work in both
+the motion choice and the `say` line. "Agent 2, again but bigger" means
+relative to AGENT 2's own last action (their `recent:` list), not the last
+action overall.
 
 ## describe action (important)
 Use `describe` when the director asks but does NOT command a change:
@@ -270,6 +287,31 @@ def get_deepseek_client():
     return OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
 
 
+def get_async_anthropic_client():
+    """Async Anthropic client for streaming, or None when key/SDK is missing."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        log.warning("anthropic package not installed; using fallback parser")
+        return None
+    return anthropic.AsyncAnthropic()
+
+
+def get_async_deepseek_client():
+    """Async DeepSeek client (OpenAI SDK against the DeepSeek base URL), or None."""
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        log.warning("openai package not installed; using fallback parser")
+        return None
+    return AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+
+
 def _history_section() -> str:
     hist = session_context.history()
     if not hist:
@@ -303,11 +345,11 @@ def _system_prompt(scene: SceneState | None) -> str:
 # mode, which needs the shape described in the prompt (no strict json_schema).
 _JSON_SCHEMA_HINT = """
 Respond with a single JSON object of exactly this shape:
-{"intents": [ {"action": "<one of the actions above>", ...only relevant fields...}, ... ]}
+{"intents": [ {"action": "<one of the actions above>", "say": "<in-character radio line>", ...only relevant fields...}, ... ]}
 Example for "add a red box then dim the lights":
 {"intents": [
-  {"action": "spawn", "primitive": "box", "color": "#ff3b30"},
-  {"action": "update_lights", "ambient_intensity": 0.3, "key_intensity": 0.7}
+  {"action": "spawn", "primitive": "box", "color": "#ff3b30", "say": "box in, red, dead center"},
+  {"action": "update_lights", "ambient_intensity": 0.3, "key_intensity": 0.7, "say": "warming the key, half stop"}
 ]}
 If nothing is actionable, respond with {"intents": []}. Output JSON only."""
 
@@ -436,8 +478,16 @@ async def parse_intents(
     if client is None:
         return None
     model = _model_for(provider)
+    started = time.monotonic()
     try:
-        return await asyncio.to_thread(parse_fn, client, model, text, scene, frame)
+        result = await asyncio.to_thread(parse_fn, client, model, text, scene, frame)
+        log.info(
+            "parse_intents via %s (%s) took %.2fs",
+            provider,
+            model,
+            time.monotonic() - started,
+        )
+        return result
     except ImportError:
         log.warning("LLM SDK not installed; using fallback parser")
         return None
@@ -450,3 +500,176 @@ async def parse_intents(
         else:
             log.exception("LLM intent parse failed; falling back to rule parser")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Streaming intents — token-by-token parse so packets ride out per-intent
+# instead of waiting for the whole response (Phase 3).
+# ---------------------------------------------------------------------------
+
+
+def extract_complete_intents(buffer: str, consumed: int) -> tuple[list[str], int]:
+    """Scan ``buffer`` for newly-completed top-level objects inside the
+    top-level ``"intents": [...]`` array.
+
+    Pure and idempotent: rescans from the start of the buffer every call (the
+    buffer is small — bounded by max_tokens) and returns only the raw JSON
+    slices whose closing brace lies beyond ``consumed``, plus the new consumed
+    offset. Tracks brace/bracket depth and in-string/escape state so nested
+    objects (e.g. ``track_keyframes`` entries) and braces inside string values
+    never get misread as array elements.
+    """
+    slices: list[str] = []
+    depth = 0
+    arr_depth: int | None = None
+    in_string = False
+    escape = False
+    obj_start_stack: list[int] = []
+    new_consumed = consumed
+
+    for i, ch in enumerate(buffer):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "[":
+            if arr_depth is None:
+                arr_depth = depth + 1
+            depth += 1
+            continue
+        if ch == "{":
+            if arr_depth is not None and depth == arr_depth:
+                obj_start_stack.append(i)
+            depth += 1
+            continue
+        if ch == "]":
+            depth -= 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if arr_depth is not None and depth == arr_depth and obj_start_stack:
+                start = obj_start_stack.pop()
+                end = i + 1
+                if end > consumed:
+                    slices.append(buffer[start:end])
+                    new_consumed = end
+            continue
+
+    return slices, new_consumed
+
+
+def _validate_intent_slice(raw: str) -> Intent | None:
+    try:
+        return Intent.model_validate_json(raw)
+    except Exception:
+        log.warning("skipping invalid streamed intent slice: %s", raw[:160])
+        return None
+
+
+async def _stream_anthropic(
+    model: str,
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None,
+) -> AsyncIterator[Intent]:
+    client = get_async_anthropic_client()
+    if client is None:
+        return
+    system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
+    buffer = ""
+    consumed = 0
+    async with client.messages.stream(
+        model=model,
+        max_tokens=2048,
+        system=system,
+        messages=[{"role": "user", "content": _build_user_content(text, frame)}],
+    ) as stream:
+        async for chunk in stream.text_stream:
+            buffer += chunk
+            slices, consumed = extract_complete_intents(buffer, consumed)
+            for raw in slices:
+                intent = _validate_intent_slice(raw)
+                if intent is not None:
+                    yield intent
+
+
+async def _stream_deepseek(
+    model: str,
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None,
+) -> AsyncIterator[Intent]:
+    if frame is not None:
+        log.warning("DeepSeek path does not support vision; skipping frame attachment")
+    client = get_async_deepseek_client()
+    if client is None:
+        return
+    system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
+    buffer = ""
+    consumed = 0
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": text},
+        ],
+        stream=True,
+    )
+    async for chunk in response:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content
+        if not delta:
+            continue
+        buffer += delta
+        slices, consumed = extract_complete_intents(buffer, consumed)
+        for raw in slices:
+            intent = _validate_intent_slice(raw)
+            if intent is not None:
+                yield intent
+
+
+async def stream_intents(
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None = None,
+) -> AsyncIterator[Intent]:
+    """Stream intents as the LLM completes each one, instead of waiting for the
+    full response. Callers should treat zero yielded intents (including on any
+    provider error, which is logged and swallowed here) as a signal to fall
+    back to :func:`parse_intents` / the rule parser exactly as before.
+    """
+    provider = select_provider(frame)
+    if provider is None:
+        return
+    model = _model_for(provider)
+    started = time.monotonic()
+    count = 0
+    try:
+        stream_fn = _stream_deepseek if provider == "deepseek" else _stream_anthropic
+        async for intent in stream_fn(model, text, scene, frame):
+            count += 1
+            yield intent
+    except ImportError:
+        log.warning("LLM SDK not installed; using fallback parser")
+        return
+    except Exception:
+        log.exception("stream_intents failed; falling back to rule parser")
+        return
+    finally:
+        log.info(
+            "stream_intents via %s (%s) yielded %d intent(s) in %.2fs",
+            provider,
+            model,
+            count,
+            time.monotonic() - started,
+        )

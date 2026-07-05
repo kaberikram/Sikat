@@ -11,6 +11,9 @@ Kanban-style (works with the Obsidian Kanban plugin — one list per heading).
 - [x] Agent layer: Producer routing, specialists, `llm.py` Anthropic path
 - [x] scene-state sync, telemetry pipeline, `mock_telemetry.py`, voice button
 - [x] Docs vault + README Director Mode section
+- [x] "Thinking crew" pass (visual affirmation, latency telemetry, streaming
+      LLM parse, in-character `say` chatter, per-performer memory, barge-in
+      v1) — see [[Roadmap]] for detail
 
 ## In progress
 
@@ -18,7 +21,8 @@ Kanban-style (works with the Obsidian Kanban plugin — one list per heading).
 
 ## Backlog (Scene-Aware Director)
 
-- [ ] Phase C — set radio verbal ACKs (`set-radio.ts`)
+- [x] ~~Phase C — set radio verbal ACKs (`set-radio.ts`)~~ superseded: removed
+      entirely, visual affirmation only (bled into the director's own mic input)
 - [ ] Phase B — viewfinder capture + vision triggers
 - [ ] Phase D — hold / action / cut
 - [x] Phase E — streaming partial intents

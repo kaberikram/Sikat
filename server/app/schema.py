@@ -580,6 +580,9 @@ class Intent(BaseModel):
     addressee: int | None = None
     role: str | None = None
     transition: Transition | None = None
+    say: str | None = None
+    """In-character film-set radio line for this intent (server-internal —
+    not part of the wire protocol; producer emits it as the cursor note)."""
     # spawn
     primitive: Primitive | None = None
     color: HexColor | None = None

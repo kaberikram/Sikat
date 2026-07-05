@@ -7,6 +7,7 @@
  */
 import { applyCommandPacket, resolveTarget } from './command-applier'
 import { packetTargetPosition } from './cursor-targets'
+import { markFirstApply } from './latency'
 import {
   presenceStore,
   stationFor,
@@ -73,6 +74,22 @@ function resolveObjectId(target: Target | null | undefined): string | null {
   return resolveTarget(target)?.id ?? null
 }
 
+/** Object id this packet addresses, for barge-in supersede matching. Only
+ *  commands with a resolvable object target participate — scene-global
+ *  commands (spawn, camera, lights, fx, playback) never supersede. */
+function packetSupersedeTargetId(packet: CommandPacket): string | null {
+  switch (packet.command) {
+    case 'TRANSFORM_OBJECT':
+    case 'ANIMATE_OBJECT':
+    case 'SET_MATERIAL':
+      return resolveObjectId(packet.payload.target)
+    case 'SET_KEYFRAMES':
+      return resolveObjectId(packet.payload.target ?? null)
+    default:
+      return null
+  }
+}
+
 /** Object id the agent should track after this packet commits. */
 function followObjectIdForPacket(packet: CommandPacket): string | null {
   switch (packet.command) {
@@ -100,6 +117,26 @@ export function enqueuePacket(packet: CommandPacket): void {
   const agent = packet.target_agent
   pendingIdle.delete(agent)
   const queue = queues.get(agent) ?? []
+
+  // Barge-in v1: a newer command for the same object + command type
+  // supersedes any not-yet-applied packet still waiting in this agent's
+  // queue, so a fresh correction doesn't wait behind stale queued work. The
+  // in-flight packet (already shifted off the queue) is unaffected — its
+  // flight/work sleep still plays out (≤ ~600ms).
+  const targetId = packetSupersedeTargetId(packet)
+  if (targetId) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const queued = queue[i]
+      if (
+        queued.command === packet.command &&
+        queued.commandId !== packet.commandId &&
+        packetSupersedeTargetId(queued) === targetId
+      ) {
+        queue.splice(i, 1)
+      }
+    }
+  }
+
   queue.push(packet)
   queues.set(agent, queue)
   presenceStore.getState().setActive(agent, true)
@@ -151,7 +188,11 @@ async function runAgent(agent: string): Promise<void> {
   while (queue.length > 0) {
     const packet = queue.shift()!
     presence.followObject(agent, null)
-    presence.setNote(agent, noteForPacket(packet))
+    // Prefer the server-sent in-character line (set via agent_status's note,
+    // which rides in ahead of the packets it applies to) over the generic
+    // per-packet fallback derived from the command shape.
+    const serverNote = presence.agents[agent]?.note
+    presence.setNote(agent, serverNote ?? noteForPacket(packet))
 
     const target = packetTargetPosition(packet)
     const flightMs = flightDurationTo(agent, target)
@@ -164,6 +205,8 @@ async function runAgent(agent: string): Promise<void> {
     try {
       const result = applyCommandPacket(packet)
       logger(agent, `${packet.command}: ${result}`, 'info')
+      const applyElapsed = markFirstApply(packet.commandId)
+      if (applyElapsed != null) logger('SYSTEM', `⏱ first apply ${applyElapsed.toFixed(2)}s`, 'info')
       const followId = followObjectIdForPacket(packet)
       if (followId) {
         presence.followObject(agent, followId)

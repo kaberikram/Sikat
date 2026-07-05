@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react'
-import { Mic, Plus, Volume2, VolumeX, X } from 'lucide-react'
+import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
 import { startSceneStateSync } from './scene-state-sync'
@@ -10,7 +10,7 @@ import {
   setRuntimeLogger,
 } from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
-import { isRadioEnabled, setRadioEnabled, speakAck } from './set-radio'
+import { markCommandSent, markFirstPacket } from './latency'
 import { startTakeRecorder } from './take-recorder'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
@@ -41,6 +41,16 @@ const PLACEHOLDERS = [
   'move the box up 2 over 3 seconds',
   'show timeline',
 ]
+
+// Instant pre-parse Producer note — rotates so back-to-back commands don't
+// all flash the same word before the real per-packet note takes over.
+const INSTANT_NOTES = ['copy', 'on it', 'hearing you', 'rolling on that']
+let instantNoteIdx = 0
+function nextInstantNote(): string {
+  const note = INSTANT_NOTES[instantNoteIdx % INSTANT_NOTES.length]
+  instantNoteIdx += 1
+  return note
+}
 
 interface SpeechAlternativeLike {
   transcript: string
@@ -94,7 +104,6 @@ export function DirectorPod() {
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
-  const [radioOn, setRadioOn] = useState(() => isRadioEnabled())
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -132,11 +141,14 @@ export function DirectorPod() {
     // Packets no longer apply on arrival — the agent runtime queues them and
     // paces each apply behind its cursor's flight, logging as it commits.
     setRuntimeLogger(pushLog)
-    const offPacket = socket.onPacket(enqueuePacket)
+    const offPacket = socket.onPacket((packet) => {
+      const elapsed = markFirstPacket(packet.commandId)
+      if (elapsed != null) pushLog('SYSTEM', `⏱ first packet ${elapsed.toFixed(2)}s`)
+      enqueuePacket(packet)
+    })
     const offAgentStatus = socket.onAgentStatus((msg) => {
       if (msg.status === 'active') {
         markAgentActive(msg.agent, msg.note)
-        speakAck(msg.agent, msg.note ?? undefined, msg.forCommandId)
       } else markAgentIdle(msg.agent)
     })
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
@@ -185,14 +197,6 @@ export function DirectorPod() {
     }
   })
 
-  const toggleRadio = useCallback(() => {
-    setRadioOn((prev) => {
-      const next = !prev
-      setRadioEnabled(next)
-      return next
-    })
-  }, [])
-
   const submit = useCallback(async (text: string, opts?: { forceVision?: boolean }) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -208,8 +212,8 @@ export function DirectorPod() {
     const socket = getDirectorSocket()
     const commandId = crypto.randomUUID()
     // Instant set reaction — don't wait for LLM parse or network round-trip.
-    markAgentActive('Producer', 'copy')
-    speakAck('Producer', 'copy', commandId)
+    markAgentActive('Producer', nextInstantNote())
+    markCommandSent(commandId)
 
     const sent = await socket.sendUserCommand(trimmed, { ...opts, commandId })
     if (sent) {
@@ -370,15 +374,6 @@ export function DirectorPod() {
             title={status}
           />
           <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
-          <button
-            type="button"
-            onClick={toggleRadio}
-            title={radioOn ? 'Mute set radio' : 'Unmute set radio'}
-            aria-pressed={!radioOn}
-            className={`p-0.5 shrink-0 ${radioOn ? 'opacity-80 hover:opacity-100' : 'text-jsr-orange'}`}
-          >
-            {radioOn ? <Volume2 size={12} /> : <VolumeX size={12} />}
-          </button>
           <span className="opacity-60 uppercase">{status}</span>
         </div>
 

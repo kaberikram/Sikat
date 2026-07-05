@@ -5,7 +5,7 @@ import asyncio
 
 from app import llm
 from app.agents.producer import Producer
-from app.schema import Intent, IntentList
+from app.schema import Intent
 
 
 async def _collect(producer: Producer, text: str, scene):
@@ -47,17 +47,13 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     gate = asyncio.Event()
     released = asyncio.Event()
 
-    async def slow_parse(text, scene, frame=None):
+    async def slow_stream(text, scene, frame=None):
         gate.set()
         await released.wait()
-        return IntentList(
-            intents=[
-                Intent(action="spawn", primitive="box", color="#ff3b30"),
-                Intent(action="update_fx", section="bloom", fx_enabled=True),
-            ]
-        )
+        yield Intent(action="spawn", primitive="box", color="#ff3b30")
+        yield Intent(action="update_fx", section="bloom", fx_enabled=True)
 
-    monkeypatch.setattr(llm, "parse_intents", slow_parse)
+    monkeypatch.setattr(llm, "stream_intents", slow_stream)
     producer = Producer()
 
     packets: list = []
