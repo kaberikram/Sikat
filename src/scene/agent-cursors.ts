@@ -173,6 +173,7 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   })
 
   const pulse = (phase: CursorPhase | undefined, now: number): number => {
+    if (phase === 'intent') return 1 + 0.06 * Math.sin(now / 55)
     if (phase === 'working') return 1 + 0.09 * Math.sin(now / 70)
     if (phase === 'settling') return 1.04
     return 1
@@ -206,7 +207,8 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
         }
         const durationMs = p.moveDurationMs > 0 ? p.moveDurationMs : 1
         const elapsed = p.moveStartedAt > 0 ? now - p.moveStartedAt : durationMs
-        const alpha = flightEase(Math.min(1, Math.max(0, elapsed / durationMs)))
+        const ease = p.phase === 'intent' ? getEaseFn('easeOut') : flightEase
+        const alpha = ease(Math.min(1, Math.max(0, elapsed / durationMs)))
         cursor.base.set(
           cursor.from.x + (p.target[0] - cursor.from.x) * alpha,
           cursor.from.y + (p.target[1] - cursor.from.y) * alpha,

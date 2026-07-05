@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 from .. import fallback_parser, llm, performers, session_context
-from ..creative_parse import defer_clause_to_llm
+from ..creative_parse import defer_clause_to_llm, needs_llm_refinement, should_coarse_emit
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..motion_variation import enrich_motion_params
@@ -16,14 +16,17 @@ from ..schema import (
     PlaybackPayload,
     SceneFrame,
     SceneState,
+    intent_preview_message,
 )
 from .asset_animator import AssetAnimator
 from .base import (
     EmitLog,
     EmitPacket,
+    EmitPreview,
     EmitStatus,
     _noop_emit,
     _noop_packet,
+    _noop_preview,
     _noop_status,
 )
 from .directors_assistant import DirectorsAssistant
@@ -362,11 +365,38 @@ class Producer:
         emit_packet: EmitPacket,
         emit_status: EmitStatus,
         frame: SceneFrame | None,
+        emit_preview: EmitPreview = _noop_preview,
     ) -> tuple[list[CommandPacket], bool]:
         llm_feed_task: asyncio.Task | None = None
         llm_queue: asyncio.Queue | None = None
+        partial_seen: set[tuple[tuple[str, str | int], ...]] = set()
+
+        async def on_llm_partial(fields: dict[str, str | int]) -> None:
+            key = tuple(sorted(fields.items()))
+            if key in partial_seen:
+                return
+            partial_seen.add(key)
+            addressee = fields.get("addressee")
+            agent = f"Agent{addressee}" if isinstance(addressee, int) else "AssetAnimator"
+            note = str(fields.get("say") or fields.get("motion") or "working on it")[:80]
+            target = str(fields["target"]) if fields.get("target") else None
+            action = str(fields["action"]) if fields.get("action") else None
+            motion = str(fields["motion"]) if fields.get("motion") else None
+            if command_id:
+                await emit_preview(
+                    intent_preview_message(
+                        command_id,
+                        agent,
+                        note,
+                        target=target,
+                        action=action,
+                        motion=motion,
+                        confidence="llm_partial",
+                    )
+                )
+
         if llm.select_provider(frame) is not None:
-            llm_agen = llm.stream_intents(text, scene, frame)
+            llm_agen = llm.stream_intents(text, scene, frame, on_partial=on_llm_partial)
             llm_queue = asyncio.Queue()
             llm_feed_task = asyncio.create_task(_drain_llm_stream(llm_agen, llm_queue))
             await emit_log(
@@ -376,14 +406,24 @@ class Producer:
             )
 
         handled: list[bool] = []
+        coarse_clause_indices: set[int] = set()
         all_intents: list[Intent] = []
         all_packets: list[CommandPacket] = []
         describe_only = True
 
         llm_available = llm.select_provider(frame) is not None
         deferred = False
-        for clause in clauses:
+        for idx, clause in enumerate(clauses):
             raw_intent = parse_one_clause(clause, scene)
+            llm_refine = needs_llm_refinement(
+                clause, raw_intent, llm_available=llm_available
+            )
+            coarse = (
+                raw_intent is not None
+                and should_coarse_emit(raw_intent)
+                and llm_refine
+            )
+
             if raw_intent is not None and defer_clause_to_llm(
                 clause, raw_intent, llm_available=llm_available
             ):
@@ -394,9 +434,37 @@ class Producer:
                     f"{reason}: {clause[:72]}{'…' if len(clause) > 72 else ''}",
                     "info",
                 )
-                intent = None
-            else:
-                intent = raw_intent
+                handled.append(False)
+                continue
+
+            if coarse and raw_intent is not None:
+                coarse_clause_indices.add(idx)
+                deferred = True
+                all_intents.append(raw_intent)
+                if raw_intent.action == "describe":
+                    await self._emit_describe(raw_intent, emit_log)
+                    handled.append(False)
+                    continue
+                describe_only = False
+                built = await self._build_packets_for_intent(
+                    raw_intent, emit_log, emit_status, command_id, scene
+                )
+                for packet in built:
+                    packet.commandId = command_id
+                    packet.refinement = False
+                all_packets.extend(built)
+                await self._stream_packets_staged(
+                    built, command_id, emit_log, emit_packet, emit_status, note=raw_intent.say
+                )
+                await emit_log(
+                    self.assistant.name,
+                    f"coarse emit: {clause[:48]}{'…' if len(clause) > 48 else ''}",
+                    "info",
+                )
+                handled.append(False)
+                continue
+
+            intent = raw_intent
             handled.append(intent is not None)
             if intent is None:
                 continue
@@ -431,6 +499,7 @@ class Producer:
                     if intent is _LLM_STREAM_DONE:
                         break
                     skip = index < len(handled) and handled[index]
+                    is_refinement = index in coarse_clause_indices
                     index += 1
                     if skip:
                         continue
@@ -445,9 +514,17 @@ class Producer:
                     )
                     for packet in built:
                         packet.commandId = command_id
+                        if is_refinement:
+                            packet.refinement = True
+                            packet.priorCommandId = command_id
                     all_packets.extend(built)
                     await self._stream_packets_staged(
-                        built, command_id, emit_log, emit_packet, emit_status, note=intent.say
+                        built,
+                        command_id,
+                        emit_log,
+                        emit_packet,
+                        emit_status,
+                        note=intent.say,
                     )
                 await llm_feed_task
         else:
@@ -503,6 +580,7 @@ class Producer:
         emit_packet: EmitPacket = _noop_packet,
         emit_status: EmitStatus = _noop_status,
         frame: SceneFrame | None = None,
+        emit_preview: EmitPreview = _noop_preview,
     ) -> tuple[list[CommandPacket], bool]:
         """Staged execution: plan the crew's work, then stream it over time.
 
@@ -522,4 +600,5 @@ class Producer:
             emit_packet,
             emit_status,
             frame,
+            emit_preview,
         )

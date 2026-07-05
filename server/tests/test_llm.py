@@ -43,8 +43,8 @@ class _FakeDeepSeek:
         ({}, None),
         ({"ANTHROPIC_API_KEY": "a"}, "anthropic"),
         ({"DEEPSEEK_API_KEY": "d"}, "deepseek"),
-        # Text-only hybrid: DeepSeek when both keys are present.
-        ({"DEEPSEEK_API_KEY": "d", "ANTHROPIC_API_KEY": "a"}, "deepseek"),
+        # Quality tier: Anthropic for text when both keys are present.
+        ({"DEEPSEEK_API_KEY": "d", "ANTHROPIC_API_KEY": "a"}, "anthropic"),
         # Explicit override beats key presence (text-only).
         ({"DIRECTOR_LLM_PROVIDER": "anthropic", "DEEPSEEK_API_KEY": "d"}, "anthropic"),
         ({"DIRECTOR_LLM_PROVIDER": "none", "DEEPSEEK_API_KEY": "d"}, None),

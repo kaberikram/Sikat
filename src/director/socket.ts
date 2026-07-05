@@ -7,6 +7,7 @@ import {
   type CommandPacket,
   type AgentLogMessage,
   type AgentStatusMessage,
+  type IntentPreviewMessage,
   type ErrorMessage,
   type SceneSnapshot,
   parseServerMessage,
@@ -36,6 +37,7 @@ export class DirectorSocket {
   private packetListeners = new Set<Listener<CommandPacket>>()
   private logListeners = new Set<Listener<AgentLogMessage>>()
   private agentStatusListeners = new Set<Listener<AgentStatusMessage>>()
+  private intentPreviewListeners = new Set<Listener<IntentPreviewMessage>>()
   private errorListeners = new Set<Listener<ErrorMessage>>()
   private statusListeners = new Set<Listener<SocketStatus>>()
   private openListeners = new Set<() => void>()
@@ -69,6 +71,8 @@ export class DirectorSocket {
       else if (msg.type === 'agent_log') for (const cb of this.logListeners) cb(msg)
       else if (msg.type === 'agent_status')
         for (const cb of this.agentStatusListeners) cb(msg)
+      else if (msg.type === 'intent_preview')
+        for (const cb of this.intentPreviewListeners) cb(msg)
       else for (const cb of this.errorListeners) cb(msg)
     }
     this.ws.onclose = () => {
@@ -145,6 +149,11 @@ export class DirectorSocket {
   onAgentStatus(cb: Listener<AgentStatusMessage>): () => void {
     this.agentStatusListeners.add(cb)
     return () => this.agentStatusListeners.delete(cb)
+  }
+
+  onIntentPreview(cb: Listener<IntentPreviewMessage>): () => void {
+    this.intentPreviewListeners.add(cb)
+    return () => this.intentPreviewListeners.delete(cb)
   }
 
   onError(cb: Listener<ErrorMessage>): () => void {

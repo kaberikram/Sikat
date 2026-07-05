@@ -7,16 +7,18 @@
  */
 import { applyCommandPacket, resolveTarget } from './command-applier'
 import { packetTargetPosition } from './cursor-targets'
-import { markFirstApply } from './latency'
+import { guessIntent, type IntentGuess } from './intent-guess'
+import { markFirstApply, markFirstCursorMove, markFirstPreview, markFirstRefinement } from './latency'
 import {
   presenceStore,
   stationFor,
   CURSOR_FLIGHT_MS,
+  CURSOR_INTENT_MS,
   CURSOR_WORK_MS,
   CURSOR_SETTLE_MS,
 } from './presence'
 import { useEditorStore } from '../store'
-import type { CommandPacket, Target } from './protocol'
+import type { CommandPacket, IntentPreviewMessage, Target, Vec3 } from './protocol'
 
 type LogLevel = 'info' | 'warn' | 'error'
 type Logger = (agent: string, text: string, level: LogLevel) => void
@@ -51,7 +53,7 @@ function noteForPacket(packet: CommandPacket): string {
     case 'TRANSFORM_OBJECT':
       return 'moving'
     case 'ANIMATE_OBJECT':
-      return `${packet.payload.preset}`
+      return `${packet.payload.motion ?? packet.payload.preset ?? 'animating'}`
     case 'MOVE_CAMERA':
       return 'framing'
     case 'UPDATE_LIGHTS':
@@ -149,6 +151,45 @@ export function markAgentActive(agent: string, note?: string | null): void {
   if (note != null) presence.setNote(agent, note)
 }
 
+function targetPositionForGuess(guess: IntentGuess): Vec3 {
+  if (guess.targetPosition) return guess.targetPosition
+  if (guess.targetObjectId) {
+    const obj = useEditorStore.getState().objects.find((o) => o.id === guess.targetObjectId)
+    if (obj) return obj.position
+  }
+  if (guess.targetName) {
+    const obj = resolveTarget({ name: guess.targetName })
+    if (obj) return obj.position
+  }
+  return stationFor(guess.agent)
+}
+
+/** Instant client-side reaction before server parse (Phase F1). */
+export function applyClientIntentGuess(text: string, commandId?: string | null): void {
+  const guess = guessIntent(text)
+  if (!guess) return
+  markFirstCursorMove(commandId)
+  const presence = presenceStore.getState()
+  presence.setActive(guess.agent, true)
+  presence.setNote(guess.agent, guess.note)
+  presence.flyTo(guess.agent, targetPositionForGuess(guess), 'intent', CURSOR_INTENT_MS)
+}
+
+/** Authoritative server preview — supersedes client guess (Phase F2). */
+export function applyIntentPreview(msg: IntentPreviewMessage): void {
+  markFirstPreview(msg.commandId)
+  const presence = presenceStore.getState()
+  presence.setActive(msg.agent, true)
+  presence.setNote(msg.agent, msg.note)
+  let target: Vec3 = stationFor(msg.agent)
+  if (msg.target) {
+    const obj = resolveTarget({ name: msg.target })
+    if (obj) target = obj.position
+  }
+  markFirstCursorMove(msg.commandId)
+  presence.flyTo(msg.agent, target, 'intent', CURSOR_INTENT_MS)
+}
+
 export function markAgentIdle(agent: string): void {
   const queued = queues.get(agent)?.length ?? 0
   if (!running.has(agent) && queued === 0) {
@@ -187,33 +228,60 @@ async function runAgent(agent: string): Promise<void> {
 
   while (queue.length > 0) {
     const packet = queue.shift()!
-    presence.followObject(agent, null)
-    // Prefer the server-sent in-character line (set via agent_status's note,
-    // which rides in ahead of the packets it applies to) over the generic
-    // per-packet fallback derived from the command shape.
     const serverNote = presence.agents[agent]?.note
     presence.setNote(agent, serverNote ?? noteForPacket(packet))
 
+    if (packet.refinement) {
+      try {
+        const result = applyCommandPacket(packet)
+        logger(agent, `${packet.command} (refine): ${result}`, 'info')
+        const refineElapsed = markFirstRefinement(packet.commandId)
+        if (refineElapsed != null) logger('SYSTEM', `⏱ first refine ${refineElapsed.toFixed(2)}s`, 'info')
+        const followId = followObjectIdForPacket(packet)
+        if (followId) {
+          presence.followObject(agent, followId)
+          presence.setPhase(agent, 'working')
+        }
+      } catch (e) {
+        logger(agent, `${packet.command} refine failed: ${e instanceof Error ? e.message : e}`, 'error')
+      }
+      continue
+    }
+
+    presence.followObject(agent, null)
     const target = packetTargetPosition(packet)
     const flightMs = flightDurationTo(agent, target)
+    const hotApply =
+      packet.command === 'ANIMATE_OBJECT' || packet.command === 'TRANSFORM_OBJECT'
+
     presence.flyTo(agent, target, 'flying', flightMs)
-    await sleep(flightMs)
 
-    presence.setPhase(agent, 'working')
-    await sleep(CURSOR_WORK_MS)
-
-    try {
-      const result = applyCommandPacket(packet)
-      logger(agent, `${packet.command}: ${result}`, 'info')
-      const applyElapsed = markFirstApply(packet.commandId)
-      if (applyElapsed != null) logger('SYSTEM', `⏱ first apply ${applyElapsed.toFixed(2)}s`, 'info')
-      const followId = followObjectIdForPacket(packet)
-      if (followId) {
-        presence.followObject(agent, followId)
-        presence.setPhase(agent, 'working')
+    const applyPacket = () => {
+      try {
+        const result = applyCommandPacket(packet)
+        logger(agent, `${packet.command}: ${result}`, 'info')
+        const applyElapsed = markFirstApply(packet.commandId)
+        if (applyElapsed != null) logger('SYSTEM', `⏱ first apply ${applyElapsed.toFixed(2)}s`, 'info')
+        const followId = followObjectIdForPacket(packet)
+        if (followId) {
+          presence.followObject(agent, followId)
+          presence.setPhase(agent, 'working')
+        }
+      } catch (e) {
+        logger(agent, `${packet.command} failed: ${e instanceof Error ? e.message : e}`, 'error')
       }
-    } catch (e) {
-      logger(agent, `${packet.command} failed: ${e instanceof Error ? e.message : e}`, 'error')
+    }
+
+    if (hotApply) {
+      const halfFlight = Math.max(60, Math.floor(flightMs / 2))
+      await sleep(halfFlight)
+      applyPacket()
+      await sleep(Math.max(0, flightMs - halfFlight))
+    } else {
+      await sleep(flightMs)
+      presence.setPhase(agent, 'working')
+      await sleep(CURSOR_WORK_MS)
+      applyPacket()
     }
 
     presence.setPhase(agent, 'settling')

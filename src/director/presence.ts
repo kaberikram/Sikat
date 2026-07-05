@@ -15,10 +15,11 @@ import type { Vec3 } from './protocol'
 /** Choreography timings, shared so the runtime's paced apply and the scene's
  *  flight easing agree to the millisecond. */
 export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the target
+export const CURSOR_INTENT_MS = 200 // fast drift during pre-parse acknowledgment
 export const CURSOR_WORK_MS = 120 // hover on target before the change commits
 export const CURSOR_SETTLE_MS = 140 // linger after committing before the next task
 
-export type CursorPhase = 'idle' | 'flying' | 'working' | 'settling'
+export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling'
 
 export interface AgentMeta {
   /** Cursor tint + label background. */

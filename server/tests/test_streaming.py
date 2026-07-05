@@ -47,7 +47,7 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     gate = asyncio.Event()
     released = asyncio.Event()
 
-    async def slow_stream(text, scene, frame=None):
+    async def slow_stream(text, scene, frame=None, on_partial=None):
         gate.set()
         await released.wait()
         yield Intent(action="spawn", primitive="box", color="#ff3b30")

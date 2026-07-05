@@ -12,41 +12,44 @@ uv run uvicorn app.main:app --port 8000
 ```
 
 Optional LLM parsing (falls back to the deterministic rule grammar without it).
-Two providers are supported with **hybrid auto-routing** when both keys are set.
+Two providers are supported with **quality-tier routing** when both keys are set.
 
 **Recommended:** copy `.env.example` → `.env` in this folder and paste your keys.
 `.env` is gitignored; only `.env.example` is tracked.
 
 ```sh
 cp .env.example .env
-# edit .env — add DEEPSEEK_API_KEY=sk-...
+# edit .env — add ANTHROPIC_API_KEY=sk-ant-...
 uv run uvicorn app.main:app --port 8000
 ```
 
 Or pass keys inline (same vars, no file):
 
 ```sh
-# Recommended: both keys — DeepSeek for text, Anthropic for viewfinder vision
-DEEPSEEK_API_KEY=sk-... ANTHROPIC_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
+# Recommended: Anthropic for choreo refine + vision
+ANTHROPIC_API_KEY=sk-ant-... uv run uvicorn app.main:app --port 8000
 
-# DeepSeek only (text commands; vision triggers fall back to rule grammar)
+# Both keys — Anthropic wins for LLM parse/stream; DeepSeek unused unless forced
+DEEPSEEK_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-... uv run uvicorn app.main:app --port 8000
+
+# DeepSeek only (text commands; weaker choreo; vision → fallback grammar)
 DEEPSEEK_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
-
-# Anthropic only (text + vision)
-ANTHROPIC_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
 ```
 
-Model overrides: `DIRECTOR_MODEL=deepseek-v4-pro` or `DIRECTOR_MODEL=claude-sonnet-5`
+Model overrides:
+- `DIRECTOR_QUALITY_MODEL=claude-sonnet-5` — animate/choreo refine (default)
+- `DIRECTOR_FAST_MODEL=deepseek-v4-flash` — reserved for future fast helpers
+- `DIRECTOR_MODEL=...` — legacy override for whichever provider is selected
 
 Provider resolution:
 
 | variable | effect |
 |---|---|
-| `DIRECTOR_LLM_PROVIDER` | force `deepseek` \| `anthropic` \| `none` (skip the LLM) |
-| both keys, no override | DeepSeek for text-only; Anthropic when a viewfinder JPEG is attached |
-| `DEEPSEEK_API_KEY` only | DeepSeek for text; vision → fallback grammar |
+| `DIRECTOR_LLM_PROVIDER` | force `anthropic` \| `deepseek` \| `none` (skip the LLM) |
+| both keys, no override | **Anthropic** for text parse/stream + vision; DeepSeek not used |
 | `ANTHROPIC_API_KEY` only | Anthropic for text and vision |
-| `DIRECTOR_MODEL` | model override for the selected provider |
+| `DEEPSEEK_API_KEY` only | DeepSeek for text; vision → fallback grammar |
+| `DIRECTOR_QUALITY_MODEL` | Anthropic model id (use non-reasoning Sonnet, not `*-max`) |
 
 With no key (or `DIRECTOR_LLM_PROVIDER=none`) the rule grammar runs the show.
 Any LLM error or invalid JSON also degrades to the rule grammar.

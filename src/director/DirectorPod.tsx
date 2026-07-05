@@ -7,10 +7,12 @@ import {
   enqueuePacket,
   markAgentActive,
   markAgentIdle,
+  applyClientIntentGuess,
+  applyIntentPreview,
   setRuntimeLogger,
 } from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
-import { markCommandSent, markFirstPacket } from './latency'
+import { markCommandSent, markFirstPacket, formatLatencySummary } from './latency'
 import { startTakeRecorder } from './take-recorder'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
@@ -145,6 +147,11 @@ export function DirectorPod() {
       const elapsed = markFirstPacket(packet.commandId)
       if (elapsed != null) pushLog('SYSTEM', `⏱ first packet ${elapsed.toFixed(2)}s`)
       enqueuePacket(packet)
+      const summary = formatLatencySummary(packet.commandId)
+      if (summary) pushLog('SYSTEM', summary)
+    })
+    const offIntentPreview = socket.onIntentPreview((msg) => {
+      applyIntentPreview(msg)
     })
     const offAgentStatus = socket.onAgentStatus((msg) => {
       if (msg.status === 'active') {
@@ -186,6 +193,7 @@ export function DirectorPod() {
     return () => {
       offStatus()
       offPacket()
+      offIntentPreview()
       offAgentStatus()
       offLog()
       offError()
@@ -213,6 +221,7 @@ export function DirectorPod() {
     const commandId = crypto.randomUUID()
     // Instant set reaction — don't wait for LLM parse or network round-trip.
     markAgentActive('Producer', nextInstantNote())
+    applyClientIntentGuess(trimmed, commandId)
     markCommandSent(commandId)
 
     const sent = await socket.sendUserCommand(trimmed, { ...opts, commandId })
@@ -263,6 +272,7 @@ export function DirectorPod() {
         else ghost += transcript
       }
       setInterim(ghost)
+      if (ghost.trim()) applyClientIntentGuess(ghost)
     }
     recognition.onerror = (event) => {
       // A denied/unavailable mic is terminal; other errors let onend restart.

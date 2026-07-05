@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from . import scene_state
 from .agents.producer import Producer
+from .intent_preview import build_intent_preview
 from .schema import (
     MoveCameraPacket,
     MoveCameraPayload,
@@ -74,6 +75,19 @@ async def _handle_user_command(msg: UserCommand) -> None:
     received_at = time.monotonic()
     first_packet_logged = False
 
+    scene = msg.scene or scene_state.latest()
+    if msg.commandId:
+        preview = build_intent_preview(msg.text, scene, msg.commandId)
+        if preview:
+            preview["timestamp"] = time.time()
+            await manager.broadcast(preview)
+            log.info(
+                "command %s: intent preview in %.0fms (%s)",
+                msg.commandId,
+                (time.monotonic() - received_at) * 1000,
+                preview.get("agent"),
+            )
+
     async def emit_log(agent: str, message: str, level: str = "info") -> None:
         await manager.broadcast(agent_log_message(agent, message, level, msg.commandId))
 
@@ -90,15 +104,19 @@ async def _handle_user_command(msg: UserCommand) -> None:
     ) -> None:
         await manager.broadcast(agent_status_message(agent, status, command_id, note))
 
+    async def emit_preview(payload: dict) -> None:
+        await manager.broadcast(payload)
+
     try:
         packets, describe_only = await producer.direct(
             msg.text,
-            msg.scene or scene_state.latest(),
+            scene,
             msg.commandId,
             emit_log,
             emit_packet,
             emit_status,
             frame=msg.frame,
+            emit_preview=emit_preview,
         )
         if not packets and not describe_only:
             await manager.broadcast(

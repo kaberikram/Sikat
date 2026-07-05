@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable
 
 from . import session_context
 from .performers import brief as performers_brief
@@ -17,7 +17,9 @@ from .schema import Intent, IntentList, SceneFrame, SceneState
 log = logging.getLogger("director.llm")
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5"
+"""Non-reasoning Sonnet — choreo/refine tier. Avoid *-max / extended-thinking IDs."""
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+"""Fast tier — reserved for optional future preview helpers; not used for animate refine."""
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 SYSTEM_PROMPT_TEMPLATE = """You are the Director's Assistant on a virtual film set (RADIO_EDIT.EXE).
@@ -216,11 +218,14 @@ SCENE BRIEFING:
 
 
 def select_provider(frame: SceneFrame | None = None) -> str | None:
-    """Resolve LLM provider, or None for the rule-grammar fallback.
+    """Resolve LLM provider for parse/stream (quality tier), or None for grammar-only.
 
     Hybrid auto-selection when both keys are present:
     - **Vision** (``frame`` set) → Anthropic (DeepSeek API is text-only)
-    - **Text-only** → DeepSeek when available, else Anthropic
+    - **Text-only** → Anthropic when available (animate/choreo refine), else DeepSeek
+
+    Phase G routing: Sonnet choreographs; DeepSeek Flash is not used for full
+    intent parse when an Anthropic key exists — preview/coarse paths are grammar.
 
     ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) overrides text-only routing.
     Vision requests still prefer Anthropic unless the key is missing.
@@ -250,16 +255,24 @@ def select_provider(frame: SceneFrame | None = None) -> str | None:
         log.warning("vision frame attached but ANTHROPIC_API_KEY not set")
         return None
 
-    if os.environ.get("DEEPSEEK_API_KEY"):
-        return "deepseek"
+    # Quality tier: prefer Anthropic for choreo / structured intent parse.
     if os.environ.get("ANTHROPIC_API_KEY"):
         return "anthropic"
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "deepseek"
     return None
 
 
 def _model_for(provider: str) -> str:
-    default = DEEPSEEK_DEFAULT_MODEL if provider == "deepseek" else ANTHROPIC_DEFAULT_MODEL
-    return os.environ.get("DIRECTOR_MODEL", default)
+    if provider == "deepseek":
+        return os.environ.get(
+            "DIRECTOR_FAST_MODEL",
+            os.environ.get("DIRECTOR_MODEL", DEEPSEEK_DEFAULT_MODEL),
+        )
+    return os.environ.get(
+        "DIRECTOR_QUALITY_MODEL",
+        os.environ.get("DIRECTOR_MODEL", ANTHROPIC_DEFAULT_MODEL),
+    )
 
 
 def get_anthropic_client():
@@ -573,11 +586,27 @@ def _validate_intent_slice(raw: str) -> Intent | None:
         return None
 
 
+def extract_partial_preview_fields(buffer: str) -> dict[str, str | int] | None:
+    """Scan streaming JSON for early intent fields before the object closes."""
+    fields: dict[str, str | int] = {}
+    for key in ("target", "action", "motion", "say"):
+        match = re.search(rf'"{key}"\s*:\s*"([^"]*)"', buffer)
+        if match and match.group(1):
+            fields[key] = match.group(1)
+    addressee = re.search(r'"addressee"\s*:\s*(\d+)', buffer)
+    if addressee:
+        fields["addressee"] = int(addressee.group(1))
+    if len(fields) < 2:
+        return None
+    return fields
+
+
 async def _stream_anthropic(
     model: str,
     text: str,
     scene: SceneState | None,
     frame: SceneFrame | None,
+    on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
 ) -> AsyncIterator[Intent]:
     client = get_async_anthropic_client()
     if client is None:
@@ -593,6 +622,10 @@ async def _stream_anthropic(
     ) as stream:
         async for chunk in stream.text_stream:
             buffer += chunk
+            if on_partial:
+                partial = extract_partial_preview_fields(buffer)
+                if partial:
+                    await on_partial(partial)
             slices, consumed = extract_complete_intents(buffer, consumed)
             for raw in slices:
                 intent = _validate_intent_slice(raw)
@@ -605,6 +638,7 @@ async def _stream_deepseek(
     text: str,
     scene: SceneState | None,
     frame: SceneFrame | None,
+    on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
 ) -> AsyncIterator[Intent]:
     if frame is not None:
         log.warning("DeepSeek path does not support vision; skipping frame attachment")
@@ -631,6 +665,10 @@ async def _stream_deepseek(
         if not delta:
             continue
         buffer += delta
+        if on_partial:
+            partial = extract_partial_preview_fields(buffer)
+            if partial:
+                await on_partial(partial)
         slices, consumed = extract_complete_intents(buffer, consumed)
         for raw in slices:
             intent = _validate_intent_slice(raw)
@@ -642,6 +680,7 @@ async def stream_intents(
     text: str,
     scene: SceneState | None,
     frame: SceneFrame | None = None,
+    on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
 ) -> AsyncIterator[Intent]:
     """Stream intents as the LLM completes each one, instead of waiting for the
     full response. Callers should treat zero yielded intents (including on any
@@ -656,7 +695,7 @@ async def stream_intents(
     count = 0
     try:
         stream_fn = _stream_deepseek if provider == "deepseek" else _stream_anthropic
-        async for intent in stream_fn(model, text, scene, frame):
+        async for intent in stream_fn(model, text, scene, frame, on_partial):
             count += 1
             yield intent
     except ImportError:

@@ -206,6 +206,7 @@ function applyCameraVector(
 /** Returns a human-readable log line, or throws with a reason. */
 export function applyCommandPacket(packet: CommandPacket): string {
   const st = useEditorStore.getState()
+  const isRefinement = packet.refinement === true
 
   switch (packet.command) {
     case 'SPAWN_OBJECT': {
@@ -286,10 +287,17 @@ export function applyCommandPacket(packet: CommandPacket): string {
       }
 
       const clipEnd = keyframes[keyframes.length - 1]?.time ?? duration
-      st.setObjectPropertyKeyframes(obj.id, property, keyframes)
-      beginClipPlayback(clipEnd, p.repeat === true)
+      if (isRefinement) {
+        const fromTime = st.currentTime
+        st.mergeObjectPropertyKeyframes(obj.id, property, keyframes, fromTime)
+        if (clipEnd > fromTime) beginClipPlayback(clipEnd, p.repeat === true)
+      } else {
+        st.setObjectPropertyKeyframes(obj.id, property, keyframes)
+        beginClipPlayback(clipEnd, p.repeat === true)
+      }
       const mode = useComposite ? `${motion} along path` : motion
-      return `${mode} on ${obj.name} (${duration.toFixed(1)}s${p.repeat ? ', loop' : ''})`
+      const suffix = isRefinement ? ' (refined)' : ''
+      return `${mode} on ${obj.name} (${duration.toFixed(1)}s${p.repeat ? ', loop' : ''})${suffix}`
     }
 
     case 'MOVE_CAMERA': {
@@ -379,14 +387,15 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const obj = resolveTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       if (p.property === 'fov') throw new Error('fov keyframes only apply to the camera')
-      st.setObjectPropertyKeyframes(
-        obj.id,
-        p.property,
-        p.keyframes.map((k) => ({ time: k.time, value: k.value }))
-      )
+      const mapped = p.keyframes.map((k) => ({ time: k.time, value: k.value }))
+      if (isRefinement) {
+        st.mergeObjectPropertyKeyframes(obj.id, p.property, mapped, st.currentTime)
+      } else {
+        st.setObjectPropertyKeyframes(obj.id, p.property, mapped)
+      }
       const last = p.keyframes[p.keyframes.length - 1]?.time
-      if (last != null) beginClipPlayback(last, false)
-      return `${obj.name} ${p.property} keyframes set`
+      if (last != null && !isRefinement) beginClipPlayback(last, false)
+      return `${obj.name} ${p.property} keyframes set${isRefinement ? ' (refined)' : ''}`
     }
 
     case 'PLAYBACK': {

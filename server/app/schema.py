@@ -247,6 +247,8 @@ class _PacketBase(BaseModel):
     timestamp: float = Field(default_factory=now)
     commandId: str | None = None
     transition: Transition | None = None
+    refinement: bool = False
+    priorCommandId: str | None = None
 
 
 class SpawnObjectPacket(_PacketBase):
@@ -544,6 +546,33 @@ def error_message(message: str, for_command_id: str | None = None) -> dict:
         "timestamp": now(),
         "message": message,
         "forCommandId": for_command_id,
+    }
+
+
+IntentPreviewConfidence = Literal["guess", "grammar", "llm_partial"]
+
+
+def intent_preview_message(
+    command_id: str,
+    agent: str,
+    note: str,
+    *,
+    target: str | None = None,
+    action: str | None = None,
+    motion: str | None = None,
+    confidence: IntentPreviewConfidence = "grammar",
+) -> dict:
+    """Fast acknowledge before full parse — client moves cursor immediately."""
+    return {
+        "type": "intent_preview",
+        "timestamp": now(),
+        "commandId": command_id,
+        "agent": agent,
+        "target": target,
+        "action": action,
+        "motion": motion,
+        "note": note,
+        "confidence": confidence,
     }
 
 

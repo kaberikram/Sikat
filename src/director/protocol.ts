@@ -95,6 +95,9 @@ interface PacketBase {
   commandId?: string | null
   transition?: Transition | null
   target_agent: string
+  /** When true, merge into existing motion instead of full cursor theater. */
+  refinement?: boolean
+  priorCommandId?: string | null
 }
 
 export type CommandPacket = PacketBase &
@@ -252,6 +255,20 @@ export interface AgentStatusMessage {
   note?: string | null
 }
 
+export type IntentPreviewConfidence = 'guess' | 'grammar' | 'llm_partial'
+
+export interface IntentPreviewMessage {
+  type: 'intent_preview'
+  timestamp: number
+  commandId: string
+  agent: string
+  target?: string | null
+  action?: string | null
+  motion?: string | null
+  note: string
+  confidence: IntentPreviewConfidence
+}
+
 export interface ErrorMessage {
   type: 'error'
   timestamp: number
@@ -263,6 +280,7 @@ export type ServerMessage =
   | AgentCommandMessage
   | AgentLogMessage
   | AgentStatusMessage
+  | IntentPreviewMessage
   | ErrorMessage
 
 /** Cheap structural check — the server already pydantic-validated the packet. */
@@ -275,6 +293,8 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     return raw as AgentLogMessage
   if (msg.type === 'agent_status' && typeof (raw as AgentStatusMessage).agent === 'string')
     return raw as AgentStatusMessage
+  if (msg.type === 'intent_preview' && typeof (raw as IntentPreviewMessage).note === 'string')
+    return raw as IntentPreviewMessage
   if (msg.type === 'error' && typeof (raw as ErrorMessage).message === 'string')
     return raw as ErrorMessage
   return null

@@ -41,9 +41,21 @@ Breaking change: `camera` → **`virtualCamera`**.
 | type | fields |
 |---|---|
 | `agent_command` | `packet` (CommandPacket below) |
+| `intent_preview` | `commandId`, `agent`, `note`, `confidence (guess\|grammar\|llm_partial)`, `target?`, `action?`, `motion?` |
 | `agent_status` | `agent`, `status (active\|idle)`, `forCommandId?`, `note?` |
 | `agent_log` | `agent`, `level (info\|warn\|error)`, `message`, `forCommandId?` |
 | `error` | `message`, `forCommandId?` |
+
+### Progressive execution (Phase F)
+
+On `user_command` receipt the server emits **`intent_preview`** synchronously
+(before LLM parse completes) so the client can move cursors immediately. While
+the LLM streams, partial field previews may arrive with `confidence: llm_partial`.
+
+When grammar matches but LLM refinement is still pending, the server **coarse-emits**
+packets first, then sends **`refinement: true`** packets when the full intent lands.
+Refinement packets merge into motion from `currentTime` — the client skips the
+full cursor fly/hover/settle cycle for them.
 
 ### Staged execution & agent cursors
 
@@ -78,6 +90,8 @@ falls back to a static per-command verb ("spawning", "animating", …).
   "target_agent": "LightingTech",
   "command": "UPDATE_LIGHTS",
   "commandId": "uuid-of-originating-user_command",
+  "refinement": false,
+  "priorCommandId": null,
   "transition": { "durationSec": 1.2, "easing": "easeOut" },
   "payload": { "ambient": { "color": "#00ffff", "intensity": 1.2 } }
 }

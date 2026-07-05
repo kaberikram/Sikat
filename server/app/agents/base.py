@@ -15,6 +15,8 @@ EmitLog = Callable[[str, str, str], Awaitable[None]]
 EmitPacket = Callable[[Any], Awaitable[None]]
 # emit_status(agent_name, status, command_id, note)
 EmitStatus = Callable[[str, str, "str | None", "str | None"], Awaitable[None]]
+# emit_preview(preview_dict)
+EmitPreview = Callable[[dict], Awaitable[None]]
 
 
 async def _noop_emit(agent: str, message: str, level: str = "info") -> None:
@@ -28,4 +30,8 @@ async def _noop_packet(packet: Any) -> None:
 async def _noop_status(
     agent: str, status: str, command_id: str | None = None, note: str | None = None
 ) -> None:
+    return None
+
+
+async def _noop_preview(payload: dict) -> None:
     return None

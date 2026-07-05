@@ -276,6 +276,13 @@ interface EditorState {
     property: 'position' | 'rotation' | 'scale',
     keyframes: Array<{ time: number; value: [number, number, number] }>
   ) => void
+  /** Replace keyframes from `fromTime` forward — used for LLM refinement packets. */
+  mergeObjectPropertyKeyframes: (
+    objectId: string,
+    property: 'position' | 'rotation' | 'scale',
+    keyframes: Array<{ time: number; value: [number, number, number] }>,
+    fromTime: number
+  ) => void
   snapshotObjectKeyframes: (objectId: string, time: number) => void
   snapshotCameraKeyframes: (time: number) => void
 }
@@ -449,6 +456,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...others,
         ...keyframes.map(k => ({ time: k.time, property, value: k.value })),
       ].sort((a, b) => a.time - b.time)
+      return { ...obj, keyframes: next }
+    }),
+  })),
+  mergeObjectPropertyKeyframes: (objectId, property, keyframes, fromTime) => set((state) => ({
+    objects: state.objects.map(obj => {
+      if (obj.id !== objectId) return obj
+      const past = obj.keyframes.filter(
+        k => k.property !== property || k.time < fromTime
+      )
+      const shifted = keyframes.map((k) => ({
+        time: fromTime + k.time,
+        property,
+        value: k.value,
+      }))
+      const next = [...past, ...shifted].sort((a, b) => a.time - b.time)
       return { ...obj, keyframes: next }
     }),
   })),
