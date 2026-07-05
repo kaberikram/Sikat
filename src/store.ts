@@ -57,12 +57,15 @@ export interface PostProcessingStack {
 export function createDefaultPostProcessing(): PostProcessingStack {
   return {
     bloom: {
+      // Threshold must clear the light default background (#f2f2f2 ≈ 0.89
+      // linear luminance) or the whole frame blooms to white. Objects get
+      // pushed over it by the emissive boost instead.
       enabled: false,
       strength: 0.9,
-      threshold: 0.18,
+      threshold: 0.9,
       radius: 0.4,
-      emissiveBoost: 0.55,
-      emissiveIntensity: 1.35,
+      emissiveBoost: 1.4,
+      emissiveIntensity: 3,
     },
     pixelate: {
       enabled: false,
@@ -145,18 +148,21 @@ export interface VirtualCamera {
   }>;
 }
 
-/** World-space euler XYZ. Identity = camera on +Z side of scene looking toward -Z (Three.js default view axis). */
-const DEFAULT_VIRTUAL_CAM_ROTATION: [number, number, number] = [0, 0, 0]
+/** World-space euler XYZ. Slight downward pitch so the stage center sits in
+ *  frame from the default eye height (camera on +Z looking toward -Z). */
+const DEFAULT_VIRTUAL_CAM_ROTATION: [number, number, number] = [-0.2, 0, 0]
 
 /** Default performance floor radius (m). Cameras and lights scale from this. */
 export const STAGE_RADIUS = 25
 
+/** Close enough that a unit-scale hero object reads clearly, far enough that
+ *  most of the stage ring stays in frame at fov 75. */
 export function defaultUserCameraPosition(radius = STAGE_RADIUS): [number, number, number] {
-  return [radius * 3, radius * 1.7, radius * 3]
+  return [radius * 0.56, radius * 0.32, radius * 0.56]
 }
 
 export function defaultVirtualCameraPosition(radius = STAGE_RADIUS): [number, number, number] {
-  return [0, radius * 0.5, radius * 2.4]
+  return [0, radius * 0.16, radius * 0.64]
 }
 
 export function defaultKeyLightPosition(radius = STAGE_RADIUS): [number, number, number] {
