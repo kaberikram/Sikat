@@ -61,6 +61,15 @@ that agent's on-stage cursor to a 3D target it derives from the packet itself
 commits the change, then settles. `active` shows the cursor; `idle` fades it
 once the client-side queue drains.
 
+`agent_status.note` carries in-character film-set radio chatter (e.g. "taking
+the sphere up on a three-count") when the LLM path is active — this rides
+directly from the Director's Assistant's server-internal `Intent.say` field
+(never mirrored to `protocol.ts`; `Intent` is not part of the wire schema, only
+its effects are). The client shows this line on the agent's cursor chip and
+prefers it over the generic per-command fallback derived from the packet
+shape. Grammar-only fallback parses (no API key) have no `say`, so `note`
+falls back to a static per-command verb ("spawning", "animating", …).
+
 ## CommandPacket
 
 ```json

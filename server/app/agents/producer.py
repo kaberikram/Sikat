@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .. import fallback_parser, llm, performers, session_context
 from ..creative_parse import defer_clause_to_llm
@@ -28,6 +29,10 @@ from .base import (
 from .directors_assistant import DirectorsAssistant
 from .lighting_tech import LightingTech
 from .vfx_operator import VFXOperator
+
+log = logging.getLogger("director.producer")
+
+_LLM_STREAM_DONE = object()
 
 # Server-side pacing. Kept intentionally light: the client owns the real
 # choreography (flight/hover/settle). These sleeps only interleave the crew so
@@ -58,6 +63,48 @@ def _agent_note(agent_packets: list[CommandPacket]) -> str:
     if not agent_packets:
         return "working"
     return _COMMAND_NOTE.get(agent_packets[0].command, "working")
+
+
+_SUMMARY_PARAM_KEYS = ("hops", "height", "amplitude", "frequency", "turns", "radius")
+
+
+def _performer_action_summary(intent: Intent) -> str:
+    """Short "action target motion params" text for a performer's recent-work
+    memory, e.g. "animate CORE_SPHERE bounce ×3 high" — grounds a later
+    "again but bigger" against this performer's own last move."""
+    parts = [intent.action]
+    if intent.target:
+        parts.append(intent.target)
+    motion = intent.motion or intent.preset
+    if motion:
+        parts.append(motion)
+    if intent.motion_params:
+        for key in _SUMMARY_PARAM_KEYS:
+            if key in intent.motion_params:
+                parts.append(f"{key}={intent.motion_params[key]:g}")
+    if intent.scale:
+        parts.append(f"scale={intent.scale}")
+    return " ".join(parts)
+
+
+async def _drain_llm_stream(agen, queue: asyncio.Queue) -> None:
+    """Pump an ``llm.stream_intents`` async generator into a queue.
+
+    Runs as its own task so the LLM call proceeds concurrently with grammar
+    clauses. On cancellation (grammar already handled everything), closes the
+    generator itself — it's the sole driver, so this is the only safe place
+    to do that — before re-raising.
+    """
+    try:
+        async for intent in agen:
+            await queue.put(intent)
+    except asyncio.CancelledError:
+        await agen.aclose()
+        raise
+    except Exception:
+        log.exception("LLM intent stream consumption failed")
+    finally:
+        queue.put_nowait(_LLM_STREAM_DONE)
 
 
 class Producer:
@@ -149,13 +196,14 @@ class Producer:
         if built and specialist:
             await emit(
                 specialist.name,
-                ", ".join(p.command for p in built),
+                intent.say or ", ".join(p.command for p in built),
                 "info",
             )
         if intent.addressee and built:
             agent = f"Agent{intent.addressee}"
             for packet in built:
                 packet.target_agent = agent  # type: ignore[assignment]
+            performers.record_action(intent.addressee, _performer_action_summary(intent))
         if not built:
             await emit(self.name, f"dropped unactionable intent: {intent.action}", "warn")
         return built
@@ -186,6 +234,7 @@ class Producer:
         emit_log: EmitLog,
         emit_packet: EmitPacket,
         emit_status: EmitStatus,
+        note: str | None = None,
     ) -> None:
         if not packets:
             return
@@ -205,7 +254,7 @@ class Producer:
             index: int, agent: str, agent_packets: list[CommandPacket]
         ) -> None:
             await asyncio.sleep(index * AGENT_STAGGER)
-            await emit_status(agent, "active", command_id, _agent_note(agent_packets))
+            await emit_status(agent, "active", command_id, note or _agent_note(agent_packets))
             for step, packet in enumerate(agent_packets):
                 if step:
                     await asyncio.sleep(AGENT_STEP_DELAY)
@@ -299,7 +348,7 @@ class Producer:
                 packet.commandId = command_id
             packets.extend(built)
             await self._stream_packets_staged(
-                built, command_id, emit_log, emit_packet, emit_status
+                built, command_id, emit_log, emit_packet, emit_status, note=intent.say
             )
         return packets
 
@@ -314,9 +363,12 @@ class Producer:
         emit_status: EmitStatus,
         frame: SceneFrame | None,
     ) -> tuple[list[CommandPacket], bool]:
-        llm_task: asyncio.Task | None = None
+        llm_feed_task: asyncio.Task | None = None
+        llm_queue: asyncio.Queue | None = None
         if llm.select_provider(frame) is not None:
-            llm_task = asyncio.create_task(llm.parse_intents(text, scene, frame))
+            llm_agen = llm.stream_intents(text, scene, frame)
+            llm_queue = asyncio.Queue()
+            llm_feed_task = asyncio.create_task(_drain_llm_stream(llm_agen, llm_queue))
             await emit_log(
                 self.assistant.name,
                 f"streaming {len(clauses)} clause(s); LLM in parallel",
@@ -360,45 +412,49 @@ class Producer:
                 packet.commandId = command_id
             all_packets.extend(built)
             await self._stream_packets_staged(
-                built, command_id, emit_log, emit_packet, emit_status
+                built, command_id, emit_log, emit_packet, emit_status, note=intent.say
             )
 
-        if llm_task is not None:
+        if llm_feed_task is not None:
             if all(handled) and any(handled) and not deferred:
-                llm_task.cancel()
+                llm_feed_task.cancel()
                 source = "fallback"
                 try:
-                    await llm_task
+                    await llm_feed_task
                 except asyncio.CancelledError:
                     pass
             else:
-                llm_result = await llm_task
-                if llm_result and llm_result.intents:
+                source = "fallback"
+                index = 0
+                while True:
+                    intent = await llm_queue.get()
+                    if intent is _LLM_STREAM_DONE:
+                        break
+                    skip = index < len(handled) and handled[index]
+                    index += 1
+                    if skip:
+                        continue
                     source = "llm"
-                    for index, intent in enumerate(llm_result.intents):
-                        if index < len(handled) and handled[index]:
-                            continue
-                        all_intents.append(intent)
-                        if intent.action == "describe":
-                            await self._emit_describe(intent, emit_log)
-                            continue
-                        describe_only = False
-                        built = await self._build_packets_for_intent(
-                            intent, emit_log, emit_status, command_id, scene
-                        )
-                        for packet in built:
-                            packet.commandId = command_id
-                        all_packets.extend(built)
-                        await self._stream_packets_staged(
-                            built, command_id, emit_log, emit_packet, emit_status
-                        )
-                else:
-                    source = "fallback"
+                    all_intents.append(intent)
+                    if intent.action == "describe":
+                        await self._emit_describe(intent, emit_log)
+                        continue
+                    describe_only = False
+                    built = await self._build_packets_for_intent(
+                        intent, emit_log, emit_status, command_id, scene
+                    )
+                    for packet in built:
+                        packet.commandId = command_id
+                    all_packets.extend(built)
+                    await self._stream_packets_staged(
+                        built, command_id, emit_log, emit_packet, emit_status, note=intent.say
+                    )
+                await llm_feed_task
         else:
             source = "fallback"
 
         session_context.record(text, all_intents)
-        if all(handled) and any(handled) and llm_task is not None and not deferred:
+        if all(handled) and any(handled) and llm_feed_task is not None and not deferred:
             await emit_log(
                 self.assistant.name,
                 f"instant — {len(all_intents)} intent(s) via grammar (LLM skipped)",

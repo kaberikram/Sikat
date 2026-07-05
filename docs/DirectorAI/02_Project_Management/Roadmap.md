@@ -1,5 +1,45 @@
 # Roadmap
 
+## Shipped — "Thinking crew" pass (live agent direction UX)
+
+Turned live direction from "system executing commands" into a crew that feels
+present. Architecture invariant held throughout: `user_command → parse →
+Intent[] → Producer → CommandPacket[] → client applier` — no wire-protocol
+packet changes; chatter and telemetry ride the existing `agent_status.note` /
+`agent_log` fields.
+
+- [x] **Phase 1** — Removed TTS entirely (`set-radio.ts` deleted; it bled into
+      the director's own mic recording and the always-on live-listen input).
+      Visual-only affirmation now: `markAgentActive('Producer', …)` on submit,
+      rotating through a small note pool (copy / on it / hearing you / rolling
+      on that) instead of a fixed word.
+- [x] **Phase 2** — Latency telemetry: `src/director/latency.ts` tracks
+      utterance→first-packet and utterance→first-apply per `commandId`,
+      logged to the DirectorPod console (`⏱ first packet 1.42s`). Server
+      (`llm.py`, `main.py`) logs parse duration + time-to-first-packet.
+- [x] **Phase 3** — Streaming intents: `llm.stream_intents` (async
+      Anthropic/OpenAI clients) + `extract_complete_intents`, a pure
+      incremental JSON-array-element extractor (brace/bracket depth +
+      in-string/escape tracking). The Producer now streams packets per
+      completed intent instead of waiting for the full LLM response; falls
+      back to `parse_intents` / the rule parser on any stream error or zero
+      yielded intents.
+- [x] **Phase 4** — LLM chatter: `Intent.say` (server-internal, not on the
+      wire) carries an in-character film-set radio line generated alongside
+      each intent — zero extra API calls. Producer uses it as the
+      `agent_status` note and the specialist's log line; static `_COMMAND_NOTE`
+      verbs remain the fallback when no LLM is configured.
+- [x] **Phase 5** — Per-performer memory + persona: `PerformerAssignment.recent`
+      (bounded deque) plus a fixed persona table (Agent 1 precise/minimal,
+      Agent 2 playful/big, Agent 3 moody/dramatic, Agent 4 fast/energetic),
+      surfaced in the LLM system prompt via `performers.brief()` so "again but
+      bigger" grounds against that performer's own last move.
+- [x] **Phase 6** — Barge-in v1: `agent-runtime.ts`'s `enqueuePacket` drops a
+      stale queued packet when a newer command targets the same object with
+      the same command type, so corrections don't wait behind superseded
+      queued work. In-flight tween retargeting already worked; this closed
+      the remaining queue-ordering gap.
+
 ## Shipped — Scene-Aware Director (Phases A–E)
 
 Phased brief: `06_Implementation_Brief/Scene_Aware_Director.md`. All phases complete:
