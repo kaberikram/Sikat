@@ -35,6 +35,7 @@ from .schema import (
     client_message_adapter,
     error_message,
 )
+from .observer import run_observer
 from .session_context import SessionContext, bind_session, reset_session
 
 log = logging.getLogger("director")
@@ -47,15 +48,21 @@ class ConnectionManager:
     def __init__(self) -> None:
         self.active: set[WebSocket] = set()
         self.sessions: dict[WebSocket, SessionContext] = {}
+        self.observers: dict[WebSocket, asyncio.Task] = {}
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
         self.active.add(ws)
-        self.sessions[ws] = SessionContext()
+        session = SessionContext()
+        self.sessions[ws] = session
+        self.observers[ws] = asyncio.create_task(run_observer(session, ws))
 
     def disconnect(self, ws: WebSocket) -> None:
         self.active.discard(ws)
         self.sessions.pop(ws, None)
+        task = self.observers.pop(ws, None)
+        if task is not None:
+            task.cancel()
 
     async def broadcast(self, payload: dict) -> None:
         for ws in list(self.active):
@@ -79,10 +86,12 @@ async def healthz() -> dict:
 async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
     session = manager.sessions.get(ws, SessionContext())
     token = bind_session(session)
+    session.command_started()
+    session.cancel_active_plan()
     received_at = time.monotonic()
     first_packet_logged = False
 
-    scene = msg.scene or scene_state.latest()
+    scene = msg.scene or session.latest_scene or scene_state.latest()
     if msg.commandId:
         preview = build_intent_preview(msg.text, scene, msg.commandId)
         if preview:
@@ -105,6 +114,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             elapsed = time.monotonic() - received_at
             log.info("command %s: first packet in %.2fs (via %s)", msg.commandId, elapsed, packet.target_agent)
         await manager.broadcast(agent_command_message(packet))
+        session.note_server_edit(packet)
 
     async def emit_status(
         agent: str, status: str, command_id: str | None = None, note: str | None = None
@@ -122,6 +132,17 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
     async def emit_question(payload: dict) -> None:
         await manager.broadcast(payload)
 
+    async def emit_suggest(obs) -> None:
+        from .observer import emit_suggestion_from_producer
+
+        await emit_suggestion_from_producer(
+            ws,
+            obs,
+            kind="suggestion",
+            scene=session.latest_scene,
+            gate=session.suggestion_gate,
+        )
+
     try:
         packets, describe_only = await producer.direct(
             msg.text,
@@ -134,6 +155,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             emit_preview=emit_preview,
             emit_cancel=emit_cancel,
             emit_question=emit_question,
+            emit_suggest=emit_suggest,
         )
         if not packets and not describe_only:
             await manager.broadcast(
@@ -148,6 +170,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
         await manager.broadcast(error_message(str(exc), msg.commandId))
     finally:
         await emit_status("Producer", "idle", msg.commandId, None)
+        session.command_finished()
         reset_session(token)
 
 
@@ -181,6 +204,9 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 continue
             if isinstance(msg, SceneState):
                 scene_state.update(msg)
+                session = manager.sessions.get(ws)
+                if session is not None:
+                    session.update_scene(msg)
             elif isinstance(msg, UserCommand):
                 # LLM latency must never block the socket read loop
                 asyncio.create_task(_handle_user_command(msg, ws))

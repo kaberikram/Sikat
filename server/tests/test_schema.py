@@ -9,6 +9,7 @@ from app.schema import (
     UpdateFxPacket,
     UpdateLightsPayload,
     UserCommand,
+    agent_suggestion_message,
     client_message_adapter,
     command_packet_adapter,
 )
@@ -89,3 +90,31 @@ def test_client_message_discrimination():
 def test_empty_user_command_rejected():
     with pytest.raises(ValidationError):
         client_message_adapter.validate_python({"type": "user_command", "text": ""})
+
+
+def test_agent_suggestion_message_shape():
+    msg = agent_suggestion_message(
+        "AssetAnimator",
+        "sug-1",
+        "BOX wandered off the stage.",
+        suggested_command="move BOX to center",
+        subject_object="BOX",
+        kind="observation",
+    )
+    assert msg["type"] == "agent_suggestion"
+    assert msg["suggestionId"] == "sug-1"
+    assert msg["suggestedCommand"] == "move BOX to center"
+    assert msg["subjectObject"] == "BOX"
+    assert msg["kind"] == "observation"
+
+
+def test_intent_suggest_action():
+    from app.schema import Intent
+
+    intent = Intent(
+        action="suggest",
+        say="want me to animate it?",
+        suggestion_command="make the box bounce",
+    )
+    assert intent.action == "suggest"
+    assert intent.suggestion_command == "make the box bounce"

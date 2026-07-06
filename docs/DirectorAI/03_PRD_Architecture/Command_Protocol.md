@@ -45,6 +45,7 @@ Breaking change: `camera` → **`virtualCamera`**.
 | `agent_status` | `agent`, `status (active\|idle)`, `forCommandId?`, `note?` |
 | `command_cancel` | `commandId`, `supersededBy?`, `target?`, `command?`, `reason? (supersede\|stop\|amend)` |
 | `agent_question` | `agent`, `commandId`, `question`, `options[]` |
+| `agent_suggestion` | `suggestionId`, `agent`, `text`, `kind (observation\|suggestion\|reaction)`, `suggestedCommand?`, `subjectObject?` |
 | `agent_log` | `agent`, `level (info\|warn\|error)`, `message`, `forCommandId?` |
 | `error` | `message`, `forCommandId?` |
 
@@ -140,3 +141,21 @@ batches, so the client vocabulary stays minimal.
 | cellShading | `enabled`, `outlineScale 1–1.18` |
 | glitch | `enabled`, `intensity 0–0.5`, `rate 0–0.35` |
 | dither | `enabled`, `pixelSize 1–10`, `levels 2–16`, `strength 0–1`, `monochrome` |
+
+### Proactive crew (Living Crew Phase A)
+
+The server runs a per-session **observer** on scene heartbeats. When deterministic
+detectors notice issues (off-stage objects, bloom washout, static takes, manual
+edits, …) it may emit `agent_suggestion` **to that socket only** (not multicast).
+
+- **`kind: observation`** — scene issue with optional `suggestedCommand`; client
+  shows a chip above the director input with `[DO IT]` / `[DISMISS]`.
+- **`kind: suggestion`** — follow-up pitch after a command completes (LLM
+  `suggest` intent); same chip UX.
+- **`kind: reaction`** — cursor glance + note only; no chip (manual-edit tier).
+
+`DO IT` re-enters the normal `user_command` pipeline with a **fresh**
+`commandId` — suggestions never auto-apply packets. Dismiss is client-local;
+stale suggestions may be dropped (25 s auto-expire on client).
+
+Kill switch: `DIRECTOR_PROACTIVE=0` disables all proactive behavior server-side.

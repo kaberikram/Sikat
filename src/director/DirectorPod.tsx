@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react'
 import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
-import type { AgentQuestionMessage } from './protocol'
+import type { AgentQuestionMessage, AgentSuggestionMessage } from './protocol'
 import { startSceneStateSync } from './scene-state-sync'
 import {
   enqueuePacket,
@@ -11,6 +11,7 @@ import {
   markAgentIdle,
   applyClientIntentGuess,
   applyIntentPreview,
+  reactToSuggestion,
   setRuntimeLogger,
 } from './agent-runtime'
 import { tryLocalCommand } from './local-commands'
@@ -114,6 +115,8 @@ export function DirectorPod() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
   const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionMessage | null>(null)
+  const [pendingSuggestion, setPendingSuggestion] = useState<AgentSuggestionMessage | null>(null)
+  const suggestionExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -170,6 +173,20 @@ export function DirectorPod() {
       setPendingQuestion(msg)
       markAgentActive(msg.agent, msg.question)
     })
+    const offSuggestion = socket.onSuggestion((msg) => {
+      reactToSuggestion(msg)
+      if (msg.kind === 'reaction') {
+        pushLog(msg.agent, msg.text)
+        return
+      }
+      if (suggestionExpiryRef.current) clearTimeout(suggestionExpiryRef.current)
+      setPendingSuggestion(msg)
+      pushLog(msg.agent, msg.text)
+      suggestionExpiryRef.current = setTimeout(() => {
+        setPendingSuggestion(null)
+        suggestionExpiryRef.current = null
+      }, 25_000)
+    })
     const offAgentStatus = socket.onAgentStatus((msg) => {
       if (msg.note) {
         recentStatusNotes.push(msg.note)
@@ -217,6 +234,7 @@ export function DirectorPod() {
       offIntentPreview()
       offCancel()
       offQuestion()
+      offSuggestion()
       offAgentStatus()
       offLog()
       offError()
@@ -225,6 +243,7 @@ export function DirectorPod() {
       window.removeEventListener('keydown', onKeyDown)
       stopTakeRecorder()
       stopMicRef.current() // tear down any live mic on unmount
+      if (suggestionExpiryRef.current) clearTimeout(suggestionExpiryRef.current)
     }
   })
 
@@ -412,6 +431,46 @@ export function DirectorPod() {
           <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
           <span className="opacity-60 uppercase">{status}</span>
         </div>
+
+        {pendingSuggestion && (
+          <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/40">
+            <p className="text-[9px] font-bold mb-1.5">
+              [{pendingSuggestion.agent}] {pendingSuggestion.text}
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {pendingSuggestion.suggestedCommand && (
+                <button
+                  type="button"
+                  className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                  onClick={() => {
+                    const cmd = pendingSuggestion.suggestedCommand
+                    setPendingSuggestion(null)
+                    if (suggestionExpiryRef.current) {
+                      clearTimeout(suggestionExpiryRef.current)
+                      suggestionExpiryRef.current = null
+                    }
+                    if (cmd) void submit(cmd)
+                  }}
+                >
+                  DO IT
+                </button>
+              )}
+              <button
+                type="button"
+                className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                onClick={() => {
+                  setPendingSuggestion(null)
+                  if (suggestionExpiryRef.current) {
+                    clearTimeout(suggestionExpiryRef.current)
+                    suggestionExpiryRef.current = null
+                  }
+                }}
+              >
+                DISMISS
+              </button>
+            </div>
+          </div>
+        )}
 
         {pendingQuestion && (
           <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/30">

@@ -56,6 +56,23 @@ def test_wander_freely():
     assert i.target == "CORE_SPHERE"
 
 
+def test_squash_animate_not_instant_transform():
+    scene = scene_with("BLUE_SPHERE")
+    (i,) = parse("animate blue sphere squashed", scene)
+    assert i.action == "animate"
+    assert i.motion == "squash"
+    assert i.target == "BLUE_SPHERE"
+    assert i.motion_params is not None
+    assert i.motion_params.get("flat") == 0.35
+
+
+def test_squash_the_sphere_is_animated():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("squash the sphere", scene)
+    assert i.action == "animate"
+    assert i.motion == "squash"
+
+
 def test_orbit_stage_pivot():
     scene = scene_with("CORE_SPHERE")
     (i,) = parse("orbit the stage on the sphere", scene)

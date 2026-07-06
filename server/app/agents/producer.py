@@ -5,10 +5,12 @@ import asyncio
 import logging
 
 from .. import active_commands, fallback_parser, llm, performers, session_context
-from ..creative_parse import defer_clause_to_llm, needs_llm_refinement, should_coarse_emit
+from ..creative_parse import defer_clause_to_llm, is_open_direction, needs_llm_refinement, should_coarse_emit
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..motion_variation import enrich_motion_params
+from ..heuristics import Observation
+from ..verify import check_apply, verify_enabled
 from ..schema import (
     CommandPacket,
     Intent,
@@ -29,14 +31,17 @@ from .base import (
     EmitPreview,
     EmitQuestion,
     EmitStatus,
+    EmitSuggest,
     _noop_cancel,
     _noop_emit,
     _noop_packet,
     _noop_preview,
     _noop_question,
     _noop_status,
+    _noop_suggest,
 )
 from .directors_assistant import DirectorsAssistant
+from .planner import Planner
 from .lighting_tech import LightingTech
 from .vfx_operator import VFXOperator
 
@@ -370,6 +375,24 @@ class Producer:
 
         asyncio.create_task(timeout())
 
+    async def _emit_suggest(
+        self,
+        intent: Intent,
+        emit_suggest: EmitSuggest,
+    ) -> None:
+        if not intent.say and not intent.suggestion_command:
+            return
+        obs = Observation(
+            kind="command_suggest",
+            agent="Producer",
+            subject_object=intent.target,
+            severity=2,
+            template_line=intent.say or "got a follow-up idea",
+            suggested_command=intent.suggestion_command,
+            dedupe_key=f"suggest:{intent.suggestion_command or intent.say}",
+        )
+        await emit_suggest(obs)
+
     async def _try_resume_clarify(
         self,
         text: str,
@@ -415,6 +438,8 @@ class Producer:
         emit_status: EmitStatus,
         note: str | None = None,
         emit_cancel: EmitCancel = _noop_cancel,
+        scene: SceneState | None = None,
+        intent: Intent | None = None,
     ) -> None:
         if not packets:
             return
@@ -448,6 +473,38 @@ class Producer:
                 for index, (agent, agent_packets) in enumerate(groups.items())
             )
         )
+
+        if verify_enabled():
+            asyncio.create_task(
+                self._post_verify(
+                    packets, command_id, emit_log, emit_packet, scene, intent
+                )
+            )
+
+    async def _post_verify(
+        self,
+        packets: list[CommandPacket],
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_packet: EmitPacket,
+        scene: SceneState | None,
+        intent: Intent | None,
+    ) -> None:
+        session = session_context.get_session()
+        try:
+            await asyncio.wait_for(session.scene_event.wait(), 1.5)
+        except asyncio.TimeoutError:
+            pass
+        scene_now = session.latest_scene or scene
+        for packet in packets:
+            if packet.command not in ("TRANSFORM_OBJECT", "SET_KEYFRAMES"):
+                continue
+            correction = check_apply(intent, packet, scene_now)
+            if correction is None:
+                continue
+            await emit_log("Producer", correction.message, "warn")
+            await emit_packet(correction.packet)
+            break
 
     async def handle_user_command(
         self,
@@ -518,11 +575,15 @@ class Producer:
         emit_status: EmitStatus,
         scene: SceneState | None = None,
         emit_cancel: EmitCancel = _noop_cancel,
+        emit_suggest: EmitSuggest = _noop_suggest,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
             if intent.action == "describe":
                 await self._emit_describe(intent, emit_log)
+                continue
+            if intent.action == "suggest":
+                await self._emit_suggest(intent, emit_suggest)
                 continue
             await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
             built = await self._build_packets_for_intent(
@@ -539,6 +600,8 @@ class Producer:
                 emit_status,
                 note=intent.say,
                 emit_cancel=emit_cancel,
+                scene=scene,
+                intent=intent,
             )
         return packets
 
@@ -555,6 +618,7 @@ class Producer:
         emit_preview: EmitPreview = _noop_preview,
         emit_cancel: EmitCancel = _noop_cancel,
         emit_question: EmitQuestion = _noop_question,
+        emit_suggest: EmitSuggest = _noop_suggest,
         skip_clarify_resume: bool = False,
     ) -> tuple[list[CommandPacket], bool]:
         if not skip_clarify_resume:
@@ -570,6 +634,25 @@ class Producer:
             )
             if resumed is not None:
                 return resumed
+
+        llm_available = llm.select_provider(frame) is not None
+        if llm_available and is_open_direction(text):
+            all_deferred = all(
+                defer_clause_to_llm(cl, parse_one_clause(cl, scene), llm_available=True)
+                for cl in clauses
+            )
+            if all_deferred:
+                return await Planner(self).run(
+                    text,
+                    scene,
+                    command_id,
+                    emit_log,
+                    emit_packet,
+                    emit_status,
+                    frame,
+                    emit_cancel,
+                    emit_suggest,
+                )
 
         llm_feed_task: asyncio.Task | None = None
         llm_queue: asyncio.Queue | None = None
@@ -666,6 +749,8 @@ class Producer:
                     emit_status,
                     note=raw_intent.say,
                     emit_cancel=emit_cancel,
+                    scene=scene,
+                    intent=raw_intent,
                 )
                 await emit_log(
                     self.assistant.name,
@@ -695,6 +780,10 @@ class Producer:
                 handled.append(True)
                 continue
             all_intents.append(intent)
+            if intent.action == "suggest":
+                await self._emit_suggest(intent, emit_suggest)
+                handled.append(True)
+                continue
             if intent.action == "describe":
                 await self._emit_describe(intent, emit_log)
                 continue
@@ -714,6 +803,8 @@ class Producer:
                 emit_status,
                 note=intent.say,
                 emit_cancel=emit_cancel,
+                scene=scene,
+                intent=intent,
             )
 
         if llm_feed_task is not None:
@@ -738,6 +829,9 @@ class Producer:
                         continue
                     source = "llm"
                     all_intents.append(intent)
+                    if intent.action == "suggest":
+                        await self._emit_suggest(intent, emit_suggest)
+                        continue
                     if intent.action == "describe":
                         await self._emit_describe(intent, emit_log)
                         continue
@@ -760,6 +854,8 @@ class Producer:
                         emit_status,
                         note=intent.say,
                         emit_cancel=emit_cancel,
+                        scene=scene,
+                        intent=intent,
                     )
                 await llm_feed_task
         else:
@@ -800,6 +896,7 @@ class Producer:
                     emit_status,
                     scene,
                     emit_cancel,
+                    emit_suggest,
                 )
                 all_packets.extend(rescued)
                 if describe_only and not rescued:
@@ -819,6 +916,7 @@ class Producer:
         emit_preview: EmitPreview = _noop_preview,
         emit_cancel: EmitCancel = _noop_cancel,
         emit_question: EmitQuestion = _noop_question,
+        emit_suggest: EmitSuggest = _noop_suggest,
     ) -> tuple[list[CommandPacket], bool]:
         """Staged execution: plan the crew's work, then stream it over time.
 
@@ -841,4 +939,5 @@ class Producer:
             emit_preview,
             emit_cancel,
             emit_question,
+            emit_suggest,
         )

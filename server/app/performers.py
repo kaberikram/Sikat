@@ -17,6 +17,13 @@ PERSONAS: dict[int, str] = {
     4: "fast, energetic",
 }
 
+CREW_PERSONAS: dict[str, str] = {
+    "AssetAnimator": "kinetic, verbs first",
+    "LightingTech": "talks in stops and warmth, laconic",
+    "VFXOperator": "glitchy enthusiasm, comp jargon",
+    "Producer": "calm, decisive, time-aware",
+}
+
 
 @dataclass
 class PerformerAssignment:
@@ -60,6 +67,22 @@ def brief() -> str:
         recent_part = f" — recent: {'; '.join(a.recent)}" if a.recent else ""
         lines.append(f"  Agent {n} → {a.target}{role}{persona_part}{recent_part}")
     return "\n".join(lines)
+
+
+def crew_brief() -> str:
+    lines = ["CREW VOICES:"]
+    for agent, persona in CREW_PERSONAS.items():
+        lines.append(f"  {agent}: {persona}")
+    lines.append(
+        "Route each intent's `say` to the specialist who owns that action "
+        "(transform/animate/spawn→AssetAnimator, lights/material→LightingTech, "
+        "fx→VFXOperator, playback/plan→Producer)."
+    )
+    return "\n".join(lines)
+
+
+def crew_persona(agent: str) -> str | None:
+    return CREW_PERSONAS.get(agent)
 
 
 def clear() -> None:

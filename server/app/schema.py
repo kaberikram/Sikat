@@ -588,6 +588,33 @@ def agent_question_message(
     }
 
 
+SuggestionKind = Literal["observation", "suggestion", "reaction"]
+
+
+def agent_suggestion_message(
+    agent: str,
+    suggestion_id: str,
+    text: str,
+    *,
+    suggested_command: str | None = None,
+    subject_object: str | None = None,
+    kind: SuggestionKind = "observation",
+) -> dict:
+    payload: dict = {
+        "type": "agent_suggestion",
+        "timestamp": now(),
+        "suggestionId": suggestion_id,
+        "agent": agent,
+        "text": text,
+        "kind": kind,
+    }
+    if suggested_command:
+        payload["suggestedCommand"] = suggested_command
+    if subject_object:
+        payload["subjectObject"] = subject_object
+    return payload
+
+
 def intent_preview_message(
     command_id: str,
     agent: str,
@@ -630,6 +657,7 @@ IntentAction = Literal[
     "describe",
     "assign",
     "clarify",
+    "suggest",
 ]
 
 
@@ -707,6 +735,8 @@ class Intent(BaseModel):
     # clarify (server-internal — surfaced as agent_question wire message)
     clarify_question: str | None = None
     clarify_options: list[str] | None = None
+    # suggest (server-internal — surfaced as agent_suggestion after command)
+    suggestion_command: str | None = None
 
 
 class IntentList(BaseModel):

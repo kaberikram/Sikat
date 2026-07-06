@@ -1,13 +1,18 @@
 """Rolling conversation memory for Director Mode — per-connection when bound."""
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 from collections import deque
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from .schema import Intent
+from .suggestion_gate import SuggestionGate, GateConfig
+
+if TYPE_CHECKING:
+    from .schema import CommandPacket, SceneState
 
 _MAX = 8
 CLARIFY_TIMEOUT_SEC = 20.0
@@ -19,6 +24,15 @@ class Exchange:
     text: str
     intent_summaries: list[str] = field(default_factory=list)
     targets: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PendingPlan:
+    command_id: str
+    remaining_beats: list[str]
+    completed_beats: list[str]
+    plan_text: str
+    created_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass
@@ -51,6 +65,15 @@ class SessionContext:
         self._pending_clarify: PendingClarify | None = None
         self._clarify_target: str | None = None
         self.recent_notes: deque[str] = deque(maxlen=_RECENT_NOTES_MAX)
+        self.latest_scene: SceneState | None = None
+        self.prev_scene: SceneState | None = None
+        self.scene_event: asyncio.Event = asyncio.Event()
+        self.recent_server_edits: dict[str, float] = {}
+        self.last_command_at: float = 0.0
+        self.command_in_flight: bool = False
+        self.suggestion_gate: SuggestionGate = SuggestionGate(time.monotonic, GateConfig.from_env())
+        self._pending_plan: PendingPlan | None = None
+        self._plan_cancel: asyncio.Event = asyncio.Event()
 
     def note_addressee(self, addressee: int | None) -> None:
         if addressee is not None:
@@ -118,6 +141,30 @@ class SessionContext:
         self.note_say(choice)
         return choice
 
+    def update_scene(self, msg: SceneState) -> None:
+        self.prev_scene = self.latest_scene
+        self.latest_scene = msg
+        self.scene_event.set()
+
+    def note_server_edit(self, packet: CommandPacket) -> None:
+        now = time.monotonic()
+        key = _server_edit_key(packet)
+        if key:
+            self.recent_server_edits[key] = now
+        # Prune entries older than 10s
+        cutoff = now - 10.0
+        self.recent_server_edits = {
+            k: v for k, v in self.recent_server_edits.items() if v >= cutoff
+        }
+
+    def command_started(self) -> None:
+        self.last_command_at = time.monotonic()
+        self.command_in_flight = True
+
+    def command_finished(self) -> None:
+        self.command_in_flight = False
+        self.last_command_at = time.monotonic()
+
     def clear(self) -> None:
         self._history.clear()
         self._pending_target = None
@@ -126,6 +173,61 @@ class SessionContext:
         self._pending_clarify = None
         self._clarify_target = None
         self.recent_notes.clear()
+        self.latest_scene = None
+        self.prev_scene = None
+        self.scene_event = asyncio.Event()
+        self.recent_server_edits.clear()
+        self.last_command_at = 0.0
+        self.command_in_flight = False
+        self.suggestion_gate = SuggestionGate(time.monotonic, GateConfig.from_env())
+        self._pending_plan = None
+        self._plan_cancel = asyncio.Event()
+
+    def set_pending_plan(self, plan: PendingPlan) -> None:
+        self._pending_plan = plan
+        self._plan_cancel.clear()
+
+    def pending_plan(self) -> PendingPlan | None:
+        return self._pending_plan
+
+    def clear_pending_plan(self) -> None:
+        self._pending_plan = None
+
+    def cancel_active_plan(self) -> None:
+        """Signal an in-flight planner loop from a prior command to stop."""
+        self._plan_cancel.set()
+        self._pending_plan = None
+
+    def begin_plan(self) -> None:
+        """Fresh plan for this command — clear stale cancel from command_started()."""
+        self._plan_cancel.clear()
+
+    def plan_cancelled(self) -> asyncio.Event:
+        return self._plan_cancel
+
+
+def _server_edit_key(packet: CommandPacket) -> str | None:
+    """Category key for suppressing observer reactions to crew-emitted edits."""
+    cmd = packet.command
+    if cmd in ("TRANSFORM_OBJECT", "ANIMATE_OBJECT", "SET_KEYFRAMES", "SET_MATERIAL"):
+        target = getattr(packet.payload, "target", None)
+        if target and target.name:
+            return f"{cmd}:{target.name}"
+        if target and target.id:
+            return f"{cmd}:{target.id}"
+    if cmd == "SPAWN_OBJECT":
+        name = packet.payload.name or packet.payload.id
+        if name:
+            return f"SPAWN:{name}"
+    if cmd == "UPDATE_LIGHTS":
+        return "UPDATE_LIGHTS"
+    if cmd == "UPDATE_FX":
+        return "UPDATE_FX"
+    if cmd == "MOVE_CAMERA":
+        return "MOVE_CAMERA"
+    if cmd == "PLAYBACK":
+        return "PLAYBACK"
+    return None
 
 
 _default = SessionContext()

@@ -71,6 +71,12 @@ MOTION_PHRASES: list[tuple[str, str]] = [
     ("launch", "launch"),
     ("swing", "swing"),
     ("swoop", "arc"),
+    ("squashed", "squash"),
+    ("squishing", "squash"),
+    ("squish", "squash"),
+    ("squash", "squash"),
+    ("flatten", "squash"),
+    ("pancake", "squash"),
     ("wander", "wander"),
     ("roam", "wander"),
     ("explore", "wander"),
@@ -134,6 +140,9 @@ def extract_motion_params(clause: str, motion: str, stage_radius: float = 25.0) 
             params["waypoints"] = 4.0
         elif re.search(r"\b(slow|lazy|dreamy|linger)\b", lower):
             params["waypoints"] = 7.0
+
+    if motion == "squash":
+        params.setdefault("flat", 0.15 if re.search(r"\b(flat|pancake|paper thin)\b", lower) else 0.35)
 
     if motion == "orbit" and re.search(r"\b(?:orbit|circle)\s+(?:the\s+)?stage\b", lower):
         params["pivot"] = 1.0

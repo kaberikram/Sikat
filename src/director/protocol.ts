@@ -288,6 +288,19 @@ export interface CommandCancelMessage {
   reason?: CancelReason | null
 }
 
+export type SuggestionKind = 'observation' | 'suggestion' | 'reaction'
+
+export interface AgentSuggestionMessage {
+  type: 'agent_suggestion'
+  timestamp: number
+  suggestionId: string
+  agent: string
+  text: string
+  suggestedCommand?: string | null
+  subjectObject?: string | null
+  kind: SuggestionKind
+}
+
 export interface AgentQuestionMessage {
   type: 'agent_question'
   timestamp: number
@@ -304,6 +317,7 @@ export type ServerMessage =
   | IntentPreviewMessage
   | CommandCancelMessage
   | AgentQuestionMessage
+  | AgentSuggestionMessage
   | ErrorMessage
 
 /** Cheap structural check — the server already pydantic-validated the packet. */
@@ -322,6 +336,12 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     return raw as CommandCancelMessage
   if (msg.type === 'agent_question' && typeof (raw as AgentQuestionMessage).question === 'string')
     return raw as AgentQuestionMessage
+  if (
+    msg.type === 'agent_suggestion' &&
+    typeof (raw as AgentSuggestionMessage).text === 'string' &&
+    typeof (raw as AgentSuggestionMessage).suggestionId === 'string'
+  )
+    return raw as AgentSuggestionMessage
   if (msg.type === 'error' && typeof (raw as ErrorMessage).message === 'string')
     return raw as ErrorMessage
   return null

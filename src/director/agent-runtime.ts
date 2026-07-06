@@ -19,7 +19,7 @@ import {
   CURSOR_LINGER_MS,
 } from './presence'
 import { useEditorStore } from '../store'
-import type { CommandPacket, CommandCancelMessage, IntentPreviewMessage, Target, Vec3 } from './protocol'
+import type { CommandPacket, CommandCancelMessage, IntentPreviewMessage, AgentSuggestionMessage, Target, Vec3 } from './protocol'
 
 type LogLevel = 'info' | 'warn' | 'error'
 type Logger = (agent: string, text: string, level: LogLevel) => void
@@ -35,6 +35,7 @@ const running = new Set<string>()
 const pendingIdle = new Set<string>()
 const inFlight = new Map<string, AbortController>()
 const lingerTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const suggestionGlance = new Set<string>()
 
 function clearLingerTimer(agent: string): void {
   const t = lingerTimers.get(agent)
@@ -235,12 +236,40 @@ export function applyIntentPreview(msg: IntentPreviewMessage): void {
 }
 
 export function markAgentIdle(agent: string): void {
+  if (suggestionGlance.has(agent)) return
   const queued = queues.get(agent)?.length ?? 0
   if (!running.has(agent) && queued === 0) {
     scheduleAgentFadeOut(agent)
   } else {
     pendingIdle.add(agent)
   }
+}
+
+/** Proactive crew suggestion — cursor glance without packet queue (Phase A4). */
+export function reactToSuggestion(msg: AgentSuggestionMessage): void {
+  const agent = msg.agent
+  suggestionGlance.add(agent)
+  markAgentActive(agent, msg.text)
+  let target: Vec3 = stationFor(agent)
+  if (msg.subjectObject) {
+    const obj = resolveTarget({ name: msg.subjectObject })
+    if (obj) target = obj.position
+  }
+  const presence = presenceStore.getState()
+  presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
+  if (msg.subjectObject) {
+    const id = resolveTarget({ name: msg.subjectObject })?.id
+    if (id) {
+      presence.followObject(agent, id)
+      presence.touchLastObject(agent, id)
+    }
+  }
+  setTimeout(() => {
+    suggestionGlance.delete(agent)
+    if (!running.has(agent) && (queues.get(agent)?.length ?? 0) === 0) {
+      scheduleAgentFadeOut(agent)
+    }
+  }, 3000)
 }
 
 /** Keep the cursor on a moving object until playback stops, then linger at station. */

@@ -27,6 +27,8 @@ export interface MotionParams {
   pivot?: number
   waypoints?: number
   seed?: number
+  /** Y scale at max squash (0–1) */
+  flat?: number
 }
 
 export interface StageContext {
@@ -288,6 +290,23 @@ export type MotionId =
   | 'launch'
   | 'swing'
   | 'wander'
+  | 'squash'
+
+function buildSquash(base: Vec3, duration: number, p: MotionParams): PresetKeyframes {
+  const flat = p.flat ?? 0.35
+  const stretch = 1 + (1 - flat) * 0.35
+  const [sx, sy, sz] = base
+  const squashAt = 0.22
+  const hold = 0.08
+  const recover = 0.45
+  return [
+    { time: 0, value: [sx, sy, sz] },
+    { time: duration * squashAt, value: [sx * stretch, sy * flat, sz * stretch] },
+    { time: duration * (squashAt + hold), value: [sx * stretch, sy * flat, sz * stretch] },
+    { time: duration * recover, value: [sx, sy, sz] },
+    { time: duration, value: [sx, sy, sz] },
+  ]
+}
 
 function buildZigzag(base: Vec3, duration: number, p: MotionParams, stage: StageContext): PresetKeyframes {
   const span = p.span ?? stage.radius * 0.45
@@ -382,6 +401,10 @@ const MOTION_ALIASES: Record<string, MotionId> = {
   roam: 'wander',
   explore: 'wander',
   free: 'wander',
+  squashed: 'squash',
+  squish: 'squash',
+  flatten: 'squash',
+  pancake: 'squash',
 }
 
 export function resolveMotionId(raw: string): MotionId {
@@ -432,6 +455,8 @@ export function defaultMotionDuration(motionRaw: string, params: MotionParams = 
       return 1.8
     case 'wobble':
       return 1.2
+    case 'squash':
+      return 0.9
     default:
       return 2
   }
@@ -491,6 +516,8 @@ export function motionKeyframes(
       return { property: 'position', keyframes: buildSwing(basePosition, durationSec, p) }
     case 'pulse':
       return { property: 'scale', keyframes: buildPulse(baseScale, durationSec, p) }
+    case 'squash':
+      return { property: 'scale', keyframes: buildSquash(baseScale, durationSec, p) }
     case 'spin':
     case 'turnaround':
       return {

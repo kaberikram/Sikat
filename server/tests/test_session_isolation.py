@@ -1,11 +1,15 @@
 """Per-connection session isolation and reference resolution."""
 from __future__ import annotations
 
+import time
+
 import pytest
+from fastapi.testclient import TestClient
 
 from app import session_context
 from app.fallback_parser import parse_one_clause
-from app.schema import MaterialOverrideSnapshot
+from app.main import app
+from app.schema import MaterialOverrideSnapshot, ObjectSnapshot, SampledTransform, SceneState
 from app.session_context import SessionContext, bind_session, reset_session
 from app.target_resolution import rank_targets
 from tests.helpers import scene_with
@@ -63,3 +67,20 @@ def test_parse_red_one_target():
     assert intent is not None
     assert intent.action == "transform"
     assert intent.target == "RED_BOX"
+
+
+@pytest.fixture(autouse=True)
+def _enable_proactive(monkeypatch):
+    monkeypatch.setenv("DIRECTOR_PROACTIVE", "1")
+
+
+def test_observer_tasks_are_per_socket():
+    """Each websocket gets its own observer asyncio task."""
+    from app.main import manager
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as _ws_a, client.websocket_connect("/ws") as _ws_b:
+            assert len(manager.observers) == 2
+            assert len(manager.sessions) == 2
+            tasks = list(manager.observers.values())
+            assert tasks[0] is not tasks[1]

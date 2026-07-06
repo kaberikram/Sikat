@@ -103,3 +103,46 @@ def test_split_clauses_exported():
         "enable bloom",
     ]
     assert split_clauses("play; pause") == ["play", "pause"]
+
+
+async def test_suggest_intent_routes_without_packets(monkeypatch, scene):
+    suggestions: list = []
+    packets: list = []
+
+    async def fake_stream(text, scene, frame=None, on_partial=None):
+        yield Intent(action="spawn", primitive="box", color="#ff3b30", say="spawning box")
+        yield Intent(
+            action="suggest",
+            say="want me to animate it?",
+            suggestion_command="make the box bounce",
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+    producer = Producer()
+
+    async def emit_log(agent, message, level="info"):
+        return None
+
+    async def emit_packet(packet):
+        packets.append(packet)
+
+    async def emit_status(agent, status, command_id=None, note=None):
+        return None
+
+    async def emit_suggest(obs):
+        suggestions.append(obs)
+
+    await producer.direct(
+        "add a creative box",
+        scene,
+        "cmd-suggest",
+        emit_log,
+        emit_packet,
+        emit_status,
+        emit_suggest=emit_suggest,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].kind == "command_suggest"
+    assert suggestions[0].suggested_command == "make the box bounce"

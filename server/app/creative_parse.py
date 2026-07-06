@@ -70,3 +70,20 @@ def defer_clause_to_llm(
     if llm_available and intent.action == "animate":
         return True
     return False
+
+
+_OBJECT_VERB = re.compile(
+    r"\b(box|sphere|cone|cylinder|torus|plane|object|camera|light|bloom|"
+    r"the\s+\w+|move|spawn|add|enable|disable|set|rotate|scale|play|pause|cut|record)\b",
+    re.I,
+)
+
+
+def is_open_direction(text: str) -> bool:
+    """Mood / vibe language without a concrete object+verb — triggers plan loop."""
+    lower = text.lower().strip()
+    if not _CREATIVE_LANGUAGE.search(lower):
+        return False
+    if _OBJECT_VERB.search(lower):
+        return False
+    return True

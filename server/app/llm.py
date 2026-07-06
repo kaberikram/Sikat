@@ -11,6 +11,7 @@ from typing import AsyncIterator, Awaitable, Callable
 
 from . import session_context
 from .performers import brief as performers_brief
+from .performers import crew_brief
 from .scene_context import format_scene_brief
 from .schema import Intent, IntentList, SceneFrame, SceneState
 
@@ -64,6 +65,11 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
 | describe | question only | describe_topic, describe_message |
 | clarify | genuinely ambiguous target (2+ near-equal matches) | clarify_question, clarify_options — server holds clauses until answered |
+| suggest | optional follow-up pitch after mutating intents | say, suggestion_command — omit when nothing worth pitching |
+
+Optionally end the intents array with ONE suggest intent (action suggest, say, suggestion_command)
+when a natural follow-up would help (e.g. after spawn: "want me to animate it?").
+Omit entirely when nothing is worth pitching. Never emit suggest before mutating intents.
 
 ## Set transport (film-set language)
 - hold, freeze, stop → playback_action pause (preview hold). When animation is playing on the last target, also set freeze_motion true to freeze the clip at its current pose (not just pause transport).
@@ -355,7 +361,7 @@ Follow-up rules:
 
 
 def _system_prompt(scene: SceneState | None) -> str:
-    scene_brief = format_scene_brief(scene) + "\n\n" + performers_brief()
+    scene_brief = format_scene_brief(scene) + "\n\n" + performers_brief() + "\n\n" + crew_brief()
     return SYSTEM_PROMPT_TEMPLATE.format(
         scene_brief=scene_brief,
         history_section=_history_section(),

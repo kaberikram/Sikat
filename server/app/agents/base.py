@@ -21,6 +21,8 @@ EmitPreview = Callable[[dict], Awaitable[None]]
 EmitCancel = Callable[[dict], Awaitable[None]]
 # emit_question(question_dict)
 EmitQuestion = Callable[[dict], Awaitable[None]]
+# emit_suggest(observation)
+EmitSuggest = Callable[[Any], Awaitable[None]]
 
 
 async def _noop_emit(agent: str, message: str, level: str = "info") -> None:
@@ -46,4 +48,8 @@ async def _noop_cancel(payload: dict) -> None:
 
 
 async def _noop_question(payload: dict) -> None:
+    return None
+
+
+async def _noop_suggest(obs: Any) -> None:
     return None
