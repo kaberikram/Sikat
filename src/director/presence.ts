@@ -18,8 +18,10 @@ export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the targe
 export const CURSOR_INTENT_MS = 200 // fast drift during pre-parse acknowledgment
 export const CURSOR_WORK_MS = 120 // hover on target before the change commits
 export const CURSOR_SETTLE_MS = 140 // linger after committing before the next task
+export const CURSOR_LINGER_MS = 20_000 // idle presence before fade
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling'
+export type IdleMode = 'none' | 'linger' | 'faded'
 
 export interface AgentMeta {
   /** Cursor tint + label background. */
@@ -97,17 +99,22 @@ export interface AgentPresence {
   note: string | null
   /** When set, the scene cursor tracks this object's live position each frame. */
   followObjectId: string | null
+  idleMode: IdleMode
+  lastTouchedObjectId: string | null
 }
 
 interface PresenceState {
   agents: Record<string, AgentPresence>
   setActive: (agent: string, active: boolean) => void
+  enterLinger: (agent: string, lastTouchedObjectId?: string | null) => void
+  fadeOut: (agent: string) => void
   /** Point the cursor at a new target and (re)start its flight clock. The
    *  optional duration lets callers pace a hop (defaults to a full flight). */
   flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
   setPhase: (agent: string, phase: CursorPhase) => void
   setNote: (agent: string, note: string | null) => void
   followObject: (agent: string, objectId: string | null) => void
+  touchLastObject: (agent: string, objectId: string | null) => void
 }
 
 function seed(agent: string): AgentPresence {
@@ -120,6 +127,8 @@ function seed(agent: string): AgentPresence {
     moveDurationMs: CURSOR_FLIGHT_MS,
     note: null,
     followObjectId: null,
+    idleMode: 'none',
+    lastTouchedObjectId: null,
   }
 }
 
@@ -134,7 +143,40 @@ function patch(
 
 export const presenceStore = create<PresenceState>((set) => ({
   agents: {},
-  setActive: (agent, active) => set((s) => patch(s, agent, { active })),
+  setActive: (agent, active) =>
+    set((s) =>
+      patch(s, agent, {
+        active,
+        idleMode: active ? 'none' : 'faded',
+        note: active ? s.agents[agent]?.note ?? null : null,
+      })
+    ),
+  enterLinger: (agent, lastTouchedObjectId = null) =>
+    set((s) => {
+      const station = stationFor(agent)
+      return patch(s, agent, {
+        active: true,
+        idleMode: 'linger',
+        phase: 'idle',
+        target: station,
+        moveStartedAt: performance.now(),
+        moveDurationMs: CURSOR_FLIGHT_MS,
+        note: null,
+        followObjectId: null,
+        lastTouchedObjectId,
+      })
+    }),
+  fadeOut: (agent) =>
+    set((s) =>
+      patch(s, agent, {
+        active: false,
+        idleMode: 'faded',
+        phase: 'idle',
+        note: null,
+        followObjectId: null,
+        lastTouchedObjectId: null,
+      })
+    ),
   flyTo: (agent, target, phase, durationMs = CURSOR_FLIGHT_MS) =>
     set((s) =>
       patch(s, agent, {
@@ -147,4 +189,6 @@ export const presenceStore = create<PresenceState>((set) => ({
   setPhase: (agent, phase) => set((s) => patch(s, agent, { phase })),
   setNote: (agent, note) => set((s) => patch(s, agent, { note })),
   followObject: (agent, objectId) => set((s) => patch(s, agent, { followObjectId: objectId })),
+  touchLastObject: (agent, objectId) =>
+    set((s) => patch(s, agent, { lastTouchedObjectId: objectId })),
 }))

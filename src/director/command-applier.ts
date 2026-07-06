@@ -23,12 +23,13 @@ import {
   existingPositionPath,
 } from '../motion-composite'
 import { buildSpawnMesh } from './spawn-factory'
-import { startTween } from './tween'
+import { startTween, cancelTween, retargetTween } from './tween'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
 import { applyLiveCameraPose } from './camera-pose'
 import type {
   CommandPacket,
+  CommandCancelMessage,
   Target,
   Transition,
   Vec3,
@@ -36,7 +37,19 @@ import type {
 
 const EASE_SAMPLES = 8
 
-function beginClipPlayback(clipEnd: number, repeat: boolean): void {
+const activeClips = new Map<string, () => void>()
+
+function registerClipCancel(commandId: string | null | undefined, cancel: () => void): void {
+  if (!commandId) return
+  activeClips.set(commandId, cancel)
+}
+
+function beginClipPlayback(
+  clipEnd: number,
+  repeat: boolean,
+  commandId: string | null | undefined,
+  objectId: string | null
+): void {
   const st = useEditorStore.getState()
   st.setTime(0)
   st.setClipLoopEnd(clipEnd)
@@ -48,6 +61,49 @@ function beginClipPlayback(clipEnd: number, repeat: boolean): void {
     st.setPlaybackLoop(false)
   }
   if (!st.isPlaying) st.togglePlay()
+
+  registerClipCancel(commandId, () => {
+    const state = useEditorStore.getState()
+    if (state.isPlaying) state.togglePlay()
+    state.setPlayOnceEnd(null)
+    state.setPlaybackLoop(false)
+    if (objectId) {
+      const obj = state.objects.find((o) => o.id === objectId)
+      if (obj) {
+        const pos = interpolateKeyframes(
+          obj.keyframes,
+          state.currentTime,
+          'position',
+          obj.position
+        )
+        state.updateObject(objectId, { position: pos })
+        state.addKeyframe(objectId, state.currentTime, 'position', pos)
+      }
+    }
+    if (commandId) activeClips.delete(commandId)
+  })
+}
+
+export function cancelCommandPacket(msg: CommandCancelMessage): void {
+  const clipCancel = activeClips.get(msg.commandId)
+  if (clipCancel) {
+    clipCancel()
+    return
+  }
+  const obj = msg.target ? resolveTarget(msg.target) : null
+  if (!obj) return
+  cancelTween(`${obj.id}:position`)
+  cancelTween(`${obj.id}:rotation`)
+  cancelTween(`${obj.id}:scale`)
+}
+
+export function retargetObjectTween(
+  objectId: string,
+  property: VectorProperty,
+  newTo: Vec3,
+  durationSec?: number
+): boolean {
+  return retargetTween(`${objectId}:${property}`, [...newTo], durationSec)
 }
 
 export function resolveTarget(target: Target | null | undefined): MotionObject | null {
@@ -290,10 +346,10 @@ export function applyCommandPacket(packet: CommandPacket): string {
       if (isRefinement) {
         const fromTime = st.currentTime
         st.mergeObjectPropertyKeyframes(obj.id, property, keyframes, fromTime)
-        if (clipEnd > fromTime) beginClipPlayback(clipEnd, p.repeat === true)
+        if (clipEnd > fromTime) beginClipPlayback(clipEnd, p.repeat === true, packet.commandId, obj.id)
       } else {
         st.setObjectPropertyKeyframes(obj.id, property, keyframes)
-        beginClipPlayback(clipEnd, p.repeat === true)
+        beginClipPlayback(clipEnd, p.repeat === true, packet.commandId, obj.id)
       }
       const mode = useComposite ? `${motion} along path` : motion
       const suffix = isRefinement ? ' (refined)' : ''
@@ -394,7 +450,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
         st.setObjectPropertyKeyframes(obj.id, p.property, mapped)
       }
       const last = p.keyframes[p.keyframes.length - 1]?.time
-      if (last != null && !isRefinement) beginClipPlayback(last, false)
+      if (last != null && !isRefinement) beginClipPlayback(last, false, packet.commandId, obj.id)
       return `${obj.name} ${p.property} keyframes set${isRefinement ? ' (refined)' : ''}`
     }
 

@@ -549,7 +549,43 @@ def error_message(message: str, for_command_id: str | None = None) -> dict:
     }
 
 
-IntentPreviewConfidence = Literal["guess", "grammar", "llm_partial"]
+def command_cancel_message(
+    command_id: str,
+    *,
+    superseded_by: str | None = None,
+    target: Target | None = None,
+    command: str | None = None,
+    reason: CancelReason = "supersede",
+) -> dict:
+    payload: dict = {
+        "type": "command_cancel",
+        "timestamp": now(),
+        "commandId": command_id,
+        "reason": reason,
+    }
+    if superseded_by:
+        payload["supersededBy"] = superseded_by
+    if target is not None:
+        payload["target"] = target.model_dump(exclude_none=True)
+    if command:
+        payload["command"] = command
+    return payload
+
+
+def agent_question_message(
+    agent: str,
+    command_id: str,
+    question: str,
+    options: list[str],
+) -> dict:
+    return {
+        "type": "agent_question",
+        "timestamp": now(),
+        "agent": agent,
+        "commandId": command_id,
+        "question": question,
+        "options": options,
+    }
 
 
 def intent_preview_message(
@@ -593,6 +629,7 @@ IntentAction = Literal[
     "set_scene",
     "describe",
     "assign",
+    "clarify",
 ]
 
 
@@ -614,6 +651,10 @@ class Intent(BaseModel):
     addressee: int | None = None
     role: str | None = None
     transition: Transition | None = None
+    snap_motion: bool | None = None
+    """When true, omit default transition injection (director said snap/instantly)."""
+    freeze_motion: bool | None = None
+    """When true with playback pause, cancel in-flight animate on last target."""
     say: str | None = None
     """In-character film-set radio line for this intent (server-internal —
     not part of the wire protocol; producer emits it as the cursor note)."""
@@ -663,6 +704,9 @@ class Intent(BaseModel):
         Literal["scene", "animation", "lighting", "fx", "camera", "object"] | None
     ) = None
     describe_message: str | None = None
+    # clarify (server-internal — surfaced as agent_question wire message)
+    clarify_question: str | None = None
+    clarify_options: list[str] | None = None
 
 
 class IntentList(BaseModel):

@@ -43,6 +43,8 @@ Breaking change: `camera` → **`virtualCamera`**.
 | `agent_command` | `packet` (CommandPacket below) |
 | `intent_preview` | `commandId`, `agent`, `note`, `confidence (guess\|grammar\|llm_partial)`, `target?`, `action?`, `motion?` |
 | `agent_status` | `agent`, `status (active\|idle)`, `forCommandId?`, `note?` |
+| `command_cancel` | `commandId`, `supersededBy?`, `target?`, `command?`, `reason? (supersede\|stop\|amend)` |
+| `agent_question` | `agent`, `commandId`, `question`, `options[]` |
 | `agent_log` | `agent`, `level (info\|warn\|error)`, `message`, `forCommandId?` |
 | `error` | `message`, `forCommandId?` |
 
@@ -98,6 +100,9 @@ falls back to a static per-command verb ("spawning", "animating", …).
 ```
 
 `transition` is optional; when present the client animates instead of snapping.
+When omitted on `TRANSFORM_OBJECT`, `UPDATE_LIGHTS`, or `SET_MATERIAL`, the server
+injects a default ~0.6–0.9s `easeOut` glide (scaled by move distance). Say
+**snap** / **instantly** to disable tweening.
 Easings: `linear | easeIn | easeOut | easeInOut` (cubic).
 
 `Target` = `{id?, name?}` (at least one). Resolution happens client-side at apply

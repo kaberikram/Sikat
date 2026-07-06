@@ -17,6 +17,10 @@ EmitPacket = Callable[[Any], Awaitable[None]]
 EmitStatus = Callable[[str, str, "str | None", "str | None"], Awaitable[None]]
 # emit_preview(preview_dict)
 EmitPreview = Callable[[dict], Awaitable[None]]
+# emit_cancel(cancel_dict)
+EmitCancel = Callable[[dict], Awaitable[None]]
+# emit_question(question_dict)
+EmitQuestion = Callable[[dict], Awaitable[None]]
 
 
 async def _noop_emit(agent: str, message: str, level: str = "info") -> None:
@@ -34,4 +38,12 @@ async def _noop_status(
 
 
 async def _noop_preview(payload: dict) -> None:
+    return None
+
+
+async def _noop_cancel(payload: dict) -> None:
+    return None
+
+
+async def _noop_question(payload: dict) -> None:
     return None

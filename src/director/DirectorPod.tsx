@@ -2,9 +2,11 @@ import React, { useState, useCallback, useRef } from 'react'
 import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
+import type { AgentQuestionMessage } from './protocol'
 import { startSceneStateSync } from './scene-state-sync'
 import {
   enqueuePacket,
+  cancelCommand,
   markAgentActive,
   markAgentIdle,
   applyClientIntentGuess,
@@ -46,11 +48,16 @@ const PLACEHOLDERS = [
 
 // Instant pre-parse Producer note — rotates so back-to-back commands don't
 // all flash the same word before the real per-packet note takes over.
-const INSTANT_NOTES = ['copy', 'on it', 'hearing you', 'rolling on that']
+const INSTANT_NOTES = ['copy', 'on it', 'hearing you', 'rolling on that', 'got it', 'standing by', 'yep', 'roger']
+const recentStatusNotes: string[] = []
 let instantNoteIdx = 0
 function nextInstantNote(): string {
-  const note = INSTANT_NOTES[instantNoteIdx % INSTANT_NOTES.length]
+  const fresh = INSTANT_NOTES.filter((n) => !recentStatusNotes.includes(n))
+  const pool = fresh.length > 0 ? fresh : INSTANT_NOTES
+  const note = pool[instantNoteIdx % pool.length]
   instantNoteIdx += 1
+  recentStatusNotes.push(note)
+  if (recentStatusNotes.length > 12) recentStatusNotes.shift()
   return note
 }
 
@@ -106,6 +113,7 @@ export function DirectorPod() {
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
+  const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionMessage | null>(null)
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -144,6 +152,7 @@ export function DirectorPod() {
     // paces each apply behind its cursor's flight, logging as it commits.
     setRuntimeLogger(pushLog)
     const offPacket = socket.onPacket((packet) => {
+      setPendingQuestion(null)
       const elapsed = markFirstPacket(packet.commandId)
       if (elapsed != null) pushLog('SYSTEM', `⏱ first packet ${elapsed.toFixed(2)}s`)
       enqueuePacket(packet)
@@ -153,7 +162,19 @@ export function DirectorPod() {
     const offIntentPreview = socket.onIntentPreview((msg) => {
       applyIntentPreview(msg)
     })
+    const offCancel = socket.onCancel((msg) => {
+      cancelCommand(msg)
+      pushLog('SYSTEM', `cancelled ${msg.commandId}${msg.reason ? ` (${msg.reason})` : ''}`, 'info')
+    })
+    const offQuestion = socket.onQuestion((msg) => {
+      setPendingQuestion(msg)
+      markAgentActive(msg.agent, msg.question)
+    })
     const offAgentStatus = socket.onAgentStatus((msg) => {
+      if (msg.note) {
+        recentStatusNotes.push(msg.note)
+        if (recentStatusNotes.length > 12) recentStatusNotes.shift()
+      }
       if (msg.status === 'active') {
         markAgentActive(msg.agent, msg.note)
       } else markAgentIdle(msg.agent)
@@ -194,6 +215,8 @@ export function DirectorPod() {
       offStatus()
       offPacket()
       offIntentPreview()
+      offCancel()
+      offQuestion()
       offAgentStatus()
       offLog()
       offError()
@@ -205,7 +228,10 @@ export function DirectorPod() {
     }
   })
 
-  const submit = useCallback(async (text: string, opts?: { forceVision?: boolean }) => {
+  const submit = useCallback(async (
+    text: string,
+    opts?: { forceVision?: boolean; commandId?: string }
+  ) => {
     const trimmed = text.trim()
     if (!trimmed) return
 
@@ -218,7 +244,7 @@ export function DirectorPod() {
     }
 
     const socket = getDirectorSocket()
-    const commandId = crypto.randomUUID()
+    const commandId = opts?.commandId ?? crypto.randomUUID()
     // Instant set reaction — don't wait for LLM parse or network round-trip.
     markAgentActive('Producer', nextInstantNote())
     applyClientIntentGuess(trimmed, commandId)
@@ -386,6 +412,29 @@ export function DirectorPod() {
           <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
           <span className="opacity-60 uppercase">{status}</span>
         </div>
+
+        {pendingQuestion && (
+          <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/30">
+            <p className="text-[9px] font-bold mb-1.5">
+              [{pendingQuestion.agent}] {pendingQuestion.question}
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {pendingQuestion.options.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                  onClick={() => {
+                    setPendingQuestion(null)
+                    void submit(opt, { commandId: pendingQuestion.commandId })
+                  }}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <form
           className="flex border-t-2 border-black"

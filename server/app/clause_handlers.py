@@ -10,6 +10,7 @@ from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
 from .motion_vocab import extract_motion, extract_motion_params
 from .scene_context import describe_fallback_message
 from .schema import FxSetting, Intent, SceneState, Transition
+from .target_resolution import ambiguous_options, is_ambiguous, rank_targets
 
 COLOR_WORDS: dict[str, str] = {
     "red": "#ff3b30",
@@ -166,6 +167,15 @@ def _resolve_performer_clause(
     return None, rest, n
 
 
+def _extract_snap(clause: str) -> tuple[bool, str]:
+    """Detect snap/instant keywords — motion should not tween."""
+    m = re.search(r"\b(snap|instantly|instant)\b", clause)
+    if not m:
+        return False, clause
+    rest = (clause[: m.start()] + " " + clause[m.end() :]).strip()
+    return True, rest
+
+
 def _extract_transition(clause: str) -> tuple[Transition | None, str]:
     m = re.search(
         rf"\b(?:over|across|for|in|taking)\s+{_NUM}\s*(?:s\b|sec\b|secs\b|seconds?\b)",
@@ -222,11 +232,39 @@ def _find_target(clause: str, scene: SceneState | None) -> str | None:
     return None
 
 
+def _resolve_target_or_clarify(
+    clause: str, scene: SceneState | None, question: str = "Which one"
+) -> Intent | str | None:
+    clarify = session_context.consume_clarify_target()
+    if clarify:
+        return clarify
+    ranked = rank_targets(clause, scene)
+    if len(ranked) >= 2 and is_ambiguous(ranked):
+        options = ambiguous_options(ranked)
+        return Intent(
+            action="clarify",
+            clarify_question=f"{question} — {', '.join(options)}?",
+            clarify_options=options,
+        )
+    if ranked:
+        return ranked[0][0]
+    return _find_target(clause, scene)
+
+
 def _find_vec3_after(clause: str, anchor: str) -> tuple[float, float, float] | None:
     m = re.search(rf"\b{anchor}\s+{_NUM}[,\s]+{_NUM}[,\s]+{_NUM}", clause)
     if not m:
         return None
     return (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+
+
+def _target_has_motion(scene: SceneState, target_name: str) -> bool:
+    needle = target_name.lower()
+    for obj in scene.objects:
+        name_lower = obj.name.lower()
+        if name_lower == needle or needle in name_lower:
+            return bool(obj.keyframedProperties) or bool(obj.tracks)
+    return False
 
 
 def _parse_playback(
@@ -255,7 +293,16 @@ def _parse_playback(
     if re.fullmatch(r"(play|go|roll(?:ing)?(?: it)?|continue|resume)", clause):
         return Intent(action="playback", playback_action="play")
     if re.fullmatch(r"(pause|stop|freeze|hold)", clause):
-        return Intent(action="playback", playback_action="pause")
+        freeze = False
+        if _scene is not None and _scene.isPlaying:
+            last = session_context.last_target()
+            if last and _target_has_motion(_scene, last):
+                freeze = True
+        return Intent(
+            action="playback",
+            playback_action="pause",
+            freeze_motion=freeze or None,
+        )
     if re.fullmatch(r"(back to one|top of (the )?scene|back to the top of the scene)", clause):
         return Intent(
             action="playback",
@@ -404,7 +451,10 @@ def _parse_animate(
     motion = extract_motion(clause)
     if not motion:
         return None
-    target = _find_target(clause, scene)
+    resolved = _resolve_target_or_clarify(clause, scene, "Which object should I animate")
+    if isinstance(resolved, Intent):
+        return resolved
+    target = resolved
     if not target:
         return None
     params = extract_motion_params(clause, motion, scene.stage.radius if scene else 25.0)
@@ -438,8 +488,14 @@ def _parse_material(
     if not re.search(r"\b(paint|colou?r|tint|make|turn)\b", clause):
         return None
     color = _find_color(clause)
-    existing = _find_scene_target(clause, scene)
-    if not (color and existing):
+    if not color:
+        return None
+    ranked = rank_targets(clause, scene)
+    if ranked:
+        existing = ranked[0][0]
+    else:
+        existing = _find_scene_target(clause, scene)
+    if not existing:
         return None
     intent = Intent(action="set_material", target=existing, color=color)
     if re.search(r"\b(glow|glowing|emissive|neon)\b", clause):
@@ -603,7 +659,10 @@ def _parse_move(
 ) -> Intent | None:
     if not re.search(r"\b(move|shift|slide|raise|lower|lift|nudge|bring|push|pull|send|position)\b", clause):
         return None
-    target = _find_target(clause, scene)
+    resolved = _resolve_target_or_clarify(clause, scene, "Which object should I move")
+    if isinstance(resolved, Intent):
+        return resolved
+    target = resolved
     if not target:
         return None
     absolute = _find_vec3_after(clause, "to")
@@ -714,11 +773,19 @@ def parse_clause(clause: str, scene: SceneState | None) -> Intent | None:
         return None
 
     transition, work = _extract_transition(work)
+    snap, work = _extract_snap(work)
+    if snap:
+        transition = None
     for handler in HANDLERS:
         intent = handler(work, scene, transition)
         if intent is not None:
             addr = addressee or session_context.pending_addressee()
+            updates: dict = {}
             if addr is not None:
-                intent = intent.model_copy(update={"addressee": addr})
+                updates["addressee"] = addr
+            if snap:
+                updates["snap_motion"] = True
+            if updates:
+                intent = intent.model_copy(update=updates)
             return intent
     return None

@@ -6,19 +6,21 @@ from ..schema import (
     CommandPacket,
     Intent,
     KeyLightPatch,
+    SceneState,
     SetMaterialPacket,
     SetMaterialPayload,
     Target,
     UpdateLightsPacket,
     UpdateLightsPayload,
 )
+from ..transitions import default_ambient_transition
 
 
 class LightingTech:
     name = "LightingTech"
     actions = ("update_lights", "set_material")
 
-    def build(self, intent: Intent) -> list[CommandPacket]:
+    def build(self, intent: Intent, scene: SceneState | None = None) -> list[CommandPacket]:
         if intent.action == "update_lights":
             ambient = None
             if intent.ambient_color is not None or intent.ambient_intensity is not None:
@@ -38,12 +40,15 @@ class LightingTech:
                 )
             if ambient is None and key is None and intent.background is None:
                 return []
+            transition = intent.transition or default_ambient_transition()
+            if intent.snap_motion:
+                transition = intent.transition
             return [
                 UpdateLightsPacket(
                     payload=UpdateLightsPayload(
                         ambient=ambient, key=key, background=intent.background
                     ),
-                    transition=intent.transition,
+                    transition=transition,
                 )
             ]
         if intent.action == "set_material":
@@ -56,5 +61,8 @@ class LightingTech:
                 emissiveIntensity=intent.emissive_intensity,
                 opacity=intent.opacity,
             )
-            return [SetMaterialPacket(payload=payload)]
+            transition = intent.transition or default_ambient_transition()
+            if intent.snap_motion:
+                transition = intent.transition
+            return [SetMaterialPacket(payload=payload, transition=transition)]
         return []

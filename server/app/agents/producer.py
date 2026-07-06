@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from .. import fallback_parser, llm, performers, session_context
+from .. import active_commands, fallback_parser, llm, performers, session_context
 from ..creative_parse import defer_clause_to_llm, needs_llm_refinement, should_coarse_emit
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
@@ -16,17 +16,24 @@ from ..schema import (
     PlaybackPayload,
     SceneFrame,
     SceneState,
+    agent_question_message,
     intent_preview_message,
 )
+from ..session_context import CLARIFY_TIMEOUT_SEC, PendingClarify
+from ..target_resolution import resolve_option_answer
 from .asset_animator import AssetAnimator
 from .base import (
+    EmitCancel,
     EmitLog,
     EmitPacket,
     EmitPreview,
+    EmitQuestion,
     EmitStatus,
+    _noop_cancel,
     _noop_emit,
     _noop_packet,
     _noop_preview,
+    _noop_question,
     _noop_status,
 )
 from .directors_assistant import DirectorsAssistant
@@ -66,6 +73,33 @@ def _agent_note(agent_packets: list[CommandPacket]) -> str:
     if not agent_packets:
         return "working"
     return _COMMAND_NOTE.get(agent_packets[0].command, "working")
+
+
+_INSTANT_NOTE_POOL = [
+    "copy",
+    "on it",
+    "hearing you",
+    "rolling on that",
+    "got it",
+    "standing by",
+    "yep",
+    "roger",
+]
+
+
+def _display_note(note: str | None, agent_packets: list[CommandPacket]) -> str | None:
+    if note:
+        session_context.note_say(note)
+        return note
+    if not agent_packets:
+        return session_context.pick_fresh_note(_INSTANT_NOTE_POOL)
+    base = _agent_note(agent_packets)
+    recent = session_context.get_session().recent_notes
+    if base in recent:
+        alts = [v for v in dict.fromkeys(_COMMAND_NOTE.values()) if v != base]
+        return session_context.pick_fresh_note(alts + _INSTANT_NOTE_POOL)
+    session_context.note_say(base)
+    return base
 
 
 _SUMMARY_PARAM_KEYS = ("hops", "height", "amplitude", "frequency", "turns", "radius")
@@ -195,7 +229,7 @@ class Producer:
             assignment = performers.get(intent.addressee)
             if assignment:
                 working = working.model_copy(update={"target": assignment.target})
-        built = specialist.build(working) if specialist else []
+        built = specialist.build(working, scene) if specialist else []
         if built and specialist:
             await emit(
                 specialist.name,
@@ -230,6 +264,148 @@ class Producer:
             )
         return packets
 
+    async def _maybe_emit_supersede_cancel(
+        self,
+        packet: CommandPacket,
+        emit_cancel: EmitCancel,
+    ) -> None:
+        target_name = active_commands._packet_target_name(packet)
+        if not target_name or not packet.commandId:
+            return
+        if packet.command not in (
+            "TRANSFORM_OBJECT",
+            "ANIMATE_OBJECT",
+            "SET_MATERIAL",
+            "SET_KEYFRAMES",
+        ):
+            return
+        prior = active_commands.note_active(
+            target_name, packet.command, packet.commandId
+        )
+        if prior and prior[0] != packet.commandId:
+            await emit_cancel(
+                active_commands.build_supersede_cancel(
+                    prior[0],
+                    superseded_by=packet.commandId,
+                    target_name=target_name,
+                    command=prior[1],
+                )
+            )
+
+    async def _maybe_emit_freeze_cancel(
+        self,
+        intent: Intent,
+        command_id: str | None,
+        emit_cancel: EmitCancel,
+    ) -> None:
+        if not intent.freeze_motion or not command_id:
+            return
+        target = session_context.last_target()
+        if not target:
+            return
+        prior = active_commands.prior_for(target, "ANIMATE_OBJECT")
+        if prior:
+            await emit_cancel(active_commands.build_stop_cancel(prior[0], target))
+
+    async def _emit_clarify(
+        self,
+        intent: Intent,
+        held_clause: str,
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_question: EmitQuestion,
+        emit_cancel: EmitCancel,
+        emit_packet: EmitPacket,
+        emit_status: EmitStatus,
+        scene: SceneState | None,
+    ) -> None:
+        if not command_id or not intent.clarify_question or not intent.clarify_options:
+            return
+        agent = "AssetAnimator"
+        session_context.set_pending_clarify(
+            PendingClarify(
+                command_id=command_id,
+                held_clauses=[held_clause],
+                question=intent.clarify_question,
+                options=intent.clarify_options,
+                agent=agent,
+            )
+        )
+        await emit_question(
+            agent_question_message(
+                agent,
+                command_id,
+                intent.clarify_question,
+                intent.clarify_options,
+            )
+        )
+        await emit_log(self.name, f"clarify: {intent.clarify_question}", "info")
+
+        async def timeout() -> None:
+            await asyncio.sleep(CLARIFY_TIMEOUT_SEC)
+            pending = session_context.pending_clarify()
+            if pending is None or pending.command_id != command_id:
+                return
+            guess = pending.options[0]
+            await emit_log(
+                self.name, f"clarify timeout — assuming {guess}", "warn"
+            )
+            session_context.clear_pending_clarify()
+            session_context.set_clarify_target(guess)
+            held = " and ".join(pending.held_clauses)
+            await self._direct_multi_clause(
+                held,
+                split_clauses(held),
+                scene,
+                pending.command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                None,
+                _noop_preview,
+                emit_cancel,
+                _noop_question,
+                skip_clarify_resume=True,
+            )
+
+        asyncio.create_task(timeout())
+
+    async def _try_resume_clarify(
+        self,
+        text: str,
+        scene: SceneState | None,
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_packet: EmitPacket,
+        emit_status: EmitStatus,
+        emit_cancel: EmitCancel,
+        emit_question: EmitQuestion,
+    ) -> tuple[list[CommandPacket], bool] | None:
+        pending = session_context.pending_clarify()
+        if pending is None:
+            return None
+        answer = resolve_option_answer(text, pending.options)
+        if not answer:
+            return None
+        session_context.clear_pending_clarify()
+        session_context.set_clarify_target(answer)
+        await emit_log(self.name, f"clarify answered → {answer}", "info")
+        held = " and ".join(pending.held_clauses)
+        return await self._direct_multi_clause(
+            held,
+            split_clauses(held),
+            scene,
+            pending.command_id,
+            emit_log,
+            emit_packet,
+            emit_status,
+            None,
+            _noop_preview,
+            emit_cancel,
+            emit_question,
+            skip_clarify_resume=True,
+        )
+
     async def _stream_packets_staged(
         self,
         packets: list[CommandPacket],
@@ -238,6 +414,7 @@ class Producer:
         emit_packet: EmitPacket,
         emit_status: EmitStatus,
         note: str | None = None,
+        emit_cancel: EmitCancel = _noop_cancel,
     ) -> None:
         if not packets:
             return
@@ -257,10 +434,11 @@ class Producer:
             index: int, agent: str, agent_packets: list[CommandPacket]
         ) -> None:
             await asyncio.sleep(index * AGENT_STAGGER)
-            await emit_status(agent, "active", command_id, note or _agent_note(agent_packets))
+            await emit_status(agent, "active", command_id, _display_note(note, agent_packets))
             for step, packet in enumerate(agent_packets):
                 if step:
                     await asyncio.sleep(AGENT_STEP_DELAY)
+                await self._maybe_emit_supersede_cancel(packet, emit_cancel)
                 await emit_packet(packet)
             await emit_status(agent, "idle", command_id, "done")
 
@@ -318,6 +496,7 @@ class Producer:
         emit_packet: EmitPacket,
         emit_status: EmitStatus,
         frame: SceneFrame | None,
+        emit_cancel: EmitCancel = _noop_cancel,
     ) -> tuple[list[CommandPacket], bool]:
         packets, describe_only = await self.handle_user_command(
             text, scene, command_id, emit_log, emit_status, frame
@@ -326,7 +505,7 @@ class Producer:
             return packets, describe_only
 
         await self._stream_packets_staged(
-            packets, command_id, emit_log, emit_packet, emit_status
+            packets, command_id, emit_log, emit_packet, emit_status, emit_cancel=emit_cancel
         )
         return packets, False
 
@@ -338,12 +517,14 @@ class Producer:
         emit_packet: EmitPacket,
         emit_status: EmitStatus,
         scene: SceneState | None = None,
+        emit_cancel: EmitCancel = _noop_cancel,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
             if intent.action == "describe":
                 await self._emit_describe(intent, emit_log)
                 continue
+            await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
             built = await self._build_packets_for_intent(
                 intent, emit_log, emit_status, command_id, scene
             )
@@ -351,7 +532,13 @@ class Producer:
                 packet.commandId = command_id
             packets.extend(built)
             await self._stream_packets_staged(
-                built, command_id, emit_log, emit_packet, emit_status, note=intent.say
+                built,
+                command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                note=intent.say,
+                emit_cancel=emit_cancel,
             )
         return packets
 
@@ -366,7 +553,24 @@ class Producer:
         emit_status: EmitStatus,
         frame: SceneFrame | None,
         emit_preview: EmitPreview = _noop_preview,
+        emit_cancel: EmitCancel = _noop_cancel,
+        emit_question: EmitQuestion = _noop_question,
+        skip_clarify_resume: bool = False,
     ) -> tuple[list[CommandPacket], bool]:
+        if not skip_clarify_resume:
+            resumed = await self._try_resume_clarify(
+                text,
+                scene,
+                command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                emit_cancel,
+                emit_question,
+            )
+            if resumed is not None:
+                return resumed
+
         llm_feed_task: asyncio.Task | None = None
         llm_queue: asyncio.Queue | None = None
         partial_seen: set[tuple[tuple[str, str | int], ...]] = set()
@@ -446,6 +650,7 @@ class Producer:
                     handled.append(False)
                     continue
                 describe_only = False
+                await self._maybe_emit_freeze_cancel(raw_intent, command_id, emit_cancel)
                 built = await self._build_packets_for_intent(
                     raw_intent, emit_log, emit_status, command_id, scene
                 )
@@ -454,7 +659,13 @@ class Producer:
                     packet.refinement = False
                 all_packets.extend(built)
                 await self._stream_packets_staged(
-                    built, command_id, emit_log, emit_packet, emit_status, note=raw_intent.say
+                    built,
+                    command_id,
+                    emit_log,
+                    emit_packet,
+                    emit_status,
+                    note=raw_intent.say,
+                    emit_cancel=emit_cancel,
                 )
                 await emit_log(
                     self.assistant.name,
@@ -468,11 +679,27 @@ class Producer:
             handled.append(intent is not None)
             if intent is None:
                 continue
+            if intent.action == "clarify":
+                all_intents.append(intent)
+                await self._emit_clarify(
+                    intent,
+                    clause,
+                    command_id,
+                    emit_log,
+                    emit_question,
+                    emit_cancel,
+                    emit_packet,
+                    emit_status,
+                    scene,
+                )
+                handled.append(True)
+                continue
             all_intents.append(intent)
             if intent.action == "describe":
                 await self._emit_describe(intent, emit_log)
                 continue
             describe_only = False
+            await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
             built = await self._build_packets_for_intent(
                 intent, emit_log, emit_status, command_id, scene
             )
@@ -480,7 +707,13 @@ class Producer:
                 packet.commandId = command_id
             all_packets.extend(built)
             await self._stream_packets_staged(
-                built, command_id, emit_log, emit_packet, emit_status, note=intent.say
+                built,
+                command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                note=intent.say,
+                emit_cancel=emit_cancel,
             )
 
         if llm_feed_task is not None:
@@ -509,6 +742,7 @@ class Producer:
                         await self._emit_describe(intent, emit_log)
                         continue
                     describe_only = False
+                    await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
                     built = await self._build_packets_for_intent(
                         intent, emit_log, emit_status, command_id, scene
                     )
@@ -525,6 +759,7 @@ class Producer:
                         emit_packet,
                         emit_status,
                         note=intent.say,
+                        emit_cancel=emit_cancel,
                     )
                 await llm_feed_task
         else:
@@ -564,6 +799,7 @@ class Producer:
                     emit_packet,
                     emit_status,
                     scene,
+                    emit_cancel,
                 )
                 all_packets.extend(rescued)
                 if describe_only and not rescued:
@@ -581,6 +817,8 @@ class Producer:
         emit_status: EmitStatus = _noop_status,
         frame: SceneFrame | None = None,
         emit_preview: EmitPreview = _noop_preview,
+        emit_cancel: EmitCancel = _noop_cancel,
+        emit_question: EmitQuestion = _noop_question,
     ) -> tuple[list[CommandPacket], bool]:
         """Staged execution: plan the crew's work, then stream it over time.
 
@@ -601,4 +839,6 @@ class Producer:
             emit_status,
             frame,
             emit_preview,
+            emit_cancel,
+            emit_question,
         )

@@ -5,7 +5,7 @@
  * the affected object while it animates (main + viewfinder show the real motion).
  * No fake path-tracing or trail drawing.
  */
-import { applyCommandPacket, resolveTarget } from './command-applier'
+import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
 import { packetTargetPosition } from './cursor-targets'
 import { guessIntent, type IntentGuess } from './intent-guess'
 import { markFirstApply, markFirstCursorMove, markFirstPreview, markFirstRefinement } from './latency'
@@ -16,9 +16,10 @@ import {
   CURSOR_INTENT_MS,
   CURSOR_WORK_MS,
   CURSOR_SETTLE_MS,
+  CURSOR_LINGER_MS,
 } from './presence'
 import { useEditorStore } from '../store'
-import type { CommandPacket, IntentPreviewMessage, Target, Vec3 } from './protocol'
+import type { CommandPacket, CommandCancelMessage, IntentPreviewMessage, Target, Vec3 } from './protocol'
 
 type LogLevel = 'info' | 'warn' | 'error'
 type Logger = (agent: string, text: string, level: LogLevel) => void
@@ -32,8 +33,34 @@ export function setRuntimeLogger(fn: Logger): void {
 const queues = new Map<string, CommandPacket[]>()
 const running = new Set<string>()
 const pendingIdle = new Set<string>()
+const inFlight = new Map<string, AbortController>()
+const lingerTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearLingerTimer(agent: string): void {
+  const t = lingerTimers.get(agent)
+  if (t) clearTimeout(t)
+  lingerTimers.delete(agent)
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true }
+    )
+  })
+}
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const dist = (a: [number, number, number], b: [number, number, number]) =>
   Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
@@ -115,8 +142,26 @@ function followObjectIdForPacket(packet: CommandPacket): string | null {
   }
 }
 
+export function cancelCommand(msg: CommandCancelMessage): void {
+  cancelCommandPacket(msg)
+
+  for (const [key, controller] of inFlight) {
+    if (key.startsWith(`${msg.commandId}:`)) controller.abort()
+  }
+
+  for (const [agent, queue] of queues) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].commandId === msg.commandId) queue.splice(i, 1)
+    }
+    if (queue.length === 0) queues.delete(agent)
+  }
+}
+
 export function enqueuePacket(packet: CommandPacket): void {
   const agent = packet.target_agent
+  clearLingerTimer(agent)
+  const presence = presenceStore.getState()
+  presence.setActive(agent, true)
   pendingIdle.delete(agent)
   const queue = queues.get(agent) ?? []
 
@@ -141,7 +186,6 @@ export function enqueuePacket(packet: CommandPacket): void {
 
   queue.push(packet)
   queues.set(agent, queue)
-  presenceStore.getState().setActive(agent, true)
   if (!running.has(agent)) void runAgent(agent)
 }
 
@@ -199,7 +243,7 @@ export function markAgentIdle(agent: string): void {
   }
 }
 
-/** Keep the cursor on a moving object until playback stops, then fade out. */
+/** Keep the cursor on a moving object until playback stops, then linger at station. */
 function scheduleAgentFadeOut(agent: string): void {
   const presence = presenceStore.getState()
   const followId = presence.agents[agent]?.followObjectId
@@ -207,8 +251,16 @@ function scheduleAgentFadeOut(agent: string): void {
     void deferIdleAfterPlayback(agent)
     return
   }
-  presence.followObject(agent, null)
-  presence.setActive(agent, false)
+  const lastTouched = presence.agents[agent]?.lastTouchedObjectId ?? followId
+  presence.enterLinger(agent, lastTouched)
+  clearLingerTimer(agent)
+  lingerTimers.set(
+    agent,
+    setTimeout(() => {
+      presenceStore.getState().fadeOut(agent)
+      lingerTimers.delete(agent)
+    }, CURSOR_LINGER_MS)
+  )
 }
 
 async function deferIdleAfterPlayback(agent: string): Promise<void> {
@@ -216,9 +268,7 @@ async function deferIdleAfterPlayback(agent: string): Promise<void> {
     await sleep(80)
   }
   if (running.has(agent) || (queues.get(agent)?.length ?? 0) > 0) return
-  const presence = presenceStore.getState()
-  presence.followObject(agent, null)
-  presence.setActive(agent, false)
+  scheduleAgentFadeOut(agent)
 }
 
 async function runAgent(agent: string): Promise<void> {
@@ -228,65 +278,82 @@ async function runAgent(agent: string): Promise<void> {
 
   while (queue.length > 0) {
     const packet = queue.shift()!
+    const objectId = packetSupersedeTargetId(packet)
+    const flightKey = `${packet.commandId ?? 'local'}:${packet.command}:${objectId ?? 'global'}`
+    const abort = new AbortController()
+    inFlight.set(flightKey, abort)
+
     const serverNote = presence.agents[agent]?.note
     presence.setNote(agent, serverNote ?? noteForPacket(packet))
 
-    if (packet.refinement) {
-      try {
-        const result = applyCommandPacket(packet)
-        logger(agent, `${packet.command} (refine): ${result}`, 'info')
-        const refineElapsed = markFirstRefinement(packet.commandId)
-        if (refineElapsed != null) logger('SYSTEM', `⏱ first refine ${refineElapsed.toFixed(2)}s`, 'info')
-        const followId = followObjectIdForPacket(packet)
+    try {
+      if (packet.refinement) {
+        try {
+          const result = applyCommandPacket(packet)
+          logger(agent, `${packet.command} (refine): ${result}`, 'info')
+          const refineElapsed = markFirstRefinement(packet.commandId)
+          if (refineElapsed != null) logger('SYSTEM', `⏱ first refine ${refineElapsed.toFixed(2)}s`, 'info')
+          const followId = followObjectIdForPacket(packet)
         if (followId) {
           presence.followObject(agent, followId)
+          presence.touchLastObject(agent, followId)
           presence.setPhase(agent, 'working')
         }
-      } catch (e) {
-        logger(agent, `${packet.command} refine failed: ${e instanceof Error ? e.message : e}`, 'error')
+        } catch (e) {
+          logger(agent, `${packet.command} refine failed: ${e instanceof Error ? e.message : e}`, 'error')
+        }
+        continue
       }
-      continue
-    }
 
-    presence.followObject(agent, null)
-    const target = packetTargetPosition(packet)
-    const flightMs = flightDurationTo(agent, target)
-    const hotApply =
-      packet.command === 'ANIMATE_OBJECT' || packet.command === 'TRANSFORM_OBJECT'
+      presence.followObject(agent, null)
+      const target = packetTargetPosition(packet)
+      const flightMs = flightDurationTo(agent, target)
+      const hotApply =
+        packet.command === 'ANIMATE_OBJECT' || packet.command === 'TRANSFORM_OBJECT'
 
-    presence.flyTo(agent, target, 'flying', flightMs)
+      presence.flyTo(agent, target, 'flying', flightMs)
 
-    const applyPacket = () => {
-      try {
-        const result = applyCommandPacket(packet)
-        logger(agent, `${packet.command}: ${result}`, 'info')
-        const applyElapsed = markFirstApply(packet.commandId)
-        if (applyElapsed != null) logger('SYSTEM', `⏱ first apply ${applyElapsed.toFixed(2)}s`, 'info')
-        const followId = followObjectIdForPacket(packet)
+      const applyPacket = () => {
+        try {
+          const result = applyCommandPacket(packet)
+          logger(agent, `${packet.command}: ${result}`, 'info')
+          const applyElapsed = markFirstApply(packet.commandId)
+          if (applyElapsed != null) logger('SYSTEM', `⏱ first apply ${applyElapsed.toFixed(2)}s`, 'info')
+          const followId = followObjectIdForPacket(packet)
         if (followId) {
           presence.followObject(agent, followId)
+          presence.touchLastObject(agent, followId)
           presence.setPhase(agent, 'working')
         }
-      } catch (e) {
-        logger(agent, `${packet.command} failed: ${e instanceof Error ? e.message : e}`, 'error')
+        } catch (e) {
+          logger(agent, `${packet.command} failed: ${e instanceof Error ? e.message : e}`, 'error')
+        }
       }
-    }
 
-    if (hotApply) {
-      const halfFlight = Math.max(60, Math.floor(flightMs / 2))
-      await sleep(halfFlight)
-      applyPacket()
-      await sleep(Math.max(0, flightMs - halfFlight))
-    } else {
-      await sleep(flightMs)
-      presence.setPhase(agent, 'working')
-      await sleep(CURSOR_WORK_MS)
-      applyPacket()
-    }
+      if (hotApply) {
+        const halfFlight = Math.max(60, Math.floor(flightMs / 2))
+        await sleepAbortable(halfFlight, abort.signal)
+        applyPacket()
+        await sleepAbortable(Math.max(0, flightMs - halfFlight), abort.signal)
+      } else {
+        await sleepAbortable(flightMs, abort.signal)
+        presence.setPhase(agent, 'working')
+        await sleepAbortable(CURSOR_WORK_MS, abort.signal)
+        applyPacket()
+      }
 
-    presence.setPhase(agent, 'settling')
-    presence.setNote(agent, null)
-    await sleep(CURSOR_SETTLE_MS)
+      presence.setPhase(agent, 'settling')
+      presence.setNote(agent, null)
+      await sleepAbortable(CURSOR_SETTLE_MS, abort.signal)
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        logger(agent, `cancelled ${packet.command}`, 'info')
+        continue
+      }
+      throw e
+    } finally {
+      inFlight.delete(flightKey)
+    }
   }
 
   running.delete(agent)
@@ -301,4 +368,7 @@ export function resetAgentRuntime(): void {
   queues.clear()
   running.clear()
   pendingIdle.clear()
+  inFlight.clear()
+  for (const t of lingerTimers.values()) clearTimeout(t)
+  lingerTimers.clear()
 }

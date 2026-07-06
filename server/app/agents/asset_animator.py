@@ -12,6 +12,7 @@ from ..schema import (
     PlaybackPayload,
     RemoveObjectPacket,
     RemoveObjectPayload,
+    SceneState,
     SetKeyframesPacket,
     SetKeyframesPayload,
     SpawnObjectPacket,
@@ -21,13 +22,14 @@ from ..schema import (
     TransformObjectPayload,
     Transition,
 )
+from ..transitions import default_object_transition
 
 
 class AssetAnimator:
     name = "AssetAnimator"
     actions = ("spawn", "remove", "transform", "animate", "move_camera")
 
-    def build(self, intent: Intent) -> list[CommandPacket]:
+    def build(self, intent: Intent, scene: SceneState | None = None) -> list[CommandPacket]:
         if intent.action == "spawn":
             return [
                 SpawnObjectPacket(
@@ -53,16 +55,27 @@ class AssetAnimator:
         if intent.action == "transform":
             if not intent.target:
                 return []
+            mode = intent.mode or "absolute"
+            transition = intent.transition
+            if transition is None and not intent.snap_motion:
+                delta = intent.position or intent.rotation or intent.scale
+                transition = default_object_transition(
+                    scene,
+                    intent.target,
+                    intent.position if intent.position else delta,
+                    mode,
+                    absolute_to=intent.position if mode == "absolute" else None,
+                )
             return [
                 TransformObjectPacket(
                     payload=TransformObjectPayload(
                         target=Target(name=intent.target),
-                        mode=intent.mode or "absolute",
+                        mode=mode,
                         position=intent.position,
                         rotation=intent.rotation,
                         scale=intent.scale,
                     ),
-                    transition=intent.transition,
+                    transition=transition,
                 )
             ]
         if intent.action == "animate":

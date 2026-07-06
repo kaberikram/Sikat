@@ -63,9 +63,10 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
 | describe | question only | describe_topic, describe_message |
+| clarify | genuinely ambiguous target (2+ near-equal matches) | clarify_question, clarify_options — server holds clauses until answered |
 
 ## Set transport (film-set language)
-- hold, freeze, stop → playback_action pause (preview hold)
+- hold, freeze, stop → playback_action pause (preview hold). When animation is playing on the last target, also set freeze_motion true to freeze the clip at its current pose (not just pause transport).
 - and action, camera rolling, start recording, we're rolling → playback_action record (start a take)
 - cut, that's a cut, stop recording → playback_action cut (end take)
 - play, go → playback_action play (preview timeline)
@@ -99,6 +100,7 @@ If they ask AND command ("too dark, fix it"), emit describe + update_lights.
 - "selected" / "this one" → selectedId from briefing
 - Rotations are RADIANS. Colors lowercase "#rrggbb".
 - Durations ("over 3 seconds") → transition.durationSec
+- "snap", "instantly", "instant" → omit transition (client snaps immediately)
 - Relative corrections ("a bit more", "go back") → mode "relative" on same target
 - Prefer set_scene for whole-mood requests; individual actions otherwise
 - NOW vs BASE: use NOW to answer "how does it look in motion"; use BASE for
@@ -327,16 +329,22 @@ def get_async_deepseek_client():
 
 def _history_section() -> str:
     hist = session_context.history()
-    if not hist:
+    recent = list(session_context.get_session().recent_notes)
+    parts: list[str] = []
+    if hist:
+        lines = "\n".join(
+            f'- "{ex.text}" -> {", ".join(ex.intent_summaries) or "(no action)"}'
+            for ex in hist
+        )
+        parts.append(f"Recent direction (oldest first):\n{lines}")
+    if recent:
+        parts.append(
+            "Recent crew radio lines (do NOT repeat phrasing):\n"
+            + ", ".join(recent[-8:])
+        )
+    if not parts:
         return ""
-    lines = "\n".join(
-        f'- "{ex.text}" -> {", ".join(ex.intent_summaries) or "(no action)"}'
-        for ex in hist
-    )
-    return f"""
-
-Recent direction (oldest first):
-{lines}
+    return "\n\n" + "\n\n".join(parts) + """
 
 Follow-up rules:
 - Pronouns ("it", "that", "this one") and an omitted target refer to the most

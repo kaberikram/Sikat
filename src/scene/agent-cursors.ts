@@ -9,6 +9,7 @@ import {
   presenceStore,
   AGENT_ORDER,
   agentMetaFor,
+  stationFor,
   type CursorPhase,
 } from '../director/presence'
 import { sampleObjectAtTime } from '../director/scene-state-sync'
@@ -17,6 +18,9 @@ import { getEaseFn } from '../easing'
 import { tagSceneInfrastructure } from './infrastructure'
 
 const HOVER_HEIGHT = 1.15
+const WANDER_RADIUS = 0.4
+const GLANCE_INTERVAL_MS = 6000
+const GLANCE_DURATION_MS = 1200
 const flightEase = getEaseFn('easeOut')
 
 interface Cursor {
@@ -185,8 +189,10 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     for (const agent of Object.keys(agents)) ensureCursor(agent)
     for (const [agent, cursor] of cursors) {
       const p = agents[agent]
-      const wantOpacity = p?.active ? 1 : 0
-      cursor.opacity += (wantOpacity - cursor.opacity) * 0.16
+      const isLinger = p?.idleMode === 'linger'
+      const isVisible = p?.active && p.idleMode !== 'faded'
+      const wantOpacity = isVisible ? 1 : 0
+      cursor.opacity += (wantOpacity - cursor.opacity) * (isLinger ? 0.08 : 0.16)
 
       if (wantOpacity === 0 && cursor.opacity < 0.01) {
         cursor.group.visible = false
@@ -200,6 +206,27 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
           const sampled = sampleObjectAtTime(obj, editor.currentTime)
           cursor.base.set(sampled.position[0], sampled.position[1], sampled.position[2])
         }
+      } else if (isLinger) {
+        const station = stationFor(agent)
+        const wanderAngle = now / 4000 + cursor.seed * 2
+        const wx = station[0] + Math.cos(wanderAngle) * WANDER_RADIUS
+        const wz = station[2] + Math.sin(wanderAngle) * WANDER_RADIUS
+        let tx = wx
+        let ty = station[1]
+        let tz = wz
+        const glancePhase = (now + cursor.seed * 1000) % GLANCE_INTERVAL_MS
+        if (p.lastTouchedObjectId && glancePhase < GLANCE_DURATION_MS) {
+          const obj = editor.objects.find((o) => o.id === p.lastTouchedObjectId)
+          if (obj) {
+            const sampled = sampleObjectAtTime(obj, editor.currentTime)
+            const alpha = glancePhase / GLANCE_DURATION_MS
+            const ease = flightEase(alpha)
+            tx = wx + (sampled.position[0] - wx) * ease * 0.55
+            ty = station[1] + (sampled.position[1] - station[1]) * ease * 0.35
+            tz = wz + (sampled.position[2] - wz) * ease * 0.55
+          }
+        }
+        cursor.base.set(tx, ty, tz)
       } else if (p) {
         if (p.moveStartedAt !== cursor.moveStartedAt) {
           cursor.from.copy(cursor.base)

@@ -9,7 +9,7 @@ class VFXOperator:
     name = "VFXOperator"
     actions = ("update_fx",)
 
-    def build(self, intent: Intent) -> list[CommandPacket]:
+    def build(self, intent: Intent, scene: SceneState | None = None) -> list[CommandPacket]:
         if intent.action != "update_fx" or intent.section is None:
             return []
         patch: dict = {}

@@ -66,6 +66,38 @@ export function startTween({ key, from, to, durationSec, easing, set }: TweenOpt
   }
 }
 
+/** Cancel an active tween and return the current interpolated value, if any. */
+export function cancelTween(key: string): number[] | null {
+  const tween = active.get(key)
+  if (!tween) return null
+  const now = performance.now()
+  const alpha = Math.min(1, (now - tween.start) / tween.durationMs)
+  const eased = tween.ease(alpha)
+  const current = tween.from.map((f, i) => f + (tween.to[i] - f) * eased)
+  tween.set(current)
+  active.delete(key)
+  if (active.size === 0 && rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+  return current
+}
+
+/** Retarget an in-flight tween from its current progress toward a new end. */
+export function retargetTween(key: string, newTo: number[], newDurationSec?: number): boolean {
+  const tween = active.get(key)
+  if (!tween) return false
+  const now = performance.now()
+  const alpha = Math.min(1, (now - tween.start) / tween.durationMs)
+  const eased = tween.ease(alpha)
+  const current = tween.from.map((f, i) => f + (tween.to[i] - f) * eased)
+  tween.from = current
+  tween.to = newTo
+  tween.start = now
+  if (newDurationSec != null) tween.durationMs = Math.max(1, newDurationSec * 1000)
+  return true
+}
+
 function cancelTweensFor(prefix: string) {
   for (const key of active.keys()) {
     if (key.startsWith(prefix)) active.delete(key)

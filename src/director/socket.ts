@@ -8,6 +8,8 @@ import {
   type AgentLogMessage,
   type AgentStatusMessage,
   type IntentPreviewMessage,
+  type CommandCancelMessage,
+  type AgentQuestionMessage,
   type ErrorMessage,
   type SceneSnapshot,
   parseServerMessage,
@@ -38,6 +40,8 @@ export class DirectorSocket {
   private logListeners = new Set<Listener<AgentLogMessage>>()
   private agentStatusListeners = new Set<Listener<AgentStatusMessage>>()
   private intentPreviewListeners = new Set<Listener<IntentPreviewMessage>>()
+  private cancelListeners = new Set<Listener<CommandCancelMessage>>()
+  private questionListeners = new Set<Listener<AgentQuestionMessage>>()
   private errorListeners = new Set<Listener<ErrorMessage>>()
   private statusListeners = new Set<Listener<SocketStatus>>()
   private openListeners = new Set<() => void>()
@@ -73,6 +77,10 @@ export class DirectorSocket {
         for (const cb of this.agentStatusListeners) cb(msg)
       else if (msg.type === 'intent_preview')
         for (const cb of this.intentPreviewListeners) cb(msg)
+      else if (msg.type === 'command_cancel')
+        for (const cb of this.cancelListeners) cb(msg)
+      else if (msg.type === 'agent_question')
+        for (const cb of this.questionListeners) cb(msg)
       else for (const cb of this.errorListeners) cb(msg)
     }
     this.ws.onclose = () => {
@@ -154,6 +162,16 @@ export class DirectorSocket {
   onIntentPreview(cb: Listener<IntentPreviewMessage>): () => void {
     this.intentPreviewListeners.add(cb)
     return () => this.intentPreviewListeners.delete(cb)
+  }
+
+  onCancel(cb: Listener<CommandCancelMessage>): () => void {
+    this.cancelListeners.add(cb)
+    return () => this.cancelListeners.delete(cb)
+  }
+
+  onQuestion(cb: Listener<AgentQuestionMessage>): () => void {
+    this.questionListeners.add(cb)
+    return () => this.questionListeners.delete(cb)
   }
 
   onError(cb: Listener<ErrorMessage>): () => void {
