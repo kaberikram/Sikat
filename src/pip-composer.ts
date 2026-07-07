@@ -120,7 +120,8 @@ export function updateViewfinderComposerFromStack(
     bloomPass: UnrealBloomPass
     ditherPass: ShaderPass
     outputPass: OutputPass
-  }
+  },
+  renderSize?: THREE.Vector2
 ) {
   const p = stack.pixelate
   const b = stack.bloom
@@ -142,7 +143,7 @@ export function updateViewfinderComposerFromStack(
     bloomPass.threshold = b.threshold
   }
   if (needsDither) {
-    const size = renderer.getSize(new THREE.Vector2())
+    const size = renderSize ?? renderer.getSize(new THREE.Vector2())
     const pr = renderer.getPixelRatio()
     ditherPass.uniforms.resolution.value.set(size.x * pr, size.y * pr)
     ditherPass.uniforms.pixelSize.value = d.pixelSize
@@ -172,9 +173,10 @@ export function renderViewfinderFrame(
   scene: THREE.Scene,
   virtualCamera: THREE.PerspectiveCamera,
   passes: ReturnType<typeof createViewfinderComposer>,
-  delta: number
+  delta: number,
+  renderSize?: THREE.Vector2
 ) {
-  updateViewfinderComposerFromStack(stack, renderer, passes)
+  updateViewfinderComposerFromStack(stack, renderer, passes, renderSize)
   if (viewfinderShouldUseComposer(stack)) passes.composer.render(delta)
   else renderer.render(scene, virtualCamera)
 }

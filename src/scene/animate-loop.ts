@@ -82,9 +82,7 @@ export function createAnimateLoop(ctx: {
     ctx.directionalLight.color.set(lighting.key.color)
     ctx.directionalLight.intensity = lighting.key.intensity
     ctx.directionalLight.position.set(...lighting.key.position)
-    if (xrActive) {
-      ctx.scene.background = null
-    } else {
+    if (!xrActive) {
       if (!(ctx.scene.background instanceof THREE.Color)) {
         ctx.scene.background = new THREE.Color()
       }
@@ -118,8 +116,12 @@ export function createAnimateLoop(ctx: {
 
     const gizmoCamDrag = gizmo.dragging && gizmo.object === ctx.virtCamera
     if (!gizmoCamDrag) {
-      if (liveCamOp) applyVirtualCameraBase(vcamData, ctx.virtCamera)
-      else applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+      const skipLiveCamApply = xrActive && xrFrame != null
+      if (liveCamOp) {
+        if (!skipLiveCamApply) applyVirtualCameraBase(vcamData, ctx.virtCamera)
+      } else {
+        applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+      }
     }
 
     for (const obj of liveObjects) {
@@ -138,16 +140,30 @@ export function createAnimateLoop(ctx: {
       const referenceSpace = ctx.mainRenderer.xr.getReferenceSpace()
       if (referenceSpace) ctx.camcorderRig.update(xrFrame, referenceSpace)
 
+      // Virtual cam films the CG stage (white studio bg + layer-0 objects), not passthrough.
+      if (!(ctx.scene.background instanceof THREE.Color)) {
+        ctx.scene.background = new THREE.Color()
+      }
+      ctx.scene.background.set(lighting.background)
+
+      const pipW = ctx.pipRenderer.domElement.clientWidth
+      const pipH = ctx.pipRenderer.domElement.clientHeight
       ctx.xrViewfinder.render({
-        renderer: ctx.pipRenderer,
+        renderer: ctx.mainRenderer,
         scene: ctx.scene,
         virtCamera: ctx.virtCamera,
         screenMesh: ctx.camcorderRig.screenMesh,
         objects: liveObjects,
         stack,
+        width: pipW,
+        height: pipH,
+        delta,
         t,
         isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
       })
+
+      // Headset view: passthrough / transparent composite over the real world.
+      ctx.scene.background = null
     }
 
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)

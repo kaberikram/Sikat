@@ -1,13 +1,9 @@
 import * as THREE from 'three'
 import type { MotionObject, PostProcessingStack } from '../../store'
-import {
-  applyViewfinderMeshEffects,
-  stripViewfinderObjectEffects,
-} from '../../viewfinder-mesh-fx'
-import { applyObjectTransformAtTime } from '../../timeline-apply'
+import type { createViewfinderComposer } from '../../pip-composer'
+import { renderViewfinderToTarget } from '../viewfinder-pass'
 
-const RT_WIDTH = 1280
-const RT_HEIGHT = 720
+type ViewfinderComposer = ReturnType<typeof createViewfinderComposer>
 
 export interface XrViewfinder {
   render: (ctx: {
@@ -17,14 +13,17 @@ export interface XrViewfinder {
     screenMesh: THREE.Mesh
     objects: MotionObject[]
     stack: PostProcessingStack
+    width: number
+    height: number
+    delta: number
     t: number
     isObjectGizmoActive: (obj: MotionObject) => boolean
   }) => void
   dispose: () => void
 }
 
-export function createXrViewfinder(): XrViewfinder {
-  const target = new THREE.WebGLRenderTarget(RT_WIDTH, RT_HEIGHT, {
+export function createXrViewfinder(viewfinder: ViewfinderComposer): XrViewfinder {
+  const target = new THREE.WebGLRenderTarget(1, 1, {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
   })
@@ -38,19 +37,20 @@ export function createXrViewfinder(): XrViewfinder {
     screenMesh: THREE.Mesh
     objects: MotionObject[]
     stack: PostProcessingStack
+    width: number
+    height: number
+    delta: number
     t: number
     isObjectGizmoActive: (obj: MotionObject) => boolean
   }): void {
-    const {
-      renderer,
-      scene,
-      virtCamera,
-      screenMesh,
-      objects,
-      stack,
-      t,
-      isObjectGizmoActive,
-    } = ctx
+    const { screenMesh, width, height } = ctx
+    if (width <= 0 || height <= 0) return
+
+    renderViewfinderToTarget({
+      ...ctx,
+      viewfinder,
+      target,
+    })
 
     if (screenMesh.material !== screenMaterial) {
       screenMaterial?.map?.dispose()
@@ -61,28 +61,6 @@ export function createXrViewfinder(): XrViewfinder {
       })
       screenMesh.material = screenMaterial
     }
-
-    stripViewfinderObjectEffects(objects)
-    applyViewfinderMeshEffects(objects, stack)
-
-    const prevAspect = virtCamera.aspect
-    virtCamera.aspect = RT_WIDTH / RT_HEIGHT
-    virtCamera.updateProjectionMatrix()
-
-    const prevTarget = renderer.getRenderTarget()
-    renderer.setRenderTarget(target)
-    renderer.clear()
-    renderer.render(scene, virtCamera)
-    renderer.setRenderTarget(prevTarget)
-
-    stripViewfinderObjectEffects(objects)
-    for (const obj of objects) {
-      if (!obj.mesh || isObjectGizmoActive(obj)) continue
-      applyObjectTransformAtTime(t, obj)
-    }
-
-    virtCamera.aspect = prevAspect
-    virtCamera.updateProjectionMatrix()
   }
 
   return {
@@ -91,6 +69,11 @@ export function createXrViewfinder(): XrViewfinder {
       target.dispose()
       screenMaterial?.map?.dispose()
       screenMaterial?.dispose()
+      viewfinder.pixelatedPass.dispose()
+      viewfinder.bloomPass.dispose()
+      viewfinder.ditherPass.dispose()
+      viewfinder.outputPass.dispose()
+      viewfinder.composer.dispose()
     },
   }
 }

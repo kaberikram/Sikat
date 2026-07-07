@@ -12,7 +12,11 @@ export interface CamcorderRig {
   dispose: () => void
 }
 
-export function createCamcorderRig(renderer: THREE.WebGLRenderer, scene: THREE.Scene): CamcorderRig {
+export function createCamcorderRig(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  virtCamera: THREE.PerspectiveCamera
+): CamcorderRig {
   const group = new THREE.Group()
   group.layers.set(1)
 
@@ -22,32 +26,14 @@ export function createCamcorderRig(renderer: THREE.WebGLRenderer, scene: THREE.S
     scene.add(renderer.xr.getControllerGrip(i))
   }
 
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.14, 0.09, 0.05),
-    new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.85, metalness: 0.1 })
-  )
-  body.layers.set(1)
-  body.position.set(0, 0, -0.02)
-  group.add(body)
-
   const screenMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(0.12, 0.0675),
-    new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.DoubleSide })
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide })
   )
   screenMesh.layers.set(1)
   screenMesh.position.set(0, 0.02, -0.028)
   screenMesh.rotation.x = -0.35
   group.add(screenMesh)
-
-  const recFrame = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.124, 0.0715),
-    new THREE.MeshBasicMaterial({ color: 0xcc0000, transparent: true, opacity: 0, side: THREE.DoubleSide })
-  )
-  recFrame.layers.set(1)
-  recFrame.position.copy(screenMesh.position)
-  recFrame.position.z -= 0.001
-  recFrame.rotation.copy(screenMesh.rotation)
-  group.add(recFrame)
 
   let rightInputSource: XRInputSource | null = null
   let takeLabel: THREE.Mesh | null = null
@@ -95,8 +81,6 @@ export function createCamcorderRig(renderer: THREE.WebGLRenderer, scene: THREE.S
 
   function updateRollingIndicator(): void {
     const { isRolling, takeNumber } = useEditorStore.getState()
-    const mat = recFrame.material as THREE.MeshBasicMaterial
-    mat.opacity = isRolling ? 0.95 : 0
 
     if (isRolling && (!takeLabel || takeNumber !== lastTakeNumber)) {
       if (takeLabel) {
@@ -153,6 +137,9 @@ export function createCamcorderRig(renderer: THREE.WebGLRenderer, scene: THREE.S
       position: [worldPos.x, worldPos.y, worldPos.z],
       rotation: [euler.x, euler.y, euler.z],
     })
+    virtCamera.position.set(worldPos.x, worldPos.y, worldPos.z)
+    virtCamera.rotation.set(euler.x, euler.y, euler.z)
+    virtCamera.updateMatrixWorld()
   }
 
   return {
@@ -162,12 +149,8 @@ export function createCamcorderRig(renderer: THREE.WebGLRenderer, scene: THREE.S
     bindSession,
     dispose: () => {
       group.removeFromParent()
-      body.geometry.dispose()
-      ;(body.material as THREE.Material).dispose()
       screenMesh.geometry.dispose()
       ;(screenMesh.material as THREE.Material).dispose()
-      recFrame.geometry.dispose()
-      recFrame.material.dispose()
       if (takeLabel) {
         const labelMat = takeLabel.material as THREE.MeshBasicMaterial
         labelMat.map?.dispose()
