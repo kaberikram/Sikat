@@ -11,6 +11,7 @@ import {
   markAgentIdle,
   applyClientIntentGuess,
   applyIntentPreview,
+  idleGuessedAgent,
   reactToSuggestion,
   setRuntimeLogger,
 } from './agent-runtime'
@@ -136,7 +137,15 @@ export function DirectorPod() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const listeningRef = useRef(false)
   const micVisionRef = useRef(false)
+  const micGuessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stopMicRef = useRef<() => void>(() => {})
+
+  const clearMicGuessTimer = useCallback(() => {
+    if (micGuessTimerRef.current) {
+      clearTimeout(micGuessTimerRef.current)
+      micGuessTimerRef.current = null
+    }
+  }, [])
 
   const speechAvailable = getSpeechRecognition() !== null
   const hasContext = selectedId !== null
@@ -193,8 +202,11 @@ export function DirectorPod() {
         if (recentStatusNotes.length > 12) recentStatusNotes.shift()
       }
       if (msg.status === 'active') {
-        markAgentActive(msg.agent, msg.note)
-      } else markAgentIdle(msg.agent)
+        if (msg.agent !== 'Producer') markAgentActive(msg.agent, msg.note)
+        else if (msg.note) pushLog('PRODUCER', msg.note)
+      } else if (msg.agent !== 'Producer') {
+        markAgentIdle(msg.agent)
+      }
     })
     const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
     const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
@@ -262,10 +274,11 @@ export function DirectorPod() {
       return
     }
 
+    clearMicGuessTimer()
     const socket = getDirectorSocket()
     const commandId = opts?.commandId ?? crypto.randomUUID()
-    // Instant set reaction — don't wait for LLM parse or network round-trip.
-    markAgentActive('Producer', nextInstantNote())
+    // Instant set reaction — Producer ack in log; specialist cursor only.
+    pushLog('PRODUCER', nextInstantNote())
     applyClientIntentGuess(trimmed, commandId)
     markCommandSent(commandId)
 
@@ -274,12 +287,13 @@ export function DirectorPod() {
       pushLog('DIRECTOR', trimmed)
       setInput('')
     } else {
-      markAgentIdle('Producer')
+      idleGuessedAgent(commandId)
       pushLog('DIRECTOR', 'not connected — command dropped', 'error')
     }
-  }, [pushLog])
+  }, [pushLog, clearMicGuessTimer])
 
   const stopMic = useCallback(() => {
+    clearMicGuessTimer()
     listeningRef.current = false
     micVisionRef.current = false
     setListening(false)
@@ -296,7 +310,7 @@ export function DirectorPod() {
         /* already stopped */
       }
     }
-  }, [])
+  }, [clearMicGuessTimer])
   stopMicRef.current = stopMic
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
@@ -317,7 +331,14 @@ export function DirectorPod() {
         else ghost += transcript
       }
       setInterim(ghost)
-      if (ghost.trim()) applyClientIntentGuess(ghost)
+      const interim = ghost.trim()
+      if (interim) {
+        clearMicGuessTimer()
+        micGuessTimerRef.current = setTimeout(() => {
+          applyClientIntentGuess(interim)
+          micGuessTimerRef.current = null
+        }, 300)
+      }
     }
     recognition.onerror = (event) => {
       // A denied/unavailable mic is terminal; other errors let onend restart.

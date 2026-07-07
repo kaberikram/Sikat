@@ -13,11 +13,16 @@ from .director_vocab import normalize_clause
 from .clause_handlers import parse_clause
 from .schema import Intent, SceneState
 
-_CLAUSE_SPLIT = re.compile(r"\s*(?:;|\.\s+|,?\s+(?:and\s+)?then\s+)\s*")
+_CLAUSE_SPLIT = re.compile(
+    r"\s*(?:;|\.\s+|,?\s+(?:and\s+)?then\s+)\s*"
+    r"|\s+and\s+(?=(?:make|move|have|let|give|add|spawn|animate|set|rotate|scale|"
+    r"spin|bounce|wander|drift|float|orbit|enable|disable|dim|turn|play|pause)\b)",
+    re.I,
+)
 
 
 def split_clauses(text: str) -> list[str]:
-    """Split compound director lines on ``then``, ``,``, and ``;``."""
+    """Split compound director lines on ``then``, ``,``, ``;``, and bare ``and`` before verbs."""
     return [clause.strip() for clause in _CLAUSE_SPLIT.split(text) if clause.strip()]
 
 

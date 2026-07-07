@@ -222,7 +222,7 @@ If nothing is actionable and it's not a question: {{"intents": []}}
 ---
 SCENE BRIEFING:
 {scene_brief}
-{history_section}"""
+{history_section}{parse_hints}"""
 
 
 def select_provider(frame: SceneFrame | None = None) -> str | None:
@@ -232,8 +232,7 @@ def select_provider(frame: SceneFrame | None = None) -> str | None:
     - **Vision** (``frame`` set) → Anthropic (DeepSeek API is text-only)
     - **Text-only** → Anthropic when available (animate/choreo refine), else DeepSeek
 
-    Phase G routing: Sonnet choreographs; DeepSeek Flash is not used for full
-    intent parse when an Anthropic key exists — preview/coarse paths are grammar.
+    Phase G routing: Sonnet choreographs; grammar stages instantly, LLM reconciles.
 
     ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) overrides text-only routing.
     Vision requests still prefer Anthropic unless the key is missing.
@@ -360,11 +359,13 @@ Follow-up rules:
 """
 
 
-def _system_prompt(scene: SceneState | None) -> str:
+def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
     scene_brief = format_scene_brief(scene) + "\n\n" + performers_brief() + "\n\n" + crew_brief()
+    parse_hints = f"\n\n{hints}" if hints else ""
     return SYSTEM_PROMPT_TEMPLATE.format(
         scene_brief=scene_brief,
         history_section=_history_section(),
+        parse_hints=parse_hints,
     )
 
 
@@ -491,6 +492,7 @@ async def parse_intents(
     text: str,
     scene: SceneState | None,
     frame: SceneFrame | None = None,
+    hints: str | None = None,
 ) -> IntentList | None:
     """LLM parse; returns None on any failure so callers can fall back."""
     provider = select_provider(frame)
@@ -621,16 +623,17 @@ async def _stream_anthropic(
     scene: SceneState | None,
     frame: SceneFrame | None,
     on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
+    hints: str | None = None,
 ) -> AsyncIterator[Intent]:
     client = get_async_anthropic_client()
     if client is None:
         return
-    system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
+    system = _system_prompt(scene, hints) + "\n\n" + _JSON_SCHEMA_HINT
     buffer = ""
     consumed = 0
     async with client.messages.stream(
         model=model,
-        max_tokens=2048,
+        max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": _build_user_content(text, frame)}],
     ) as stream:
@@ -653,18 +656,19 @@ async def _stream_deepseek(
     scene: SceneState | None,
     frame: SceneFrame | None,
     on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
+    hints: str | None = None,
 ) -> AsyncIterator[Intent]:
     if frame is not None:
         log.warning("DeepSeek path does not support vision; skipping frame attachment")
     client = get_async_deepseek_client()
     if client is None:
         return
-    system = _system_prompt(scene) + "\n\n" + _JSON_SCHEMA_HINT
+    system = _system_prompt(scene, hints) + "\n\n" + _JSON_SCHEMA_HINT
     buffer = ""
     consumed = 0
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=2048,
+        max_tokens=4096,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},
@@ -695,6 +699,7 @@ async def stream_intents(
     scene: SceneState | None,
     frame: SceneFrame | None = None,
     on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
+    hints: str | None = None,
 ) -> AsyncIterator[Intent]:
     """Stream intents as the LLM completes each one, instead of waiting for the
     full response. Callers should treat zero yielded intents (including on any
@@ -709,7 +714,7 @@ async def stream_intents(
     count = 0
     try:
         stream_fn = _stream_deepseek if provider == "deepseek" else _stream_anthropic
-        async for intent in stream_fn(model, text, scene, frame, on_partial):
+        async for intent in stream_fn(model, text, scene, frame, on_partial, hints):
             count += 1
             yield intent
     except ImportError:

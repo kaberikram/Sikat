@@ -18,7 +18,8 @@ export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the targe
 export const CURSOR_INTENT_MS = 200 // fast drift during pre-parse acknowledgment
 export const CURSOR_WORK_MS = 120 // hover on target before the change commits
 export const CURSOR_SETTLE_MS = 140 // linger after committing before the next task
-export const CURSOR_LINGER_MS = 20_000 // idle presence before fade
+export const CURSOR_MOTION_FADE_MS = 600 // brief tail after motion work, then gone
+export const CURSOR_FADE_MS = 1200 // brief tail after other work, then gone
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling'
 export type IdleMode = 'none' | 'linger' | 'faded'
@@ -42,8 +43,14 @@ export const AGENT_META: Record<string, AgentMeta> = {
   Producer: { color: '#30d158', station: [1.5, 2.4, 1.5] },
 }
 
+/** Producer speaks in the log/radio — never gets a stage cursor. */
+export function cursorVisible(agent: string): boolean {
+  return agent !== 'Producer'
+}
+
 /** Cursor order is stable so per-agent visual offsets (bob phase) stay put. */
 export const AGENT_ORDER = Object.keys(AGENT_META)
+export const CURSOR_AGENT_ORDER = AGENT_ORDER.filter(cursorVisible)
 
 export function agentMetaFor(agent: string): AgentMeta {
   const perfMatch = agent.match(/^Agent(\d)$/i)

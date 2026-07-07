@@ -1,7 +1,7 @@
 """When to defer a clause to the LLM instead of instant rule grammar.
 
-Phase F: grammar can **coarse-emit** while LLM refines in parallel — deferral
-now means "wait for LLM only" (no coarse path), not "block all emits".
+Grammar can **coarse-emit** while the LLM reconciles in parallel — deferral
+means "wait for LLM only" (no coarse path), not "block all emits".
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ _CREATIVE_LANGUAGE = re.compile(
 
 
 def should_coarse_emit(intent: Intent | None) -> bool:
-    """True when grammar gives enough to start work before LLM finishes."""
+    """True when grammar gives enough to stage instantly before LLM finishes."""
     if intent is None:
         return False
     if intent.action == "animate":
@@ -40,21 +40,6 @@ def should_coarse_emit(intent: Intent | None) -> bool:
     return True
 
 
-def needs_llm_refinement(
-    clause: str, intent: Intent | None, *, llm_available: bool = False
-) -> bool:
-    """True when LLM should still run after a coarse emit (or alone)."""
-    if not llm_available:
-        return False
-    if intent is None:
-        return True
-    if intent.action == "animate":
-        return True
-    if _CREATIVE_LANGUAGE.search(clause.lower()):
-        return True
-    return False
-
-
 def defer_clause_to_llm(
     clause: str, intent: Intent | None, *, llm_available: bool = False
 ) -> bool:
@@ -63,11 +48,13 @@ def defer_clause_to_llm(
         return True
     if not llm_available:
         return False
-    if should_coarse_emit(intent):
-        return False
-    if _CREATIVE_LANGUAGE.search(clause.lower()) and intent.action != "animate":
+    if intent.action == "clarify":
         return True
-    if llm_available and intent.action == "animate":
+    if intent.action == "animate":
+        return True
+    if _CREATIVE_LANGUAGE.search(clause.lower()):
+        return True
+    if not should_coarse_emit(intent):
         return True
     return False
 

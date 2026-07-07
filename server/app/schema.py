@@ -43,6 +43,7 @@ AgentName = Literal[
     "Agent3",
     "Agent4",
 ]
+CancelReason = Literal["supersede", "stop", "amend"]
 
 
 def now() -> float:

@@ -25,6 +25,10 @@ from ..schema import (
 from ..transitions import default_object_transition
 
 
+def default_spawn_name(intent: Intent) -> str:
+    return intent.name or f"{(intent.primitive or 'box').upper()}_SPAWN"
+
+
 class AssetAnimator:
     name = "AssetAnimator"
     actions = ("spawn", "remove", "transform", "animate", "move_camera")
@@ -35,7 +39,7 @@ class AssetAnimator:
                 SpawnObjectPacket(
                     payload=SpawnObjectPayload(
                         primitive=intent.primitive or "box",
-                        name=intent.name,
+                        name=default_spawn_name(intent),
                         color=intent.color,
                         text=intent.text,
                         position=intent.position,

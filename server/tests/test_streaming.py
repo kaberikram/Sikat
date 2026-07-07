@@ -47,7 +47,7 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     gate = asyncio.Event()
     released = asyncio.Event()
 
-    async def slow_stream(text, scene, frame=None, on_partial=None):
+    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
         gate.set()
         await released.wait()
         yield Intent(action="spawn", primitive="box", color="#ff3b30")
@@ -103,13 +103,18 @@ def test_split_clauses_exported():
         "enable bloom",
     ]
     assert split_clauses("play; pause") == ["play", "pause"]
+    assert split_clauses("add a blue sphere and make it wander") == [
+        "add a blue sphere",
+        "make it wander",
+    ]
+    assert split_clauses("black and white mood") == ["black and white mood"]
 
 
 async def test_suggest_intent_routes_without_packets(monkeypatch, scene):
     suggestions: list = []
     packets: list = []
 
-    async def fake_stream(text, scene, frame=None, on_partial=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
         yield Intent(action="spawn", primitive="box", color="#ff3b30", say="spawning box")
         yield Intent(
             action="suggest",

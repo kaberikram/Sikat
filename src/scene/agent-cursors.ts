@@ -7,8 +7,9 @@
 import * as THREE from 'three'
 import {
   presenceStore,
-  AGENT_ORDER,
+  CURSOR_AGENT_ORDER,
   agentMetaFor,
+  cursorVisible,
   stationFor,
   type CursorPhase,
 } from '../director/presence'
@@ -172,7 +173,7 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     return cursor
   }
 
-  AGENT_ORDER.forEach((agent) => {
+  CURSOR_AGENT_ORDER.forEach((agent) => {
     ensureCursor(agent)
   })
 
@@ -186,8 +187,11 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const update = (now: number) => {
     const agents = presenceStore.getState().agents
     const editor = useEditorStore.getState()
-    for (const agent of Object.keys(agents)) ensureCursor(agent)
+    for (const agent of Object.keys(agents)) {
+      if (cursorVisible(agent)) ensureCursor(agent)
+    }
     for (const [agent, cursor] of cursors) {
+      if (!cursorVisible(agent)) continue
       const p = agents[agent]
       const isLinger = p?.idleMode === 'linger'
       const isVisible = p?.active && p.idleMode !== 'faded'

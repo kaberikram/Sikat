@@ -5,7 +5,9 @@ import asyncio
 import logging
 
 from .. import active_commands, fallback_parser, llm, performers, session_context
-from ..creative_parse import defer_clause_to_llm, is_open_direction, needs_llm_refinement, should_coarse_emit
+from ..creative_parse import defer_clause_to_llm, is_open_direction, should_coarse_emit
+from ..parse_hints import format_parse_hints
+from ..reconcile import GrammarEmit, reconcile
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..motion_variation import enrich_motion_params
@@ -18,12 +20,14 @@ from ..schema import (
     PlaybackPayload,
     SceneFrame,
     SceneState,
+    Target,
     agent_question_message,
+    command_cancel_message,
     intent_preview_message,
 )
 from ..session_context import CLARIFY_TIMEOUT_SEC, PendingClarify
 from ..target_resolution import resolve_option_answer
-from .asset_animator import AssetAnimator
+from .asset_animator import AssetAnimator, default_spawn_name
 from .base import (
     EmitCancel,
     EmitLog,
@@ -133,9 +137,7 @@ async def _drain_llm_stream(agen, queue: asyncio.Queue) -> None:
     """Pump an ``llm.stream_intents`` async generator into a queue.
 
     Runs as its own task so the LLM call proceeds concurrently with grammar
-    clauses. On cancellation (grammar already handled everything), closes the
-    generator itself — it's the sole driver, so this is the only safe place
-    to do that — before re-raising.
+    staging. On task cancellation, closes the generator before re-raising.
     """
     try:
         async for intent in agen:
@@ -605,6 +607,134 @@ class Producer:
             )
         return packets
 
+    async def _emit_staged_intent(
+        self,
+        intent: Intent,
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_packet: EmitPacket,
+        emit_status: EmitStatus,
+        emit_cancel: EmitCancel,
+        scene: SceneState | None,
+        *,
+        refinement: bool = False,
+        prior_command_id: str | None = None,
+    ) -> list[CommandPacket]:
+        await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
+        built = await self._build_packets_for_intent(
+            intent, emit_log, emit_status, command_id, scene
+        )
+        for packet in built:
+            packet.commandId = command_id
+            if refinement:
+                packet.refinement = True
+                packet.priorCommandId = prior_command_id or command_id
+        await self._stream_packets_staged(
+            built,
+            command_id,
+            emit_log,
+            emit_packet,
+            emit_status,
+            note=intent.say,
+            emit_cancel=emit_cancel,
+            scene=scene,
+            intent=intent,
+        )
+        return built
+
+    async def _emit_reconciled_llm_intent(
+        self,
+        intent: Intent,
+        grammar_emits: list[GrammarEmit],
+        command_id: str | None,
+        emit_log: EmitLog,
+        emit_packet: EmitPacket,
+        emit_status: EmitStatus,
+        emit_cancel: EmitCancel,
+        scene: SceneState | None,
+        counters: dict[str, int],
+    ) -> list[CommandPacket]:
+        if intent.action in ("describe", "suggest", "clarify"):
+            return []
+
+        verdict, match = reconcile(intent, grammar_emits)
+
+        if verdict == "duplicate":
+            counters["confirmed"] += 1
+            if intent.say:
+                session_context.note_say(intent.say)
+                await emit_log(self.assistant.name, intent.say, "info")
+            return []
+
+        if verdict == "suppress":
+            await emit_log(
+                self.assistant.name,
+                f"suppressed conflicting spawn ({intent.primitive})",
+                "warn",
+            )
+            return []
+
+        if verdict == "replace" and match is not None and command_id:
+            counters["refined"] += 1
+            target_name = match.intent.target or intent.target
+            await emit_cancel(
+                command_cancel_message(
+                    command_id,
+                    target=Target(name=target_name) if target_name else None,
+                    command="ANIMATE_OBJECT",
+                    reason="amend",
+                )
+            )
+            return await self._emit_staged_intent(
+                intent,
+                command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                emit_cancel,
+                scene,
+                refinement=False,
+            )
+
+        if verdict == "refine":
+            counters["refined"] += 1
+            return await self._emit_staged_intent(
+                intent,
+                command_id,
+                emit_log,
+                emit_packet,
+                emit_status,
+                emit_cancel,
+                scene,
+                refinement=True,
+            )
+
+        counters["added"] += 1
+        working = intent
+        if intent.action == "animate":
+            target = (intent.target or "").strip().lower()
+            if not target or target in ("it", "that", "this", "this one"):
+                for g in grammar_emits:
+                    if g.intent.action == "spawn":
+                        working = intent.model_copy(
+                            update={"target": default_spawn_name(g.intent)}
+                        )
+                        break
+                else:
+                    pending = session_context.last_target()
+                    if pending:
+                        working = intent.model_copy(update={"target": pending})
+        return await self._emit_staged_intent(
+            working,
+            command_id,
+            emit_log,
+            emit_packet,
+            emit_status,
+            emit_cancel,
+            scene,
+            refinement=False,
+        )
+
     async def _direct_multi_clause(
         self,
         text: str,
@@ -635,11 +765,13 @@ class Producer:
             if resumed is not None:
                 return resumed
 
+        parsed = [(cl, parse_one_clause(cl, scene)) for cl in clauses]
+
         llm_available = llm.select_provider(frame) is not None
         if llm_available and is_open_direction(text):
             all_deferred = all(
-                defer_clause_to_llm(cl, parse_one_clause(cl, scene), llm_available=True)
-                for cl in clauses
+                defer_clause_to_llm(cl, intent, llm_available=True)
+                for cl, intent in parsed
             )
             if all_deferred:
                 return await Planner(self).run(
@@ -653,6 +785,22 @@ class Producer:
                     emit_cancel,
                     emit_suggest,
                 )
+
+        staged_indices: set[int] = set()
+        if llm_available:
+            for idx, (clause, raw_intent) in enumerate(parsed):
+                if raw_intent is None:
+                    continue
+                if defer_clause_to_llm(clause, raw_intent, llm_available=True):
+                    continue
+                if should_coarse_emit(raw_intent):
+                    staged_indices.add(idx)
+
+        hints = (
+            format_parse_hints(parsed, scene, staged_indices=staged_indices)
+            if llm_available
+            else ""
+        )
 
         llm_feed_task: asyncio.Task | None = None
         llm_queue: asyncio.Queue | None = None
@@ -682,8 +830,10 @@ class Producer:
                     )
                 )
 
-        if llm.select_provider(frame) is not None:
-            llm_agen = llm.stream_intents(text, scene, frame, on_partial=on_llm_partial)
+        if llm_available:
+            llm_agen = llm.stream_intents(
+                text, scene, frame, on_partial=on_llm_partial, hints=hints or None
+            )
             llm_queue = asyncio.Queue()
             llm_feed_task = asyncio.create_task(_drain_llm_stream(llm_agen, llm_queue))
             await emit_log(
@@ -692,82 +842,34 @@ class Producer:
                 "info",
             )
 
-        handled: list[bool] = []
-        coarse_clause_indices: set[int] = set()
+        grammar_emits: list[GrammarEmit] = []
         all_intents: list[Intent] = []
         all_packets: list[CommandPacket] = []
         describe_only = True
+        staged_count = 0
+        reconcile_counters = {"confirmed": 0, "refined": 0, "added": 0}
 
-        llm_available = llm.select_provider(frame) is not None
-        deferred = False
-        for idx, clause in enumerate(clauses):
-            raw_intent = parse_one_clause(clause, scene)
-            llm_refine = needs_llm_refinement(
-                clause, raw_intent, llm_available=llm_available
-            )
-            coarse = (
-                raw_intent is not None
-                and should_coarse_emit(raw_intent)
-                and llm_refine
-            )
-
+        for idx, (clause, raw_intent) in enumerate(parsed):
             if raw_intent is not None and defer_clause_to_llm(
                 clause, raw_intent, llm_available=llm_available
             ):
-                deferred = True
-                reason = "motion → LLM" if raw_intent.action == "animate" else "creative → LLM"
-                await emit_log(
-                    self.assistant.name,
-                    f"{reason}: {clause[:72]}{'…' if len(clause) > 72 else ''}",
-                    "info",
-                )
-                handled.append(False)
+                if llm_available:
+                    await emit_log(
+                        self.assistant.name,
+                        f"defer → LLM: {clause[:72]}{'…' if len(clause) > 72 else ''}",
+                        "info",
+                    )
                 continue
 
-            if coarse and raw_intent is not None:
-                coarse_clause_indices.add(idx)
-                deferred = True
-                all_intents.append(raw_intent)
-                if raw_intent.action == "describe":
-                    await self._emit_describe(raw_intent, emit_log)
-                    handled.append(False)
+            if raw_intent is None:
+                continue
+
+            if raw_intent.action == "clarify":
+                if llm_available:
                     continue
-                describe_only = False
-                await self._maybe_emit_freeze_cancel(raw_intent, command_id, emit_cancel)
-                built = await self._build_packets_for_intent(
-                    raw_intent, emit_log, emit_status, command_id, scene
-                )
-                for packet in built:
-                    packet.commandId = command_id
-                    packet.refinement = False
-                all_packets.extend(built)
-                await self._stream_packets_staged(
-                    built,
-                    command_id,
-                    emit_log,
-                    emit_packet,
-                    emit_status,
-                    note=raw_intent.say,
-                    emit_cancel=emit_cancel,
-                    scene=scene,
-                    intent=raw_intent,
-                )
-                await emit_log(
-                    self.assistant.name,
-                    f"coarse emit: {clause[:48]}{'…' if len(clause) > 48 else ''}",
-                    "info",
-                )
-                handled.append(False)
-                continue
-
-            intent = raw_intent
-            handled.append(intent is not None)
-            if intent is None:
-                continue
-            if intent.action == "clarify":
-                all_intents.append(intent)
+                all_intents.append(raw_intent)
                 await self._emit_clarify(
-                    intent,
+                    raw_intent,
                     clause,
                     command_id,
                     emit_log,
@@ -777,101 +879,99 @@ class Producer:
                     emit_status,
                     scene,
                 )
-                handled.append(True)
                 continue
-            all_intents.append(intent)
-            if intent.action == "suggest":
-                await self._emit_suggest(intent, emit_suggest)
-                handled.append(True)
+
+            if raw_intent.action == "describe":
+                all_intents.append(raw_intent)
+                if not llm_available:
+                    await self._emit_describe(raw_intent, emit_log)
                 continue
-            if intent.action == "describe":
-                await self._emit_describe(intent, emit_log)
+
+            if raw_intent.action == "suggest":
+                all_intents.append(raw_intent)
+                if not llm_available:
+                    await self._emit_suggest(raw_intent, emit_suggest)
                 continue
+
+            provisional = llm_available and idx in staged_indices
+            if not provisional and llm_available:
+                continue
+
+            all_intents.append(raw_intent)
             describe_only = False
-            await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
-            built = await self._build_packets_for_intent(
-                intent, emit_log, emit_status, command_id, scene
-            )
-            for packet in built:
-                packet.commandId = command_id
-            all_packets.extend(built)
-            await self._stream_packets_staged(
-                built,
+            built = await self._emit_staged_intent(
+                raw_intent,
                 command_id,
                 emit_log,
                 emit_packet,
                 emit_status,
-                note=intent.say,
-                emit_cancel=emit_cancel,
-                scene=scene,
-                intent=intent,
+                emit_cancel,
+                scene,
+                refinement=False,
             )
+            all_packets.extend(built)
+            if raw_intent.action == "spawn" and built:
+                spawn_name = built[0].payload.name
+                if spawn_name:
+                    session_context.note_target(spawn_name)
+            if provisional:
+                grammar_emits.append(
+                    GrammarEmit(intent=raw_intent, matched=False, clause=clause)
+                )
+                staged_count += 1
+                await emit_log(
+                    self.assistant.name,
+                    f"coarse emit: {clause[:48]}{'…' if len(clause) > 48 else ''}",
+                    "info",
+                )
 
-        if llm_feed_task is not None:
-            if all(handled) and any(handled) and not deferred:
-                llm_feed_task.cancel()
-                source = "fallback"
+        if llm_feed_task is not None and llm_queue is not None:
+            while True:
                 try:
-                    await llm_feed_task
-                except asyncio.CancelledError:
-                    pass
-            else:
-                source = "fallback"
-                index = 0
-                while True:
-                    intent = await llm_queue.get()
-                    if intent is _LLM_STREAM_DONE:
-                        break
-                    skip = index < len(handled) and handled[index]
-                    is_refinement = index in coarse_clause_indices
-                    index += 1
-                    if skip:
-                        continue
-                    source = "llm"
-                    all_intents.append(intent)
-                    if intent.action == "suggest":
-                        await self._emit_suggest(intent, emit_suggest)
-                        continue
-                    if intent.action == "describe":
-                        await self._emit_describe(intent, emit_log)
-                        continue
-                    describe_only = False
-                    await self._maybe_emit_freeze_cancel(intent, command_id, emit_cancel)
-                    built = await self._build_packets_for_intent(
-                        intent, emit_log, emit_status, command_id, scene
-                    )
-                    for packet in built:
-                        packet.commandId = command_id
-                        if is_refinement:
-                            packet.refinement = True
-                            packet.priorCommandId = command_id
-                    all_packets.extend(built)
-                    await self._stream_packets_staged(
-                        built,
-                        command_id,
-                        emit_log,
-                        emit_packet,
-                        emit_status,
-                        note=intent.say,
-                        emit_cancel=emit_cancel,
-                        scene=scene,
-                        intent=intent,
-                    )
-                await llm_feed_task
-        else:
-            source = "fallback"
+                    intent = await asyncio.wait_for(llm_queue.get(), timeout=45.0)
+                except asyncio.TimeoutError:
+                    log.warning("LLM drain timed out after 45s")
+                    break
+                if intent is _LLM_STREAM_DONE:
+                    break
+                all_intents.append(intent)
+                if intent.action == "suggest":
+                    await self._emit_suggest(intent, emit_suggest)
+                    continue
+                if intent.action == "describe":
+                    await self._emit_describe(intent, emit_log)
+                    continue
+                describe_only = False
+                built = await self._emit_reconciled_llm_intent(
+                    intent,
+                    grammar_emits,
+                    command_id,
+                    emit_log,
+                    emit_packet,
+                    emit_status,
+                    emit_cancel,
+                    scene,
+                    reconcile_counters,
+                )
+                all_packets.extend(built)
+            await llm_feed_task
 
         session_context.record(text, all_intents)
-        if all(handled) and any(handled) and llm_feed_task is not None and not deferred:
+        if llm_available:
             await emit_log(
                 self.assistant.name,
-                f"instant — {len(all_intents)} intent(s) via grammar (LLM skipped)",
-                "info",
+                (
+                    f"staged {staged_count} via grammar; "
+                    f"LLM confirmed {reconcile_counters['confirmed']}, "
+                    f"refined {reconcile_counters['refined']}, "
+                    f"added {reconcile_counters['added']}"
+                ),
+                "info" if all_intents else "warn",
             )
         else:
             await emit_log(
                 self.assistant.name,
-                f"parsed {len(all_intents)} intent(s) via {source}",
+                f"parsed {len(all_intents)} intent(s) via fallback",
                 "info" if all_intents else "warn",
             )
 

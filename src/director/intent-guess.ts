@@ -117,6 +117,10 @@ export function guessIntent(text: string): IntentGuess | null {
     return null
   }
 
+  if (roughAction === 'playback' && !obj && !motion) {
+    return null
+  }
+
   return {
     agent,
     targetObjectId: obj?.id,

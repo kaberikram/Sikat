@@ -10,7 +10,16 @@
 import { useEditorStore } from '../store'
 import { resolveTarget } from './command-applier'
 import { stationFor } from './presence'
-import type { CommandPacket, Vec3 } from './protocol'
+import { sampleObjectAtTime } from './scene-state-sync'
+import type { CommandPacket, Target, Vec3 } from './protocol'
+
+/** Live world position of a scene object at the current timeline time. */
+export function liveTargetPosition(target: Target | { name?: string } | null | undefined): Vec3 | null {
+  if (!target) return null
+  const obj = resolveTarget(target)
+  if (!obj) return null
+  return sampleObjectAtTime(obj, useEditorStore.getState().currentTime).position
+}
 
 /** Where the cursor addresses this packet. Falls back to the agent's station
  *  for scene-global commands (FX, playback) with no spatial anchor. */
@@ -32,11 +41,11 @@ export function packetTargetPosition(packet: CommandPacket): Vec3 {
     case 'TRANSFORM_OBJECT':
     case 'ANIMATE_OBJECT':
     case 'SET_MATERIAL':
-      return resolveTarget(packet.payload.target)?.position ?? station
+      return liveTargetPosition(packet.payload.target) ?? station
 
     case 'SET_KEYFRAMES':
       return packet.payload.target
-        ? resolveTarget(packet.payload.target)?.position ?? station
+        ? liveTargetPosition(packet.payload.target) ?? station
         : st.virtualCamera.position
 
     case 'MOVE_CAMERA': {
@@ -45,7 +54,7 @@ export function packetTargetPosition(packet: CommandPacket): Vec3 {
       if (p.lookAt) return p.lookAt
       if (p.lookAtTarget) {
         if (p.lookAtTarget.name?.toLowerCase() === 'stage') return st.stage.position
-        return resolveTarget(p.lookAtTarget)?.position ?? st.virtualCamera.position
+        return liveTargetPosition(p.lookAtTarget) ?? st.virtualCamera.position
       }
       return st.virtualCamera.position
     }
