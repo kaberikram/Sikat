@@ -74,7 +74,9 @@ The core loop: **text/voice command → agent swarm → JSON over WebSocket → 
 
 ## Later (editor roadmap)
 
-- WebXR session on Quest browser: passthrough + controller-tracked virtual camcorder.
-  Director Mode already speaks MOVE_CAMERA from telemetry, so a headset replaces
-  `mock_telemetry.py` with real pose data — same wire path.
+- [x] WebXR session on Quest browser: passthrough + controller-tracked virtual camcorder (`src/scene/xr/` — immersive-ar, camcorder rig on right grip, RT viewfinder on rig screen, trigger record/cut). v1 uses local `applyLiveCameraPose` only (no headset telemetry to server).
+- [ ] WebXR telemetry sender-exclusion (server-side) before enabling headset → `MOVE_CAMERA` wire path (avoids feedback loop with local pose).
+- [ ] FX-on-RT composer for XR viewfinder (v1 renders direct-to-RT without post stack).
+- [ ] Hand-tracking grab for camcorder rig.
+- [ ] On-device Quest 3 MP4 export verification (WebCodecs).
 - Persistence for agent-built scenes (extend EXPORT_JSON with lighting + materialOverride).

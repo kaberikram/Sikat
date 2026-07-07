@@ -8,6 +8,8 @@ import { ensureShadowsOnObjectMeshes } from './shadows'
 import { updateStageMarker } from './stage-marker'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
+import type { CamcorderRig } from './xr/camcorder-rig'
+import type { XrViewfinder } from './xr/xr-viewfinder'
 
 type ViewfinderComposer = ReturnType<typeof createViewfinderComposer>
 
@@ -24,16 +26,17 @@ export function createAnimateLoop(ctx: {
   directionalLight: THREE.DirectionalLight
   agentCursors: AgentCursors
   stageMarker: THREE.Group
+  camcorderRig: CamcorderRig
+  xrViewfinder: XrViewfinder
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
-  let rafId = 0
 
-  const animate = (now: number) => {
+  const animate = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
     lastTime = now
 
-    const { isPlaying, isRolling, cameraOpMode } = useEditorStore.getState()
+    const { isPlaying, isRolling, cameraOpMode, xrActive } = useEditorStore.getState()
     if (isPlaying) {
       useEditorStore.setState((state) => {
         const nextTime = state.currentTime + delta
@@ -62,7 +65,6 @@ export function createAnimateLoop(ctx: {
     const t = useEditorStore.getState().currentTime
     const gizmo = ctx.transformControl
     if (useEditorStore.getState().isExporting) {
-      rafId = requestAnimationFrame(animate)
       return
     }
 
@@ -73,29 +75,27 @@ export function createAnimateLoop(ctx: {
     const lighting = useEditorStore.getState().lighting
     const liveCamOp = cameraOpMode || isRolling
 
-    ctx.controls.enabled = !cameraOpMode
+    ctx.controls.enabled = !cameraOpMode && !xrActive
 
     ctx.ambientLight.color.set(lighting.ambient.color)
     ctx.ambientLight.intensity = lighting.ambient.intensity
     ctx.directionalLight.color.set(lighting.key.color)
     ctx.directionalLight.intensity = lighting.key.intensity
     ctx.directionalLight.position.set(...lighting.key.position)
-    ;(ctx.scene.background as THREE.Color).set(lighting.background)
-
-    const gizmoCamDrag = gizmo.dragging && gizmo.object === ctx.virtCamera
-    if (!gizmoCamDrag) {
-      if (liveCamOp) applyVirtualCameraBase(vcamData, ctx.virtCamera)
-      else applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+    if (xrActive) {
+      ctx.scene.background = null
+    } else {
+      if (!(ctx.scene.background instanceof THREE.Color)) {
+        ctx.scene.background = new THREE.Color()
+      }
+      ctx.scene.background.set(lighting.background)
     }
 
-    for (const obj of liveObjects) {
-      if (!obj.mesh) continue
-      const gizmoObj = gizmo.dragging && gizmo.object === obj.mesh
-      if (!gizmoObj) applyObjectTransformAtTime(t, obj)
-      if (!ctx.scene.children.includes(obj.mesh)) ctx.scene.add(obj.mesh)
-    }
-
-    if (selectedId === VIRTUAL_CAMERA_ID) {
+    if (xrActive) {
+      gizmo.enabled = false
+      gizmo.detach()
+      lastGizmoObject = null
+    } else if (selectedId === VIRTUAL_CAMERA_ID) {
       gizmo.enabled = true
       if (lastGizmoObject !== ctx.virtCamera) {
         gizmo.attach(ctx.virtCamera)
@@ -116,33 +116,61 @@ export function createAnimateLoop(ctx: {
       }
     }
 
-    // Agent cursors ride layer 1 (main viewport only) — update before the main
-    // render, and after object transforms so a cursor lands on its live target.
+    const gizmoCamDrag = gizmo.dragging && gizmo.object === ctx.virtCamera
+    if (!gizmoCamDrag) {
+      if (liveCamOp) applyVirtualCameraBase(vcamData, ctx.virtCamera)
+      else applyVirtualCameraAtTime(t, vcamData, ctx.virtCamera)
+    }
+
+    for (const obj of liveObjects) {
+      if (!obj.mesh) continue
+      const gizmoObj = gizmo.dragging && gizmo.object === obj.mesh
+      if (!gizmoObj) applyObjectTransformAtTime(t, obj)
+      if (!ctx.scene.children.includes(obj.mesh)) ctx.scene.add(obj.mesh)
+    }
+
     ctx.agentCursors.update(now)
     updateStageMarker(ctx.stageMarker)
 
-    ctx.controls.update()
+    if (!xrActive) ctx.controls.update()
+
+    if (xrActive && xrFrame) {
+      const referenceSpace = ctx.mainRenderer.xr.getReferenceSpace()
+      if (referenceSpace) ctx.camcorderRig.update(xrFrame, referenceSpace)
+
+      ctx.xrViewfinder.render({
+        renderer: ctx.pipRenderer,
+        scene: ctx.scene,
+        virtCamera: ctx.virtCamera,
+        screenMesh: ctx.camcorderRig.screenMesh,
+        objects: liveObjects,
+        stack,
+        t,
+        isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+      })
+    }
+
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)
 
-    renderViewfinderPass({
-      objects: liveObjects,
-      stack,
-      pipRenderer: ctx.pipRenderer,
-      scene: ctx.scene,
-      virtCamera: ctx.virtCamera,
-      viewfinder: ctx.viewfinder,
-      delta,
-      t,
-      vcData: vcamData,
-      isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
-      skipCameraApply: gizmoCamDrag || liveCamOp,
-    })
-
-    rafId = requestAnimationFrame(animate)
+    if (!xrActive) {
+      renderViewfinderPass({
+        objects: liveObjects,
+        stack,
+        pipRenderer: ctx.pipRenderer,
+        scene: ctx.scene,
+        virtCamera: ctx.virtCamera,
+        viewfinder: ctx.viewfinder,
+        delta,
+        t,
+        vcData: vcamData,
+        isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+        skipCameraApply: gizmoCamDrag || liveCamOp,
+      })
+    }
   }
 
-  rafId = requestAnimationFrame(animate)
-  return () => cancelAnimationFrame(rafId)
+  ctx.mainRenderer.setAnimationLoop(animate)
+  return () => ctx.mainRenderer.setAnimationLoop(null)
 }
 
 export function subscribeShadowSync() {

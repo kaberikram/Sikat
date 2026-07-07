@@ -50,10 +50,10 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
         gate.set()
         await released.wait()
-        yield Intent(action="spawn", primitive="box", color="#ff3b30")
         yield Intent(action="update_fx", section="bloom", fx_enabled=True)
 
     monkeypatch.setattr(llm, "stream_intents", slow_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
     producer = Producer()
 
     packets: list = []
@@ -69,7 +69,7 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     async def emit_status(agent, status, command_id=None, note=None):
         return None
 
-    # First clause hits instant grammar; second does not — LLM stays pending.
+    # First clause hits instant grammar; second is LLM-owned — LLM stays pending.
     task = asyncio.create_task(
         producer.direct(
             "add a red box then xyzzy fuzz the mood",
@@ -86,7 +86,7 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
         if events:
             break
         await asyncio.sleep(0.01)
-    assert events[0] == "SPAWN_OBJECT", "fallback spawn should stream before LLM returns"
+    assert events[0] == "SPAWN_OBJECT", "grammar spawn should stream before LLM returns"
     assert not task.done()
     released.set()
     planned, describe_only = await task

@@ -18,6 +18,7 @@ import {
 import { tryLocalCommand } from './local-commands'
 import { markCommandSent, markFirstPacket, formatLatencySummary } from './latency'
 import { startTakeRecorder } from './take-recorder'
+import { buildProducerReadback } from './intent-guess'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
 import { ContextProperties } from '../ui/context-properties'
@@ -104,6 +105,12 @@ const LOG_CLASS: Record<LogEntry['level'], string> = {
 function logLineClass(entry: LogEntry): string {
   if (entry.source === 'DIRECTOR' && entry.level === 'info') return 'font-bold'
   return LOG_CLASS[entry.level]
+}
+
+const CREW_LOG_BLOCK = /defer →|grammar handled|LLM directed|assigning:|via fallback|streaming \d+ clause/i
+
+function isBlockedCrewLog(message: string): boolean {
+  return CREW_LOG_BLOCK.test(message)
 }
 
 export function DirectorPod() {
@@ -208,7 +215,10 @@ export function DirectorPod() {
         markAgentIdle(msg.agent)
       }
     })
-    const offLog = socket.onLog((msg) => pushLog(msg.agent, msg.message, msg.level))
+    const offLog = socket.onLog((msg) => {
+      if (isBlockedCrewLog(msg.message)) return
+      pushLog(msg.agent, msg.message, msg.level)
+    })
     const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
     startSceneStateSync(socket)
     const stopTakeRecorder = startTakeRecorder()
@@ -277,8 +287,8 @@ export function DirectorPod() {
     clearMicGuessTimer()
     const socket = getDirectorSocket()
     const commandId = opts?.commandId ?? crypto.randomUUID()
-    // Instant set reaction — Producer ack in log; specialist cursor only.
-    pushLog('PRODUCER', nextInstantNote())
+    const readback = buildProducerReadback(trimmed)
+    pushLog('PRODUCER', readback ?? nextInstantNote())
     applyClientIntentGuess(trimmed, commandId)
     markCommandSent(commandId)
 

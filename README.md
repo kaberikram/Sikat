@@ -161,4 +161,23 @@ The scene runs on `THREE.WebGLRenderer` + `EffectComposer`. WebXR on Quest 3 cur
 
 4. **New FX = declarative config on the camera's FX stack**, wired up inside `Scene.tsx`. No exceptions.
 
+### Quest 3 / WebXR testing
+
+**Desktop (Chrome + WebXR emulator extension):**
+
+1. `npm run dev` — confirm **ENTER XR** appears top-left when immersive VR/AR is supported.
+2. Click **ENTER XR** — PiP hides, session starts, camcorder rig tracks emulated controller.
+3. Right trigger (emulated select) toggles REC; exit session restores desktop PiP and fly cam.
+
+If you see `XRWebGLBinding … is not of type 'XRSession'`, Chrome 147+ native WebXR Layers is clashing with the emulator polyfill. The app auto-falls back; you can also disable **WebXR Layers** at `chrome://flags` and restart Chrome.
+
+**On-device Quest 3:**
+
+1. Open the dev URL in Quest Browser (same LAN or tunneled host).
+2. **ENTER XR** → passthrough AR, hold right controller as camcorder, viewfinder on rig screen.
+3. Right trigger to roll/cut takes; voice commands still work via mic.
+4. Exit XR → replay timeline / export MP4 from virtual camera view (verify WebCodecs on device).
+
+v1 does **not** send headset telemetry to the server (local pose only) — avoids MOVE_CAMERA feedback loops.
+
 A full WebGPU migration checklist (with XR gating criteria) lives at the top of `src/Scene.tsx`.

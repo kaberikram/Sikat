@@ -1,7 +1,10 @@
-"""When to defer a clause to the LLM instead of instant rule grammar.
+"""Clause ownership: grammar vs LLM.
 
-Grammar can **coarse-emit** while the LLM reconciles in parallel — deferral
-means "wait for LLM only" (no coarse path), not "block all emits".
+**Grammar-owned** (instant, final): spawn, transform, remove, material, lights,
+fx, camera, playback, mood — any clause with a complete deterministic parse.
+
+**LLM-owned**: unparsed clauses, clarify, animate, creative language, or
+incomplete grammar reads (describe, assign, partial animate).
 """
 from __future__ import annotations
 
@@ -25,10 +28,8 @@ _CREATIVE_LANGUAGE = re.compile(
 )
 
 
-def should_coarse_emit(intent: Intent | None) -> bool:
-    """True when grammar gives enough to stage instantly before LLM finishes."""
-    if intent is None:
-        return False
+def _grammar_has_complete_intent(intent: Intent) -> bool:
+    """True when grammar gives enough to emit without the LLM."""
     if intent.action == "animate":
         motion = intent.motion or intent.preset
         target = intent.target
@@ -43,7 +44,7 @@ def should_coarse_emit(intent: Intent | None) -> bool:
 def defer_clause_to_llm(
     clause: str, intent: Intent | None, *, llm_available: bool = False
 ) -> bool:
-    """True → skip instant grammar emit; wait for LLM only (no coarse path)."""
+    """True → LLM-owned; grammar must not emit this clause."""
     if intent is None:
         return True
     if not llm_available:
@@ -54,9 +55,16 @@ def defer_clause_to_llm(
         return True
     if _CREATIVE_LANGUAGE.search(clause.lower()):
         return True
-    if not should_coarse_emit(intent):
+    if not _grammar_has_complete_intent(intent):
         return True
     return False
+
+
+def is_llm_owned_clause(
+    clause: str, intent: Intent | None, *, llm_available: bool = False
+) -> bool:
+    """Alias for defer_clause_to_llm — True when the LLM owns the clause."""
+    return defer_clause_to_llm(clause, intent, llm_available=llm_available)
 
 
 _OBJECT_VERB = re.compile(

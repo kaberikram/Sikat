@@ -35,7 +35,7 @@ def format_parse_hints(
     parsed: list[tuple[str, Intent | None]],
     scene: SceneState | None,
     *,
-    staged_indices: set[int],
+    handled_indices: set[int],
 ) -> str:
     """Build script-supervisor notes from per-clause grammar reads."""
     if not parsed or not any(intent is not None for _, intent in parsed):
@@ -48,11 +48,11 @@ def format_parse_hints(
         if intent is None:
             lines.append(f'- "{clause}" → (no grammar match)')
             continue
-        staged = " [already staged]" if idx in staged_indices else ""
+        handled = " [handled — do not re-emit]" if idx in handled_indices else ""
         summary = _intent_summary(intent)
-        if intent.action == "spawn" and idx in staged_indices:
+        if intent.action == "spawn" and idx in handled_indices:
             summary += f" name={default_spawn_name(intent)}"
-        lines.append(f'- "{clause}" → {summary}{staged}')
+        lines.append(f'- "{clause}" → {summary}{handled}')
 
     last = session_context.last_target()
     if last:
@@ -68,7 +68,8 @@ def format_parse_hints(
         lines.append(" ".join(parts))
 
     lines.append(
-        "Refine staged work where the director's intent differs; do not duplicate "
-        "staged clauses. Fill any gaps the grammar missed (especially compound requests)."
+        "Clauses marked handled are done — emit no intent for them. Unhandled "
+        "clauses are yours; interpret creatively (motion, choreography, mood, "
+        "compound builds)."
     )
     return "\n".join(lines)

@@ -1,15 +1,16 @@
-"""Coarse-then-refine parse policy tests."""
-from app.creative_parse import defer_clause_to_llm, should_coarse_emit
+"""Clause routing — grammar vs LLM ownership."""
+from app.creative_parse import defer_clause_to_llm, is_llm_owned_clause
 from app.fallback_parser import parse_one_clause
 
 from tests.helpers import scene_with
 
 
-def test_bounce_coarse_emit_capability():
-    scene = scene_with("CORE_SPHERE")
-    intent = parse_one_clause("bounce the ball", scene)
+def test_spawn_grammar_owned_when_llm_available():
+    scene = scene_with("BOX")
+    intent = parse_one_clause("add a red box", scene)
     assert intent is not None
-    assert should_coarse_emit(intent)
+    assert defer_clause_to_llm("add a red box", intent, llm_available=True) is False
+    assert is_llm_owned_clause("add a red box", intent, llm_available=True) is False
 
 
 def test_bounce_defers_when_llm_available():
@@ -24,14 +25,6 @@ def test_bounce_instant_when_no_llm():
     intent = parse_one_clause("bounce the ball", scene)
     assert intent is not None
     assert defer_clause_to_llm("bounce the ball", intent, llm_available=False) is False
-
-
-def test_animate_defers_when_llm_available():
-    scene = scene_with("CORE_SPHERE")
-    intent = parse_one_clause("bounce the ball", scene)
-    assert intent is not None
-    assert should_coarse_emit(intent)
-    assert defer_clause_to_llm("bounce the ball", intent, llm_available=True) is True
 
 
 def test_creative_clause_defers_when_llm_available():
@@ -57,7 +50,13 @@ def test_clarify_defers_when_llm_available():
     assert defer_clause_to_llm("move it", intent, llm_available=False) is False
 
 
-def test_playback_never_defers_when_coarse():
+def test_playback_grammar_owned_when_llm_available():
     intent = parse_one_clause("play", None)
     assert intent is not None
     assert defer_clause_to_llm("play", intent, llm_available=True) is False
+
+
+def test_bloom_grammar_owned_when_llm_available():
+    intent = parse_one_clause("enable bloom", None)
+    assert intent is not None
+    assert defer_clause_to_llm("enable bloom", intent, llm_available=True) is False

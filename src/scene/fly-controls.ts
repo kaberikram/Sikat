@@ -77,7 +77,8 @@ let rafId = 0
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - lastTick) / 1000)
   lastTick = now
-  if (useEditorStore.getState().cameraOpMode && HELD.size > 0 && !isTyping()) moveAxis(0, dt)
+  const { cameraOpMode, xrActive } = useEditorStore.getState()
+  if (cameraOpMode && !xrActive && HELD.size > 0 && !isTyping()) moveAxis(0, dt)
   rafId = requestAnimationFrame(tick)
 }
 

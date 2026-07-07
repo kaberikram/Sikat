@@ -38,12 +38,12 @@ async def test_say_used_as_active_note(producer: Producer):
     assert active_notes == ["taking the sphere up on a three-count"]
 
 
-async def test_missing_say_falls_back_to_command_note(producer: Producer):
+async def test_missing_say_uses_grammar_radio(producer: Producer):
     scene = scene_with("CORE_SPHERE")
     intent = Intent(action="transform", target="CORE_SPHERE", position=(0, 2, 0))
     _, statuses = await _collect(producer, [intent], scene)
     active_notes = [note for agent, status, note in statuses if status == "active"]
-    assert active_notes == ["moving"]
+    assert active_notes == ["moving CORE_SPHERE"]
 
 
 async def test_say_logged_by_specialist(producer: Producer):

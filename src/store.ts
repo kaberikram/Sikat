@@ -233,6 +233,8 @@ interface EditorState {
   takeNumber: number;
   takeStartTime: number;
   cameraOpMode: boolean;
+  xrActive: boolean;
+  xrSupported: boolean;
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
   overlayTimeline: boolean
@@ -257,6 +259,8 @@ interface EditorState {
   setPlaybackLoop: (loop: boolean) => void
   setClipLoopEnd: (time: number | null) => void
   setCameraOpMode: (on: boolean) => void
+  setXrActive: (on: boolean) => void
+  setXrSupported: (on: boolean) => void
   startTake: () => void
   endTake: () => void
   addKeyframe: (
@@ -303,6 +307,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   takeNumber: 0,
   takeStartTime: 0,
   cameraOpMode: false,
+  xrActive: false,
+  xrSupported: false,
   isExporting: false,
   overlayTimeline: false,
   overlayObjects: false,
@@ -383,6 +389,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     stage: { ...state.stage, ...patch },
   })),
   setCameraOpMode: (on) => set({ cameraOpMode: on }),
+  setXrActive: (on) => set({ xrActive: on }),
+  setXrSupported: (on) => set({ xrSupported: on }),
   startTake: () => set((state) => {
     if (state.isRolling) return state
     const takeNumber = state.takeNumber + 1

@@ -9,6 +9,15 @@ from app.schema import Intent
 
 from tests.helpers import scene_with
 
+_PARSE_JARGON = (
+    "LLM idle",
+    "grammar handled",
+    "defer → LLM",
+    "assigning:",
+    "streaming ",
+    "via fallback",
+)
+
 
 async def _collect_llm(producer, text, scene, *, emit_cancel=None):
     packets: list = []
@@ -39,14 +48,13 @@ async def _collect_llm(producer, text, scene, *, emit_cancel=None):
     return planned, describe_only, packets, logs, cancels
 
 
-async def test_llm_not_cancelled_on_full_grammar_match(monkeypatch, scene):
-    completed = asyncio.Event()
+async def test_pure_deterministic_skips_llm(monkeypatch, scene):
+    stream_started = False
 
     async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
-        try:
-            yield Intent(action="spawn", primitive="box", color="#ff3b30")
-        finally:
-            completed.set()
+        nonlocal stream_started
+        stream_started = True
+        yield Intent(action="spawn", primitive="box", color="#ff3b30")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(llm, "stream_intents", slow_stream)
@@ -55,10 +63,10 @@ async def test_llm_not_cancelled_on_full_grammar_match(monkeypatch, scene):
     _, _, packets, logs, _ = await _collect_llm(
         Producer(), "add a red box then enable bloom", scene
     )
-    await asyncio.wait_for(completed.wait(), timeout=2.0)
-    assert any("staged" in msg and "LLM confirmed" in msg for msg in logs)
-    assert "LLM skipped" not in " ".join(logs)
+    assert not stream_started
+    assert not any(any(j in msg for j in _PARSE_JARGON) for msg in logs)
     assert any(p.command == "SPAWN_OBJECT" for p in packets)
+    assert any(p.command == "UPDATE_FX" for p in packets)
 
 
 async def test_compound_line_adds_animate(monkeypatch, scene):
@@ -70,7 +78,7 @@ async def test_compound_line_adds_animate(monkeypatch, scene):
     monkeypatch.setattr(llm, "stream_intents", fake_stream)
     monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
 
-    _, _, packets, _, _ = await _collect_llm(
+    _, _, packets, logs, _ = await _collect_llm(
         Producer(),
         "add a blue sphere and make it wander",
         scene,
@@ -78,6 +86,7 @@ async def test_compound_line_adds_animate(monkeypatch, scene):
     commands = [p.command for p in packets]
     assert commands.count("SPAWN_OBJECT") == 1
     assert "ANIMATE_OBJECT" in commands
+    assert not any(any(j in msg for j in _PARSE_JARGON) for msg in logs)
 
 
 async def test_llm_animate_no_grammar_staging(monkeypatch, scene):
@@ -97,7 +106,7 @@ async def test_llm_animate_no_grammar_staging(monkeypatch, scene):
     animate = [p for p in packets if p.command == "ANIMATE_OBJECT"]
     assert len(animate) == 1
     assert animate[0].refinement is False
-    assert any("defer → LLM" in msg for msg in logs)
+    assert not any(any(j in msg for j in _PARSE_JARGON) for msg in logs)
 
 
 async def test_llm_animate_emits_fresh_not_refinement(monkeypatch, scene):
@@ -177,7 +186,7 @@ async def test_compound_wander_targets_spawned_sphere(monkeypatch, scene):
     assert animate.payload.target.name == "SPHERE_SPAWN"
 
 
-async def test_duplicate_say_surfaces(monkeypatch, scene):
+async def test_duplicate_llm_spawn_dropped(monkeypatch, scene):
     async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
         yield Intent(
             action="spawn",
@@ -185,13 +194,15 @@ async def test_duplicate_say_surfaces(monkeypatch, scene):
             color="#ff3b30",
             say="red box, dead center",
         )
+        yield Intent(action="animate", target="it", motion="bounce")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(llm, "stream_intents", fake_stream)
     monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
 
     _, _, packets, logs, _ = await _collect_llm(
-        Producer(), "add a red box", scene
+        Producer(), "add a red box and bounce it", scene
     )
-    assert any(p.command == "SPAWN_OBJECT" for p in packets)
+    assert sum(1 for p in packets if p.command == "SPAWN_OBJECT") == 1
     assert "red box, dead center" in logs
+    assert any(p.command == "ANIMATE_OBJECT" for p in packets)

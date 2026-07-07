@@ -33,6 +33,10 @@ Return JSON: {{"intents": [ {{...}}, ... ]}}
 Each intent has `action` plus only relevant fields. Multiple intents for
 compound instructions ("add X then dim lights" → 2 intents).
 
+When SCRIPT SUPERVISOR NOTES mark a clause as handled, emit **no** intent for
+that clause — grammar already executed it. Your whole attention is on the
+creative / motion / unhandled clauses: richer `say` lines and tuned motion params.
+
 ## say (every intent, required)
 Every intent — mutating or describe — includes `say`: a ≤8 word, present-tense
 line in the voice of film-set radio chatter, read aloud on the crew's cursor
@@ -232,7 +236,8 @@ def select_provider(frame: SceneFrame | None = None) -> str | None:
     - **Vision** (``frame`` set) → Anthropic (DeepSeek API is text-only)
     - **Text-only** → Anthropic when available (animate/choreo refine), else DeepSeek
 
-    Phase G routing: Sonnet choreographs; grammar stages instantly, LLM reconciles.
+    Phase G routing: Sonnet choreographs; grammar owns deterministic clauses,
+    LLM owns creative/motion.
 
     ``DIRECTOR_LLM_PROVIDER`` (deepseek|anthropic|none) overrides text-only routing.
     Vision requests still prefer Anthropic unless the key is missing.
@@ -374,10 +379,10 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
 _JSON_SCHEMA_HINT = """
 Respond with a single JSON object of exactly this shape:
 {"intents": [ {"action": "<one of the actions above>", "say": "<in-character radio line>", ...only relevant fields...}, ... ]}
-Example for "add a red box then dim the lights":
+Example for "add a blue sphere and make it wander":
 {"intents": [
-  {"action": "spawn", "primitive": "box", "color": "#ff3b30", "say": "box in, red, dead center"},
-  {"action": "update_lights", "ambient_intensity": 0.3, "key_intensity": 0.7, "say": "warming the key, half stop"}
+  {"action": "spawn", "primitive": "sphere", "color": "#0a84ff", "say": "sphere in, blue, stage left"},
+  {"action": "animate", "target": "SPHERE_SPAWN", "motion": "wander", "motion_params": {"waypoints": 5}, "say": "wandering the floor, five stops"}
 ]}
 If nothing is actionable, respond with {"intents": []}. Output JSON only."""
 
@@ -480,7 +485,8 @@ def _parse_deepseek_sync(
                 "role": "user",
                 "content": (
                     'Return ONLY {"intents":[...]} JSON. Each intent needs "action". '
-                    "Use object names from the scene briefing for targets."
+                    "Use object names from the scene briefing for targets. "
+                    "Skip clauses marked handled in supervisor notes."
                 ),
             },
         ],

@@ -11,6 +11,9 @@ import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
 import { createAgentCursors } from './agent-cursors'
 import { createStageMarker, disposeStageMarker } from './stage-marker'
 import { bindFlyControls } from './fly-controls'
+import { createCamcorderRig } from './xr/camcorder-rig'
+import { initXrSession } from './xr/xr-session'
+import { createXrViewfinder } from './xr/xr-viewfinder'
 
 export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivElement) {
   container.replaceChildren()
@@ -41,7 +44,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   camAxes.layers.set(1)
   virtCamera.add(camAxes)
 
-  const mainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+  const mainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  mainRenderer.setClearColor(0x000000, 0)
   mainRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   mainRenderer.shadowMap.enabled = true
   mainRenderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -135,6 +139,10 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   const stageMarker = createStageMarker(scene)
   const unbindFly = bindFlyControls(mainRenderer.domElement)
 
+  const camcorderRig = createCamcorderRig(mainRenderer, scene)
+  const xrViewfinder = createXrViewfinder()
+  const disposeXr = initXrSession(mainRenderer, camcorderRig)
+
   const stopAnimate = createAnimateLoop({
     scene,
     userCamera,
@@ -148,6 +156,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     directionalLight,
     agentCursors,
     stageMarker,
+    camcorderRig,
+    xrViewfinder,
   })
 
   const handleMainResize = () => {
@@ -180,6 +190,9 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     agentCursors.dispose()
     disposeStageMarker(stageMarker, scene)
     unbindFly()
+    disposeXr()
+    camcorderRig.dispose()
+    xrViewfinder.dispose()
     unsubStore()
     unsubShadows()
     roMain.disconnect()

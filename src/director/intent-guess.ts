@@ -131,3 +131,75 @@ export function guessIntent(text: string): IntentGuess | null {
     targetPosition: obj?.position,
   }
 }
+
+function splitClauses(text: string): string[] {
+  return text
+    .split(/\s+then\s+|\s*;\s*|\s+and\s+(?=(?:make|add|spawn|enable|disable|move|play|pause|cut|record|bounce|dim|brighten|warm)\b)/i)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function clauseReadback(clause: string): string | null {
+  const motion = findMotion(clause)
+  let action: string | undefined
+  for (const hint of ACTION_HINTS) {
+    if (hint.re.test(clause)) {
+      action = hint.action
+      break
+    }
+  }
+  if (motion || /\b(make|animate|move|take|give)\b/i.test(clause)) {
+    action = action ?? 'animate'
+  }
+
+  if (action === 'spawn' || /\b(add|spawn|drop in|reveal)\b/i.test(clause)) {
+    const color = /\bred\b/i.test(clause)
+      ? 'Red'
+      : /\bblue\b/i.test(clause)
+        ? 'Blue'
+        : /\bgreen\b/i.test(clause)
+          ? 'Green'
+          : null
+    const prim = /\bsphere\b/i.test(clause)
+      ? 'sphere'
+      : /\bbox\b/i.test(clause)
+        ? 'box'
+        : 'object'
+    if (color) return `${color} ${prim} coming in`
+    const label = prim === 'object' ? 'Something' : prim.charAt(0).toUpperCase() + prim.slice(1)
+    return `${label} coming in`
+  }
+  if (action === 'update_fx' || /\bbloom\b/i.test(clause)) return 'Bloom up on the lens'
+  if (action === 'update_lights') return 'Checking the light'
+  if (action === 'playback') {
+    if (/\bcut\b/i.test(clause)) return "That's a cut"
+    if (/\b(hold|pause|freeze)\b/i.test(clause)) return 'Hold'
+    if (/\b(record|action|rolling)\b/i.test(clause)) return 'Rolling take'
+    return 'Rolling'
+  }
+  if (action === 'animate' || motion) {
+    const m = motion ?? 'move'
+    if (/\b(it|that|this)\b/i.test(clause)) {
+      if (m === 'wander') return "we'll send it wandering"
+      if (m === 'bounce') return "we'll bounce it"
+      return `we'll ${m} it`
+    }
+    return `${m} incoming`
+  }
+  if (action === 'move_camera') return 'Reframing the shot'
+  if (action === 'remove') return 'Clearing it'
+  return null
+}
+
+/** Foreman readback before server parse — specific Producer line or null. */
+export function buildProducerReadback(text: string): string | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const parts = splitClauses(trimmed)
+    .map(clauseReadback)
+    .filter((p): p is string => p != null)
+  if (parts.length === 0) return null
+  if (parts.length === 1) return parts[0]
+  const [first, ...rest] = parts
+  return `${first}, then ${rest.join(', then ')}`
+}
