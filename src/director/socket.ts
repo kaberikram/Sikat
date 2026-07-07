@@ -23,16 +23,18 @@ export type SocketStatus = 'connecting' | 'open' | 'closed'
 
 type Listener<T> = (value: T) => void
 
-function defaultUrl(): string {
+function defaultUrl(): string | null {
   const configured = import.meta.env.VITE_DIRECTOR_WS_URL as string | undefined
   if (configured) return configured
-  const host = typeof location !== 'undefined' ? location.hostname : 'localhost'
-  return `ws://${host}:8000/ws`
+  if (typeof location === 'undefined') return 'ws://localhost:8000/ws'
+  // Insecure ws:// is blocked on HTTPS pages — require VITE_DIRECTOR_WS_URL in prod.
+  if (location.protocol === 'https:') return null
+  return `ws://${location.hostname}:8000/ws`
 }
 
 export class DirectorSocket {
   private ws: WebSocket | null = null
-  private url: string
+  private url: string | null
   private attempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private closedByUser = false
@@ -50,15 +52,30 @@ export class DirectorSocket {
 
   status: SocketStatus = 'closed'
 
-  constructor(url = defaultUrl()) {
-    this.url = url
+  constructor(url?: string | null) {
+    this.url = url ?? defaultUrl()
+  }
+
+  /** False when no backend URL (e.g. HTTPS prod without VITE_DIRECTOR_WS_URL). */
+  get isConfigured(): boolean {
+    return Boolean(this.url)
   }
 
   connect() {
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return
+    if (!this.url) {
+      this.setStatus('closed')
+      return
+    }
     this.closedByUser = false
     this.setStatus('connecting')
-    this.ws = new WebSocket(this.url)
+    try {
+      this.ws = new WebSocket(this.url)
+    } catch {
+      this.ws = null
+      this.setStatus('closed')
+      return
+    }
     this.ws.onopen = () => {
       this.attempts = 0
       this.setStatus('open')
@@ -104,6 +121,7 @@ export class DirectorSocket {
   }
 
   private scheduleReconnect() {
+    if (!this.url) return
     if (this.reconnectTimer) return
     const base = Math.min(10_000, 1_000 * 2 ** this.attempts)
     const jitter = base * (0.8 + Math.random() * 0.4)
