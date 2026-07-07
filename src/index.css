@@ -23,6 +23,13 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    min-height: 100%;
+  }
+
   body {
     @apply bg-[var(--bg-color)] text-[#000] overflow-hidden;
     font-family: 'Arial Black', sans-serif;
