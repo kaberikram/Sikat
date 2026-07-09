@@ -27,7 +27,8 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 2. `animate-loop.ts` (XR frames) — `camcorderRig.update(delta, timeSec, mainRenderer.xr)` **before** the viewfinder RT pass.
 3. Camcorder group is parented to `xrOrigin.gripSpaces.right`.
 4. REC: `gamepads.right.getButtonDown(InputComponent.Trigger)` or `getSelectStart()`.
-5. Controller/hand meshes forced to **layer 1** so they never appear in the virtual cam film.
+5. Controller/hand meshes forced to **EDITOR_LAYER (3)** so they never appear in the virtual cam film.
+   **Do not use layers 1 or 2** — Three.js WebXR reserves those for left/right eye cameras; objects on layer 1 only draw in the left eye.
 
 ## Peers / versions
 

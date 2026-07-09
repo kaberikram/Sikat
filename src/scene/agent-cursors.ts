@@ -16,7 +16,7 @@ import {
 import { sampleObjectAtTime } from '../director/scene-state-sync'
 import { useEditorStore } from '../store'
 import { getEaseFn } from '../easing'
-import { tagSceneInfrastructure } from './infrastructure'
+import { tagSceneInfrastructure, setEditorLayer } from './infrastructure'
 
 const HOVER_HEIGHT = 1.15
 const WANDER_RADIUS = 0.4
@@ -136,7 +136,7 @@ function buildCursor(agent: string, seed: number): Cursor {
   group.add(noteSprite)
 
   group.renderOrder = 999
-  group.traverse((o) => o.layers.set(1))
+  setEditorLayer(group)
   tagSceneInfrastructure(group)
   group.visible = false
 

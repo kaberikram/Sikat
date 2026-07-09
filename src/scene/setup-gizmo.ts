@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
-import { tagSceneInfrastructure } from './infrastructure'
+import { EDITOR_LAYER, setEditorLayer, tagSceneInfrastructure } from './infrastructure'
 
 export function setupGizmo(
   scene: THREE.Scene,
@@ -13,10 +13,9 @@ export function setupGizmo(
   const transformControl = new TransformControls(userCamera, domElement)
   transformControl.setMode('translate')
   transformControl.setSize(1.1)
-  transformControl.getRaycaster().layers.set(1)
+  transformControl.getRaycaster().layers.set(EDITOR_LAYER)
   const gizmoHelper = transformControl.getHelper()
-  gizmoHelper.layers.set(1)
-  gizmoHelper.traverse((child) => child.layers.set(1))
+  setEditorLayer(gizmoHelper)
   tagSceneInfrastructure(gizmoHelper as unknown as THREE.Object3D)
   scene.add(gizmoHelper)
 

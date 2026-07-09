@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { defaultUserCameraPosition, useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { createViewfinderComposer } from '../pip-composer'
 import { registerSceneForExport } from '../scene-export-registry'
-import { tagSceneInfrastructure } from './infrastructure'
+import { EDITOR_LAYER, tagSceneInfrastructure } from './infrastructure'
 import { ensureShadowsOnObjectMeshes } from './shadows'
 import { setupGizmo } from './setup-gizmo'
 import { setupPicking } from './setup-picking'
@@ -28,7 +28,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   userCamera.position.set(...defaultUserCameraPosition(stage.radius))
   userCamera.lookAt(defaultSceneFocus)
   userCamera.layers.enable(0)
-  userCamera.layers.enable(1)
+  // Layer 3 = editor chrome. Do NOT use 1/2 — WebXR reserves those for left/right eyes.
+  userCamera.layers.enable(EDITOR_LAYER)
 
   const virtCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, cameraFar)
   virtCamera.layers.set(0)
@@ -41,7 +42,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   scene.add(virtCamera)
 
   const camAxes = new THREE.AxesHelper(Math.max(0.75, stage.radius * 0.03))
-  camAxes.layers.set(1)
+  camAxes.layers.set(EDITOR_LAYER)
   virtCamera.add(camAxes)
 
   const mainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })

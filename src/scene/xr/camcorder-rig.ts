@@ -6,15 +6,20 @@ import {
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
 import { useEditorStore } from '../../store'
-import { tagSceneInfrastructure } from '../infrastructure'
+import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 
 /**
- * Quest grip space often has +Y along the pointing axis and +Z toward the floor
- * when held naturally. Three.js cameras look down local -Z, so we rotate +90° X
- * so "point the controller" aims the virtual cam into the room.
+ * WebXR grip −Z is camera-forward (same as Three.js).
+ * Pitch the aim up from that axis so a natural hold looks slightly above the barrel.
  */
-const AIM_OFFSET = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0, 'XYZ'))
-const LENS_FORWARD_M = 0.04
+const AIM_UP_DEG = 30
+const AIM_UP_RAD = (AIM_UP_DEG * Math.PI) / 180
+/** Local X pitch: negative = tip aim upward (toward grip +Y). */
+const AIM_OFFSET = new THREE.Quaternion().setFromEuler(
+  new THREE.Euler(-AIM_UP_RAD, 0, 0, 'XYZ')
+)
+const LENS_FORWARD_M = 0.05
+const AIM_RAY_LEN = 2.5
 
 export interface CamcorderRig {
   group: THREE.Group
@@ -25,11 +30,6 @@ export interface CamcorderRig {
   dispose: () => void
 }
 
-/** Keep IWSDK controller/hand meshes off the virtual cam (layer 0). */
-function forceEditorLayer(root: THREE.Object3D): void {
-  root.traverse((o) => o.layers.set(1))
-}
-
 export function createCamcorderRig(
   scene: THREE.Scene,
   userCamera: THREE.PerspectiveCamera,
@@ -38,19 +38,17 @@ export function createCamcorderRig(
   const xrInput = new XRInputManager({
     scene,
     camera: userCamera,
-    // Desktop picking stays on HTML/gizmo; XR ray pick is a later follow-up.
     pointerSettings: { enabled: false },
   })
   tagSceneInfrastructure(xrInput.xrOrigin)
-  forceEditorLayer(xrInput.xrOrigin)
+  setEditorLayer(xrInput.xrOrigin)
   scene.add(xrInput.xrOrigin)
 
   const group = new THREE.Group()
-  group.layers.set(1)
+  setEditorLayer(group)
 
-  // Flip-out LCD: raised toward the tracking ring, facing the user.
-  // Quest grip often has +Z toward the floor when held upright — face -Z (up) + tip toward -Y (user).
-  // DoubleSide so both stereo eyes see the panel when near edge-on.
+  // Point-and-shoot: grip −Z = barrel. Screen is a rear LCD facing the shooter (+Z).
+  // Plane default faces +Z — leave that, tip slightly toward the eyes.
   const screenMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(0.14, 0.07875),
     new THREE.MeshBasicMaterial({
@@ -59,19 +57,51 @@ export function createCamcorderRig(
       depthTest: true,
     })
   )
-  screenMesh.layers.set(1)
-  screenMesh.position.set(0, 0.1, 0)
-  screenMesh.rotation.set(Math.PI - 0.45, 0, 0)
+  // Above the grip (+Y), slightly toward the hand (+Z = back when −Z is aim).
+  screenMesh.position.set(0, 0.06, -0.0525)
+  screenMesh.rotation.set(-0.436, 0, 0) // −25° tip toward the eyes
   screenMesh.renderOrder = 10
   group.add(screenMesh)
 
-  // Stable IWSDK grip space — no manual inputSources handedness fallback.
+  // Debug aim ray — matches virt cam forward (grip −Z pitched AIM_UP_DEG up).
+  const aimRay = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.003, 0.003, AIM_RAY_LEN, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0xff3300,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.85,
+    })
+  )
+  // Cylinder default +Y → −Z, then same upward pitch as the virt cam.
+  aimRay.rotation.set(Math.PI / 2 - AIM_UP_RAD, 0, 0)
+  const rayMid = new THREE.Vector3(0, 0.01, -AIM_RAY_LEN / 2 - LENS_FORWARD_M)
+  rayMid.applyQuaternion(AIM_OFFSET)
+  aimRay.position.copy(rayMid)
+  aimRay.renderOrder = 20
+  group.add(aimRay)
+
+  const aimTip = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0xffee00,
+      depthTest: false,
+    })
+  )
+  const tipPos = new THREE.Vector3(0, 0.01, -AIM_RAY_LEN - LENS_FORWARD_M)
+  tipPos.applyQuaternion(AIM_OFFSET)
+  aimTip.position.copy(tipPos)
+  aimTip.renderOrder = 21
+  group.add(aimTip)
+
+  setEditorLayer(group)
+
   xrInput.xrOrigin.gripSpaces.right.add(group)
 
   let takeLabel: THREE.Mesh | null = null
   let lastTakeNumber = 0
 
-  const lensOffset = new THREE.Vector3(0, LENS_FORWARD_M, 0)
+  const lensOffset = new THREE.Vector3(0, 0.01, -LENS_FORWARD_M)
   const worldPos = new THREE.Vector3()
   const worldQuat = new THREE.Quaternion()
   const scratchScale = new THREE.Vector3()
@@ -116,11 +146,11 @@ export function createCamcorderRig(
           side: THREE.DoubleSide,
         })
       )
-      takeLabel.layers.set(1)
-      takeLabel.position.set(0, 0.13, 0)
+      takeLabel.position.set(0, 0.096, -0.05775)
       takeLabel.rotation.copy(screenMesh.rotation)
       takeLabel.renderOrder = 11
       group.add(takeLabel)
+      setEditorLayer(takeLabel)
     } else if (!isRolling && takeLabel) {
       group.remove(takeLabel)
       const labelMat = takeLabel.material as THREE.MeshBasicMaterial
@@ -134,8 +164,7 @@ export function createCamcorderRig(
 
   function update(delta: number, timeSec: number, xrManager: THREE.WebXRManager): void {
     xrInput.update(xrManager, delta, timeSec)
-    // Newly loaded controller/hand GLTFs default to layer 0 — keep them off virt cam.
-    forceEditorLayer(xrInput.xrOrigin)
+    setEditorLayer(xrInput.xrOrigin)
 
     const pad = xrInput.gamepads.right
     if (
@@ -150,7 +179,7 @@ export function createCamcorderRig(
     const grip = xrInput.xrOrigin.gripSpaces.right
     grip.updateWorldMatrix(true, false)
     grip.matrixWorld.decompose(worldPos, worldQuat, scratchScale)
-    // Aim along grip +Y (pointing), not raw grip -Z (often toward floor).
+    // Grip −Z + AIM_UP_DEG pitch (natural hold aims slightly above the barrel).
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
     worldPos.add(lensOffset.clone().applyQuaternion(aimQuat))
 
@@ -169,13 +198,16 @@ export function createCamcorderRig(
     screenMesh,
     xrInput,
     update,
-    // XRInputManager reads session from WebXRManager each frame — no bind needed.
     bindSession: () => {},
     dispose: () => {
       group.removeFromParent()
       scene.remove(xrInput.xrOrigin)
       screenMesh.geometry.dispose()
       ;(screenMesh.material as THREE.Material).dispose()
+      aimRay.geometry.dispose()
+      ;(aimRay.material as THREE.Material).dispose()
+      aimTip.geometry.dispose()
+      ;(aimTip.material as THREE.Material).dispose()
       if (takeLabel) {
         const labelMat = takeLabel.material as THREE.MeshBasicMaterial
         labelMat.map?.dispose()

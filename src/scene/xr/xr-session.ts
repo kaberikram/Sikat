@@ -1,17 +1,23 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
+import { EDITOR_LAYER } from '../infrastructure'
 import { registerXrSessionEntry } from './xr-bridge'
 import type { CamcorderRig } from './camcorder-rig'
 import { forceLegacyXrLayerIfNeeded } from './xr-compat'
 
-/** Enable layers 0+1 on the XR stereo rig so editor chrome (viewfinder) draws in both eyes. */
+/**
+ * Ensure editor chrome (EDITOR_LAYER) is visible in both eyes.
+ * Three.js `updateCamera` copies `userCamera.layers` then ORs eye bits 1|2 —
+ * so userCamera must already enable EDITOR_LAYER (see bootstrap). This re-asserts
+ * after eye cameras are created.
+ */
 export function syncXrStereoLayers(renderer: THREE.WebGLRenderer): void {
   const xrCam = renderer.xr.getCamera()
   xrCam.layers.enable(0)
-  xrCam.layers.enable(1)
+  xrCam.layers.enable(EDITOR_LAYER)
   for (const cam of xrCam.cameras) {
     cam.layers.enable(0)
-    cam.layers.enable(1)
+    cam.layers.enable(EDITOR_LAYER)
   }
 }
 

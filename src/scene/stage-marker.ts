@@ -1,12 +1,11 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../store'
-import { tagSceneInfrastructure } from './infrastructure'
+import { setEditorLayer, tagSceneInfrastructure } from './infrastructure'
 
-/** Flat ring + center cross on layer 1 — main viewport only, never filmed. */
+/** Flat ring + center cross on EDITOR_LAYER — main viewport only, never filmed. */
 export function createStageMarker(scene: THREE.Scene): THREE.Group {
   const group = new THREE.Group()
   tagSceneInfrastructure(group)
-  group.traverse((o) => o.layers.set(1))
 
   const mat = new THREE.MeshBasicMaterial({
     color: 0x888888,
@@ -28,6 +27,7 @@ export function createStageMarker(scene: THREE.Scene): THREE.Group {
   vBar.rotation.x = -Math.PI / 2
   group.add(vBar)
 
+  setEditorLayer(group)
   scene.add(group)
   return group
 }
