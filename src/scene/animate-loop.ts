@@ -9,6 +9,7 @@ import { updateStageMarker } from './stage-marker'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
 import type { CamcorderRig } from './xr/camcorder-rig'
+import { syncXrStereoLayers } from './xr/xr-session'
 import type { XrViewfinder } from './xr/xr-viewfinder'
 
 type ViewfinderComposer = ReturnType<typeof createViewfinderComposer>
@@ -137,8 +138,14 @@ export function createAnimateLoop(ctx: {
     if (!xrActive) ctx.controls.update()
 
     if (xrActive && xrFrame) {
-      const referenceSpace = ctx.mainRenderer.xr.getReferenceSpace()
-      if (referenceSpace) ctx.camcorderRig.update(xrFrame, referenceSpace)
+      // Eye cameras can appear after sessionstart — keep layer 1 (viewfinder) on both eyes.
+      syncXrStereoLayers(ctx.mainRenderer)
+
+      // Hide virt-cam axes in XR (they sit at the lens and look like a stray gizmo).
+      for (const child of ctx.virtCamera.children) child.visible = false
+
+      // IWSDK updates grip/ray spaces; camcorder pose + REC read from gripSpaces.right.
+      ctx.camcorderRig.update(delta, now / 1000, ctx.mainRenderer.xr)
 
       // Virtual cam films the CG stage (white studio bg + layer-0 objects), not passthrough.
       if (!(ctx.scene.background instanceof THREE.Color)) {
@@ -169,6 +176,7 @@ export function createAnimateLoop(ctx: {
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)
 
     if (!xrActive) {
+      for (const child of ctx.virtCamera.children) child.visible = true
       renderViewfinderPass({
         objects: liveObjects,
         stack,

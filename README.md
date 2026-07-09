@@ -163,10 +163,12 @@ The scene runs on `THREE.WebGLRenderer` + `EffectComposer`. WebXR on Quest 3 cur
 
 ### Quest 3 / WebXR testing
 
+**XR input:** controller grips / hand visuals come from [`@iwsdk/xr-input`](https://iwsdk.dev/concepts/xr-input/) (`XRInputManager`). We do **not** use full IWSDK (`World.create` / ECS) — session, dual cameras, and viewfinder FX stay in Sikat. Camcorder parents to `xrOrigin.gripSpaces.right`; REC uses StatefulGamepad trigger / select edges. Peer: `three >= 0.160` (we ship `^0.184`). Pointers are disabled for now (desktop gizmo still owns picking).
+
 **Desktop (Chrome + WebXR emulator extension):**
 
 1. `npm run dev` — confirm **ENTER XR** appears top-left when immersive VR/AR is supported.
-2. Click **ENTER XR** — PiP hides, session starts, camcorder rig tracks emulated controller.
+2. Click **ENTER XR** — PiP hides, session starts, camcorder screen tracks emulated **right** grip (IWSDK origin).
 3. Right trigger (emulated select) toggles REC; exit session restores desktop PiP and fly cam.
 
 If you see `XRWebGLBinding … is not of type 'XRSession'`, Chrome 147+ native WebXR Layers is clashing with the emulator polyfill. The app auto-falls back; you can also disable **WebXR Layers** at `chrome://flags` and restart Chrome.
@@ -179,5 +181,7 @@ If you see `XRWebGLBinding … is not of type 'XRSession'`, Chrome 147+ native W
 4. Exit XR → replay timeline / export MP4 from virtual camera view (verify WebCodecs on device).
 
 v1 does **not** send headset telemetry to the server (local pose only) — avoids MOVE_CAMERA feedback loops.
+
+**Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.
 
 A full WebGPU migration checklist (with XR gating criteria) lives at the top of `src/Scene.tsx`.

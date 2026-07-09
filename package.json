@@ -14,6 +14,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@iwsdk/xr-input": "^0.4.2",
     "@tailwindcss/vite": "^4.1.14",
     "@types/three": "^0.184.0",
     "@vitejs/plugin-react": "^5.0.4",

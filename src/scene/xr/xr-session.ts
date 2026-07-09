@@ -4,6 +4,17 @@ import { registerXrSessionEntry } from './xr-bridge'
 import type { CamcorderRig } from './camcorder-rig'
 import { forceLegacyXrLayerIfNeeded } from './xr-compat'
 
+/** Enable layers 0+1 on the XR stereo rig so editor chrome (viewfinder) draws in both eyes. */
+export function syncXrStereoLayers(renderer: THREE.WebGLRenderer): void {
+  const xrCam = renderer.xr.getCamera()
+  xrCam.layers.enable(0)
+  xrCam.layers.enable(1)
+  for (const cam of xrCam.cameras) {
+    cam.layers.enable(0)
+    cam.layers.enable(1)
+  }
+}
+
 async function requestImmersiveSession(): Promise<XRSession> {
   if (!navigator.xr) throw new Error('WebXR not available')
 
@@ -35,14 +46,10 @@ export function initXrSession(
 ): () => void {
   renderer.xr.enabled = true
 
+  // Stereo eye cameras are often empty at sessionstart and can reset masks —
+  // also sync every frame from animate-loop via syncXrStereoLayers().
   renderer.xr.addEventListener('sessionstart', () => {
-    const xrCam = renderer.xr.getCamera()
-    xrCam.layers.enable(0)
-    xrCam.layers.enable(1)
-    for (const cam of xrCam.cameras) {
-      cam.layers.enable(0)
-      cam.layers.enable(1)
-    }
+    syncXrStereoLayers(renderer)
   })
 
   let priorCameraOpMode = false

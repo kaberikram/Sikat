@@ -139,7 +139,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   const stageMarker = createStageMarker(scene)
   const unbindFly = bindFlyControls(mainRenderer.domElement)
 
-  const camcorderRig = createCamcorderRig(mainRenderer, scene, virtCamera)
+  const camcorderRig = createCamcorderRig(scene, userCamera, virtCamera)
   const xrViewfinderComposer = createViewfinderComposer(
     scene,
     virtCamera,
