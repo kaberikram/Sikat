@@ -108,6 +108,30 @@ def test_split_clauses_exported():
         "make it wander",
     ]
     assert split_clauses("black and white mood") == ["black and white mood"]
+    assert split_clauses("add a box, then enable bloom") == [
+        "add a box",
+        "enable bloom",
+    ]
+    assert split_clauses("add a red box and a blue sphere") == [
+        "add a red box",
+        "add a blue sphere",
+    ]
+    showcase = (
+        "add a red box and a blue sphere, Agent 1 you're on the sphere, "
+        "Agent 2 you're on the box, Agent 1 bounce high, Agent 2 orbit, "
+        "sunset mood, enable bloom"
+    )
+    parts = split_clauses(showcase)
+    assert len(parts) >= 6
+    assert parts[0] == "add a red box"
+    assert parts[1] == "add a blue sphere"
+    assert any("bounce" in p.lower() for p in parts)
+    assert any("orbit" in p.lower() for p in parts)
+    assert any("sunset" in p.lower() for p in parts)
+    # Address comma stays with the performer clause.
+    assert split_clauses("agent 1, you're on the sphere") == [
+        "agent 1 you're on the sphere"
+    ]
 
 
 async def test_suggest_intent_routes_without_packets(monkeypatch, scene):

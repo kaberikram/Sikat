@@ -30,15 +30,12 @@ export interface VoiceSessionHandlers {
   onInterim?: (text: string) => void
   onFinal?: (text: string, opts: { forceVision: boolean }) => void
   onListeningChange?: (listening: boolean) => void
-  /** Fired on interim (debounced) for client intent guess — optional. */
-  onInterimGuess?: (text: string) => void
 }
 
 let recognition: SpeechRecognitionLike | null = null
 let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
-let guessTimer: ReturnType<typeof setTimeout> | null = null
 
 function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   if (typeof window === 'undefined') return null
@@ -56,15 +53,7 @@ export function isVoiceListening(): boolean {
   return listening
 }
 
-function clearGuessTimer(): void {
-  if (guessTimer) {
-    clearTimeout(guessTimer)
-    guessTimer = null
-  }
-}
-
 export function stopVoiceSession(): void {
-  clearGuessTimer()
   listening = false
   forceVision = false
   handlers.onListeningChange?.(false)
@@ -88,7 +77,9 @@ export function startVoiceSession(
   opts?: { forceVision?: boolean }
 ): void {
   const Recognition = getSpeechRecognitionCtor()
-  if (!Recognition || listening) return
+  if (!Recognition) return
+  // Take over any live session (desktop mic ↔ XR hold-A).
+  if (listening) stopVoiceSession()
 
   handlers = next
   if (opts?.forceVision) forceVision = true
@@ -108,14 +99,6 @@ export function startVoiceSession(
       else ghost += transcript
     }
     handlers.onInterim?.(ghost)
-    const interim = ghost.trim()
-    if (interim && handlers.onInterimGuess) {
-      clearGuessTimer()
-      guessTimer = setTimeout(() => {
-        handlers.onInterimGuess?.(interim)
-        guessTimer = null
-      }, 300)
-    }
   }
 
   rec.onerror = (event) => {

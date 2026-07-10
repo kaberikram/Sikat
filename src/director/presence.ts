@@ -10,20 +10,26 @@
  */
 import { create } from 'zustand'
 import { useEditorStore } from '../store'
+import { sampleObjectAtTime } from './scene-state-sync'
 import type { Vec3 } from './protocol'
 
 /** Choreography timings, shared so the runtime's paced apply and the scene's
- *  flight easing agree to the millisecond. */
-export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the target
-export const CURSOR_INTENT_MS = 200 // fast drift during pre-parse acknowledgment
-export const CURSOR_WORK_MS = 120 // hover on target before the change commits
-export const CURSOR_SETTLE_MS = 240 // linger after committing so DONE + check reads
-export const CURSOR_MOTION_FADE_MS = 600 // brief tail after motion work, then gone
-export const CURSOR_FADE_MS = 1200 // brief tail after other work, then gone
-export const CURSOR_GUESS_TIMEOUT_MS = 8000 // clear a silent server request
+ *  flight easing agree to the millisecond. Calm directing sequence: announce →
+ *  travel → note/apply → held check → soft exit. */
+export const CURSOR_ANNOUNCE_MS = 350 // named label + spinner hold before travel
+export const CURSOR_FLIGHT_MS = 750 // visible, natural glide to the target
+export const CURSOR_INTENT_MS = 350 // deliberate identity handoff / initial drift
+export const CURSOR_WORK_MS = 350 // readable action-note / apply beat
+export const CURSOR_SETTLE_MS = 800 // check has time to register
+export const CURSOR_MOTION_FADE_MS = 1100 // post-motion hold before soft fade
+export const CURSOR_FADE_MS = 900 // post-work hold before soft fade
+/** Wait before showing the anonymous pending cursor — skips flash on fast
+ *  chitchat / describe-only replies that never need a stage cursor. */
+export const PENDING_SHOW_DELAY_MS = 400
+export const PENDING_RESPONSE_TIMEOUT_MS = 10_000 // clear a silent server request
 
-export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling'
-export type IdleMode = 'none' | 'linger' | 'faded'
+export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling' | 'done'
+export type IdleMode = 'none' | 'faded'
 
 export interface AgentMeta {
   /** Cursor tint + label background. */
@@ -89,6 +95,20 @@ export function stationFor(agent: string): Vec3 {
   return agentMetaFor(agent).station
 }
 
+/** Where an anonymous pending cursor appears before the server names an agent. */
+export function pendingAnchorPosition(): Vec3 {
+  const st = useEditorStore.getState()
+  if (st.selectedId) {
+    const obj = st.objects.find((o) => o.id === st.selectedId)
+    if (obj) {
+      const sampled = sampleObjectAtTime(obj, st.currentTime)
+      return [sampled.position[0], sampled.position[1], sampled.position[2]]
+    }
+  }
+  const stage = st.stage
+  return [stage.position[0], stage.position[1] + 2.2, stage.position[2]]
+}
+
 export interface AgentPresence {
   agent: string
   /** Cursor should be on stage (announced by the server, held until the
@@ -97,6 +117,8 @@ export interface AgentPresence {
   phase: CursorPhase
   /** Scene point the cursor is addressing. */
   target: Vec3
+  /** One-shot spawn point for pending→named handoff; renderer snaps here then clears. */
+  appearFrom: Vec3 | null
   /** `performance.now()` when `target` last changed — the scene reads this to
    *  start a fresh flight ease from wherever the cursor currently is. */
   moveStartedAt: number
@@ -113,18 +135,29 @@ export interface AgentPresence {
   lastTouchedObjectId: string | null
 }
 
+export interface PendingCursor {
+  position: Vec3
+}
+
 interface PresenceState {
   agents: Record<string, AgentPresence>
+  pending: Record<string, PendingCursor>
   setActive: (agent: string, active: boolean) => void
-  enterLinger: (agent: string, lastTouchedObjectId?: string | null) => void
   fadeOut: (agent: string) => void
   /** Point the cursor at a new target and (re)start its flight clock. The
    *  optional duration lets callers pace a hop (defaults to a full flight). */
   flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
+  /** Snap a newly-appearing agent cursor to a world point (pending handoff). */
+  appearAt: (agent: string, position: Vec3) => void
+  /** Clear the one-shot appearFrom after the renderer has snapped. */
+  clearAppearFrom: (agent: string) => void
   setPhase: (agent: string, phase: CursorPhase) => void
   setNote: (agent: string, note: string | null, confirmed?: boolean) => void
   followObject: (agent: string, objectId: string | null) => void
   touchLastObject: (agent: string, objectId: string | null) => void
+  showPending: (commandId: string, position: Vec3) => void
+  clearPending: (commandId: string) => void
+  pendingPosition: (commandId: string) => Vec3 | null
 }
 
 function seed(agent: string): AgentPresence {
@@ -133,6 +166,7 @@ function seed(agent: string): AgentPresence {
     active: false,
     phase: 'idle',
     target: stationFor(agent),
+    appearFrom: null,
     moveStartedAt: 0,
     moveDurationMs: CURSOR_FLIGHT_MS,
     note: null,
@@ -152,8 +186,9 @@ function patch(
   return { agents: { ...state.agents, [agent]: { ...prev, ...updates } } }
 }
 
-export const presenceStore = create<PresenceState>((set) => ({
+export const presenceStore = create<PresenceState>((set, get) => ({
   agents: {},
+  pending: {},
   setActive: (agent, active) =>
     set((s) =>
       patch(s, agent, {
@@ -163,21 +198,6 @@ export const presenceStore = create<PresenceState>((set) => ({
         noteConfirmed: active ? s.agents[agent]?.noteConfirmed ?? false : false,
       })
     ),
-  enterLinger: (agent, lastTouchedObjectId = null) =>
-    set((s) => {
-      const station = stationFor(agent)
-      return patch(s, agent, {
-        active: true,
-        idleMode: 'linger',
-        phase: 'idle',
-        target: station,
-        moveStartedAt: performance.now(),
-        moveDurationMs: CURSOR_FLIGHT_MS,
-        note: null,
-        followObjectId: null,
-        lastTouchedObjectId,
-      })
-    }),
   fadeOut: (agent) =>
     set((s) =>
       patch(s, agent, {
@@ -185,6 +205,7 @@ export const presenceStore = create<PresenceState>((set) => ({
         idleMode: 'faded',
         phase: 'idle',
         note: null,
+        appearFrom: null,
         followObjectId: null,
         lastTouchedObjectId: null,
       })
@@ -198,6 +219,20 @@ export const presenceStore = create<PresenceState>((set) => ({
         moveDurationMs: durationMs,
       })
     ),
+  appearAt: (agent, position) =>
+    set((s) =>
+      patch(s, agent, {
+        active: true,
+        idleMode: 'none',
+        target: position,
+        appearFrom: position,
+        phase: 'intent',
+        moveStartedAt: performance.now(),
+        moveDurationMs: 0,
+        followObjectId: null,
+      })
+    ),
+  clearAppearFrom: (agent) => set((s) => patch(s, agent, { appearFrom: null })),
   setPhase: (agent, phase) => set((s) => patch(s, agent, { phase })),
   setNote: (agent, note, confirmed = false) =>
     set((s) => {
@@ -211,4 +246,15 @@ export const presenceStore = create<PresenceState>((set) => ({
   followObject: (agent, objectId) => set((s) => patch(s, agent, { followObjectId: objectId })),
   touchLastObject: (agent, objectId) =>
     set((s) => patch(s, agent, { lastTouchedObjectId: objectId })),
+  showPending: (commandId, position) =>
+    set((s) => ({
+      pending: { ...s.pending, [commandId]: { position } },
+    })),
+  clearPending: (commandId) =>
+    set((s) => {
+      if (!(commandId in s.pending)) return s
+      const { [commandId]: _, ...rest } = s.pending
+      return { pending: rest }
+    }),
+  pendingPosition: (commandId) => get().pending[commandId]?.position ?? null,
 }))

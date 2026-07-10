@@ -15,15 +15,27 @@ from .schema import Intent, SceneState
 
 _CLAUSE_SPLIT = re.compile(
     r"\s*(?:;|\.\s+|,?\s+(?:and\s+)?then\s+)\s*"
+    r"|\s*,\s*"
     r"|\s+and\s+(?=(?:make|move|have|let|give|add|spawn|animate|set|rotate|scale|"
     r"spin|bounce|wander|drift|float|orbit|enable|disable|dim|turn|play|pause)\b)",
     re.I,
 )
 
+# "Agent 1, you're on the sphere" — comma is address punctuation, not a clause break.
+_ADDRESS_COMMA = re.compile(
+    r"\b((?:agent|performer|number)\s+(?:one|two|three|four|\d+))\s*,\s*",
+    re.I,
+)
+
+# "add a red box and a blue sphere" → give the second noun phrase its own add verb.
+_CHAINED_SPAWN = re.compile(r"\band\s+(?=a\s+)", re.I)
+
 
 def split_clauses(text: str) -> list[str]:
-    """Split compound director lines on ``then``, ``,``, ``;``, and bare ``and`` before verbs."""
-    return [clause.strip() for clause in _CLAUSE_SPLIT.split(text) if clause.strip()]
+    """Split compound director lines on commas, ``then``, ``;``, and bare ``and`` before verbs."""
+    protected = _ADDRESS_COMMA.sub(r"\1 ", text)
+    chained = _CHAINED_SPAWN.sub(", add ", protected)
+    return [clause.strip() for clause in _CLAUSE_SPLIT.split(chained) if clause.strip()]
 
 
 def parse_one_clause(clause: str, scene: SceneState | None = None) -> Intent | None:

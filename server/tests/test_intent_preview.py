@@ -25,3 +25,15 @@ def test_preview_guess_from_object_name():
 
 def test_preview_none_for_empty():
     assert build_intent_preview("hello there", scene_with("CORE_SPHERE"), "cmd-3") is None
+
+
+def test_preview_animate_the_ball_without_motion():
+    """'animate the ball' has no motion word — grammar misses, but preview must
+    still steer AssetAnimator via ball→sphere slang + animate verb."""
+    scene = scene_with("CORE_SPHERE")
+    preview = build_intent_preview("animate the ball", scene, "cmd-4")
+    assert preview is not None
+    assert preview["agent"] == "AssetAnimator"
+    assert preview["target"] == "CORE_SPHERE"
+    assert preview["action"] == "animate"
+    assert preview["confidence"] == "guess"

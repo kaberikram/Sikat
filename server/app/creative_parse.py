@@ -1,10 +1,11 @@
 """Clause ownership: grammar vs LLM.
 
 **Grammar-owned** (instant, final): spawn, transform, remove, material, lights,
-fx, camera, playback, mood — any clause with a complete deterministic parse.
+fx, camera, playback, mood, complete assign — any clause with a complete
+deterministic parse.
 
 **LLM-owned**: unparsed clauses, clarify, animate, creative language, or
-incomplete grammar reads (describe, assign, partial animate).
+incomplete grammar reads (describe, partial animate).
 """
 from __future__ import annotations
 
@@ -36,8 +37,10 @@ def _grammar_has_complete_intent(intent: Intent) -> bool:
         if intent.addressee and not target:
             return True
         return bool(target and motion)
-    if intent.action in ("describe", "assign"):
+    if intent.action == "describe":
         return False
+    if intent.action == "assign":
+        return bool(intent.addressee and intent.target)
     return True
 
 

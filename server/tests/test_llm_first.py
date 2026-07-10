@@ -206,3 +206,32 @@ async def test_duplicate_llm_spawn_dropped(monkeypatch, scene):
     assert sum(1 for p in packets if p.command == "SPAWN_OBJECT") == 1
     assert "red box, dead center" in logs
     assert any(p.command == "ANIMATE_OBJECT" for p in packets)
+
+
+async def test_showcase_comma_line_emits_spawns_and_animates(monkeypatch, scene):
+    """Comma compound must not collapse to mood-only; motion clauses reach the LLM."""
+    from app import performers, session_context
+
+    performers.clear()
+    session_context.clear()
+
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+        yield Intent(action="animate", target="sphere", motion="bounce", addressee=1)
+        yield Intent(action="animate", target="box", motion="orbit", addressee=2)
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+
+    showcase = (
+        "add a red box and a blue sphere, Agent 1 you're on the sphere, "
+        "Agent 2 you're on the box, Agent 1 bounce high, Agent 2 orbit, "
+        "sunset mood, enable bloom"
+    )
+    _, _, packets, _, _ = await _collect_llm(Producer(), showcase, scene)
+    commands = [p.command for p in packets]
+    assert commands.count("SPAWN_OBJECT") == 2
+    assert commands.count("ANIMATE_OBJECT") == 2
+    assert "UPDATE_LIGHTS" in commands
+    agents = {p.target_agent for p in packets if p.command == "ANIMATE_OBJECT"}
+    assert agents == {"Agent1", "Agent2"}

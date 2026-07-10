@@ -8,6 +8,9 @@
  * a confirmed two-line radio bubble while it applies, and a check mark on
  * settle. Spinner motion is transform-only (sprite rotation), so canvas
  * textures are redrawn only when text changes.
+ *
+ * Anonymous pending cursors (pre-server) are unlabeled gray cones with a
+ * spinner; when the named agent appears it snaps to the pending position.
  */
 import * as THREE from 'three'
 import {
@@ -15,7 +18,6 @@ import {
   CURSOR_AGENT_ORDER,
   agentMetaFor,
   cursorVisible,
-  stationFor,
   type CursorPhase,
 } from '../director/presence'
 import { sampleObjectAtTime } from '../director/scene-state-sync'
@@ -24,14 +26,20 @@ import { getEaseFn } from '../easing'
 import { tagSceneInfrastructure, setEditorLayer } from './infrastructure'
 import { drawBrutalCard, makeCanvasTexture, XR_UI } from './xr/xr-ui-chrome'
 import { getCursorStatusVisibility } from './agent-cursor-status'
+import { dampToward } from './opacity-damp'
 
 const HOVER_HEIGHT = 1.15
-const WANDER_RADIUS = 0.4
-const GLANCE_INTERVAL_MS = 6000
-const GLANCE_DURATION_MS = 1200
 const STATUS_SLOT_Y = 0.46
 const LABEL_Y = 0.82
+const PENDING_COLOR = '#888888'
 const flightEase = getEaseFn('easeOut')
+
+/** Named cursor fade-in time constant (slower than the old 0.22/frame snap). */
+const CURSOR_FADE_IN_TAU_MS = 320
+/** Named cursor soft exit — deliberately longer than entrance. */
+const CURSOR_FADE_OUT_TAU_MS = 720
+/** Pending exits faster so the named replacement can crossfade without a pop. */
+const PENDING_FADE_OUT_TAU_MS = 260
 
 const REDUCE_MOTION =
   typeof window !== 'undefined' &&
@@ -40,18 +48,31 @@ const REDUCE_MOTION =
 
 const SPINNER_SPEED = 0.006 // radians per ms
 
+interface ConeParts {
+  coneMat: THREE.MeshBasicMaterial
+  coneOutlineMat: THREE.MeshBasicMaterial
+}
+
+interface SpinnerParts {
+  spinnerMat: THREE.SpriteMaterial
+  arcTex: THREE.CanvasTexture
+  checkTex: THREE.CanvasTexture
+  spinner: THREE.Sprite
+}
+
 interface Cursor {
   group: THREE.Group
   coneMat: THREE.MeshBasicMaterial
   coneOutlineMat: THREE.MeshBasicMaterial
-  labelMat: THREE.SpriteMaterial
+  labelMat: THREE.SpriteMaterial | null
   base: THREE.Vector3
   from: THREE.Vector3
   moveStartedAt: number
   seed: number
   opacity: number
-  noteMat: THREE.SpriteMaterial
-  noteSprite: THREE.Sprite
+  wasVisible: boolean
+  noteMat: THREE.SpriteMaterial | null
+  noteSprite: THREE.Sprite | null
   noteText: string
   spinnerMat: THREE.SpriteMaterial
   arcTex: THREE.CanvasTexture
@@ -113,6 +134,37 @@ function makeCheckTexture(color: string): THREE.CanvasTexture {
     ctx.lineTo(124, 48)
     ctx.stroke()
   })
+}
+
+function makeCone(color: string): ConeParts & { cone: THREE.Mesh; outline: THREE.Mesh } {
+  const coneOutlineMat = new THREE.MeshBasicMaterial({ color, transparent: true })
+  const outline = new THREE.Mesh(new THREE.ConeGeometry(0.174, 0.49, 24), coneOutlineMat)
+  outline.rotation.x = Math.PI
+  outline.castShadow = false
+  outline.receiveShadow = false
+
+  const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true })
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.46, 24), coneMat)
+  cone.rotation.x = Math.PI
+  cone.castShadow = false
+  cone.receiveShadow = false
+
+  return { coneMat, coneOutlineMat, cone, outline }
+}
+
+function makeSpinner(color: string): SpinnerParts {
+  const arcTex = makeArcTexture(color)
+  const checkTex = makeCheckTexture(color)
+  const spinnerMat = new THREE.SpriteMaterial({
+    map: arcTex,
+    transparent: true,
+    depthTest: false,
+    opacity: 0,
+  })
+  const spinner = new THREE.Sprite(spinnerMat)
+  spinner.scale.set(0.3, 0.3, 1)
+  spinner.position.set(0, STATUS_SLOT_Y, 0)
+  return { spinnerMat, arcTex, checkTex, spinner }
 }
 
 function makeNote(): {
@@ -177,6 +229,7 @@ function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxW: number)
 }
 
 function drawNote(cursor: Cursor, text: string): void {
+  if (!cursor.noteMat || !cursor.noteSprite) return
   if (cursor.noteText === text) return
   cursor.noteText = text
   cursor.noteMat.map?.dispose()
@@ -217,18 +270,8 @@ function buildCursor(agent: string, seed: number): Cursor {
   const { color, station } = agentMetaFor(agent)
   const group = new THREE.Group()
 
-  const coneOutlineMat = new THREE.MeshBasicMaterial({ color: XR_UI.ink, transparent: true })
-  const coneOutline = new THREE.Mesh(new THREE.ConeGeometry(0.174, 0.49, 24), coneOutlineMat)
-  coneOutline.rotation.x = Math.PI
-  coneOutline.castShadow = false
-  coneOutline.receiveShadow = false
-  group.add(coneOutline)
-
-  const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true })
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.46, 24), coneMat)
-  cone.rotation.x = Math.PI
-  cone.castShadow = false
-  cone.receiveShadow = false
+  const { coneMat, coneOutlineMat, cone, outline } = makeCone(color)
+  group.add(outline)
   group.add(cone)
 
   const { sprite, material: labelMat } = makeLabel(agent, color)
@@ -238,18 +281,7 @@ function buildCursor(agent: string, seed: number): Cursor {
   const { sprite: noteSprite, material: noteMat } = makeNote()
   group.add(noteSprite)
 
-  const arcTex = makeArcTexture(color)
-  const checkTex = makeCheckTexture(color)
-  const spinnerMat = new THREE.SpriteMaterial({
-    map: arcTex,
-    transparent: true,
-    depthTest: false,
-    opacity: 0,
-  })
-  const spinner = new THREE.Sprite(spinnerMat)
-  spinner.scale.set(0.3, 0.3, 1)
-  // The loading affordance occupies the exact note-bubble slot.
-  spinner.position.set(0, STATUS_SLOT_Y, 0)
+  const { spinnerMat, arcTex, checkTex, spinner } = makeSpinner(color)
   group.add(spinner)
 
   group.renderOrder = 999
@@ -267,6 +299,7 @@ function buildCursor(agent: string, seed: number): Cursor {
     moveStartedAt: 0,
     seed,
     opacity: 0,
+    wasVisible: false,
     noteMat,
     noteSprite,
     noteText: '',
@@ -277,6 +310,84 @@ function buildCursor(agent: string, seed: number): Cursor {
   }
 }
 
+function buildPendingCursor(seed: number): Cursor {
+  const group = new THREE.Group()
+  const { coneMat, coneOutlineMat, cone, outline } = makeCone(PENDING_COLOR)
+  group.add(outline)
+  group.add(cone)
+
+  const { spinnerMat, arcTex, checkTex, spinner } = makeSpinner(PENDING_COLOR)
+  group.add(spinner)
+
+  group.renderOrder = 999
+  setEditorLayer(group)
+  tagSceneInfrastructure(group)
+  group.visible = false
+
+  return {
+    group,
+    coneMat,
+    coneOutlineMat,
+    labelMat: null,
+    base: new THREE.Vector3(0, 0, 0),
+    from: new THREE.Vector3(0, 0, 0),
+    moveStartedAt: 0,
+    seed,
+    opacity: 0,
+    wasVisible: false,
+    noteMat: null,
+    noteSprite: null,
+    noteText: '',
+    spinnerMat,
+    arcTex,
+    checkTex,
+    spinnerPhase: undefined,
+  }
+}
+
+function disposeCursorGroup(scene: THREE.Scene, cursor: Cursor): void {
+  scene.remove(cursor.group)
+  cursor.group.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      o.geometry.dispose()
+      ;(o.material as THREE.Material).dispose()
+    } else if (o instanceof THREE.Sprite) {
+      o.material.map?.dispose()
+      o.material.dispose()
+    }
+  })
+}
+
+function updateStatusChrome(
+  cursor: Cursor,
+  now: number,
+  opts: { showCheck: boolean; showNote: boolean; showSpinner: boolean; note: string }
+): void {
+  drawNote(cursor, opts.note)
+  if (cursor.noteMat) cursor.noteMat.opacity = opts.showNote ? cursor.opacity : 0
+
+  if (opts.showCheck && cursor.opacity > 0.02) {
+    if (cursor.spinnerPhase !== 'settling') {
+      cursor.spinnerMat.map = cursor.checkTex
+      cursor.spinnerMat.rotation = 0
+      cursor.spinnerMat.needsUpdate = true
+      cursor.spinnerPhase = 'settling'
+    }
+    cursor.spinnerMat.opacity = cursor.opacity
+  } else if (opts.showSpinner && cursor.opacity > 0.02) {
+    if (cursor.spinnerPhase !== 'active') {
+      cursor.spinnerMat.map = cursor.arcTex
+      cursor.spinnerMat.needsUpdate = true
+      cursor.spinnerPhase = 'active'
+    }
+    if (!REDUCE_MOTION) cursor.spinnerMat.rotation = (now * SPINNER_SPEED) % (Math.PI * 2)
+    cursor.spinnerMat.opacity = cursor.opacity
+  } else {
+    cursor.spinnerMat.opacity = 0
+    cursor.spinnerPhase = undefined
+  }
+}
+
 export interface AgentCursors {
   update(now: number): void
   dispose(): void
@@ -284,7 +395,9 @@ export interface AgentCursors {
 
 export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const cursors = new Map<string, Cursor>()
+  const pendingCursors = new Map<string, Cursor>()
   let cursorSeed = 0
+  let lastNow = 0
 
   function ensureCursor(agent: string): Cursor {
     let cursor = cursors.get(agent)
@@ -295,29 +408,103 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     return cursor
   }
 
+  function ensurePending(commandId: string): Cursor {
+    let cursor = pendingCursors.get(commandId)
+    if (cursor) return cursor
+    cursor = buildPendingCursor(cursorSeed++)
+    pendingCursors.set(commandId, cursor)
+    scene.add(cursor.group)
+    return cursor
+  }
+
   CURSOR_AGENT_ORDER.forEach((agent) => {
     ensureCursor(agent)
   })
 
   const update = (now: number) => {
-    const agents = presenceStore.getState().agents
+    const state = presenceStore.getState()
+    const agents = state.agents
+    const pending = state.pending
     const editor = useEditorStore.getState()
+    const dtMs = lastNow > 0 ? Math.min(50, Math.max(0, now - lastNow)) : 1000 / 60
+    lastNow = now
+
     for (const agent of Object.keys(agents)) {
       if (cursorVisible(agent)) ensureCursor(agent)
     }
-    for (const [agent, cursor] of cursors) {
-      if (!cursorVisible(agent)) continue
-      const p = agents[agent]
-      const isLinger = p?.idleMode === 'linger'
-      const isVisible = p?.active && p.idleMode !== 'faded'
-      const wantOpacity = isVisible ? 1 : 0
-      cursor.opacity += (wantOpacity - cursor.opacity) * (isLinger ? 0.08 : 0.16)
 
-      if (wantOpacity === 0 && cursor.opacity < 0.01) {
+    for (const commandId of Object.keys(pending)) {
+      ensurePending(commandId)
+    }
+
+    for (const [commandId, cursor] of pendingCursors) {
+      const entry = pending[commandId]
+      const wantOpacity = entry ? 1 : 0
+      const tauMs = wantOpacity > cursor.opacity ? CURSOR_FADE_IN_TAU_MS : PENDING_FADE_OUT_TAU_MS
+      cursor.opacity = dampToward(cursor.opacity, wantOpacity, dtMs, tauMs)
+
+      if (!entry && cursor.opacity < 0.01) {
+        disposeCursorGroup(scene, cursor)
+        pendingCursors.delete(commandId)
+        continue
+      }
+      if (cursor.opacity < 0.01) {
         cursor.group.visible = false
         continue
       }
       cursor.group.visible = true
+      if (entry) {
+        if (!cursor.wasVisible) {
+          cursor.base.set(entry.position[0], entry.position[1], entry.position[2])
+          cursor.from.copy(cursor.base)
+          cursor.wasVisible = true
+        } else {
+          cursor.base.set(entry.position[0], entry.position[1], entry.position[2])
+        }
+      }
+      const bob = REDUCE_MOTION ? 0 : Math.sin(now / 320 + cursor.seed) * 0.05
+      cursor.group.position.set(
+        cursor.base.x,
+        cursor.base.y + HOVER_HEIGHT + bob,
+        cursor.base.z
+      )
+      cursor.group.scale.setScalar(1)
+      cursor.coneMat.opacity = cursor.opacity
+      cursor.coneOutlineMat.opacity = cursor.opacity
+      updateStatusChrome(cursor, now, {
+        showCheck: false,
+        showNote: false,
+        showSpinner: true,
+        note: '',
+      })
+    }
+
+    for (const [agent, cursor] of cursors) {
+      if (!cursorVisible(agent)) continue
+      const p = agents[agent]
+      const isVisible = Boolean(p?.active && p.idleMode !== 'faded')
+      const wantOpacity = isVisible ? 1 : 0
+      const tauMs = wantOpacity > cursor.opacity ? CURSOR_FADE_IN_TAU_MS : CURSOR_FADE_OUT_TAU_MS
+      cursor.opacity = dampToward(cursor.opacity, wantOpacity, dtMs, tauMs)
+
+      if (wantOpacity === 0 && cursor.opacity < 0.01) {
+        cursor.group.visible = false
+        cursor.wasVisible = false
+        continue
+      }
+      cursor.group.visible = true
+
+      // Snap from/base when a cursor goes invisible → visible (appearAt handoff).
+      if (isVisible && !cursor.wasVisible && p) {
+        const start = p.appearFrom ?? p.target
+        cursor.base.set(start[0], start[1], start[2])
+        cursor.from.copy(cursor.base)
+        cursor.moveStartedAt = p.moveStartedAt
+        cursor.wasVisible = true
+        if (p.appearFrom) presenceStore.getState().clearAppearFrom(agent)
+      } else if (!isVisible) {
+        cursor.wasVisible = false
+      }
 
       if (p?.followObjectId) {
         const obj = editor.objects.find((o) => o.id === p.followObjectId)
@@ -325,27 +512,6 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
           const sampled = sampleObjectAtTime(obj, editor.currentTime)
           cursor.base.set(sampled.position[0], sampled.position[1], sampled.position[2])
         }
-      } else if (isLinger) {
-        const station = stationFor(agent)
-        const wanderAngle = now / 4000 + cursor.seed * 2
-        const wx = station[0] + Math.cos(wanderAngle) * WANDER_RADIUS
-        const wz = station[2] + Math.sin(wanderAngle) * WANDER_RADIUS
-        let tx = wx
-        let ty = station[1]
-        let tz = wz
-        const glancePhase = (now + cursor.seed * 1000) % GLANCE_INTERVAL_MS
-        if (p.lastTouchedObjectId && glancePhase < GLANCE_DURATION_MS) {
-          const obj = editor.objects.find((o) => o.id === p.lastTouchedObjectId)
-          if (obj) {
-            const sampled = sampleObjectAtTime(obj, editor.currentTime)
-            const alpha = glancePhase / GLANCE_DURATION_MS
-            const ease = flightEase(alpha)
-            tx = wx + (sampled.position[0] - wx) * ease * 0.55
-            ty = station[1] + (sampled.position[1] - station[1]) * ease * 0.35
-            tz = wz + (sampled.position[2] - wz) * ease * 0.55
-          }
-        }
-        cursor.base.set(tx, ty, tz)
       } else if (p) {
         if (p.moveStartedAt !== cursor.moveStartedAt) {
           cursor.from.copy(cursor.base)
@@ -354,7 +520,8 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
         const durationMs = p.moveDurationMs > 0 ? p.moveDurationMs : 1
         const elapsed = p.moveStartedAt > 0 ? now - p.moveStartedAt : durationMs
         const ease = p.phase === 'intent' ? getEaseFn('easeOut') : flightEase
-        const alpha = ease(Math.min(1, Math.max(0, elapsed / durationMs)))
+        const alpha =
+          p.moveDurationMs <= 0 ? 1 : ease(Math.min(1, Math.max(0, elapsed / durationMs)))
         cursor.base.set(
           cursor.from.x + (p.target[0] - cursor.from.x) * alpha,
           cursor.from.y + (p.target[1] - cursor.from.y) * alpha,
@@ -368,14 +535,12 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
         cursor.base.y + HOVER_HEIGHT + bob,
         cursor.base.z
       )
-      // Stable scale — opacity handles appear/disappear so fade-in no longer
-      // reads as a loading pulse.
       cursor.group.scale.setScalar(1)
       cursor.coneMat.opacity = cursor.opacity
       cursor.coneOutlineMat.opacity = cursor.opacity
-      cursor.labelMat.opacity = cursor.opacity
+      if (cursor.labelMat) cursor.labelMat.opacity = cursor.opacity
 
-      const phase = p?.phase
+      const phase = p?.phase as CursorPhase | undefined
       const hasConfirmedNote = Boolean(p?.note && p.noteConfirmed)
       const { showCheck, showNote, showSpinner } = getCursorStatusVisibility({
         active: Boolean(p?.active),
@@ -383,48 +548,20 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
         hasConfirmedNote,
       })
       const confirmedNote = hasConfirmedNote ? p?.note ?? '' : ''
-      drawNote(cursor, confirmedNote)
-      cursor.noteMat.opacity = showNote ? cursor.opacity : 0
-
-      // The states are mutually exclusive and share one anchor:
-      // intent → spinner, flying/working → feedback note, settling → check.
-      if (showCheck && cursor.opacity > 0.02) {
-        if (cursor.spinnerPhase !== 'settling') {
-          cursor.spinnerMat.map = cursor.checkTex
-          cursor.spinnerMat.rotation = 0
-          cursor.spinnerMat.needsUpdate = true
-          cursor.spinnerPhase = 'settling'
-        }
-        cursor.spinnerMat.opacity = cursor.opacity
-      } else if (showSpinner && cursor.opacity > 0.02) {
-        if (cursor.spinnerPhase !== 'active') {
-          cursor.spinnerMat.map = cursor.arcTex
-          cursor.spinnerMat.needsUpdate = true
-          cursor.spinnerPhase = 'active'
-        }
-        if (!REDUCE_MOTION) cursor.spinnerMat.rotation = (now * SPINNER_SPEED) % (Math.PI * 2)
-        cursor.spinnerMat.opacity = cursor.opacity
-      } else {
-        cursor.spinnerMat.opacity = 0
-        cursor.spinnerPhase = undefined
-      }
+      updateStatusChrome(cursor, now, {
+        showCheck,
+        showNote,
+        showSpinner,
+        note: confirmedNote,
+      })
     }
   }
 
   const dispose = () => {
-    for (const cursor of cursors.values()) {
-      scene.remove(cursor.group)
-      cursor.group.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry.dispose()
-          ;(o.material as THREE.Material).dispose()
-        } else if (o instanceof THREE.Sprite) {
-          o.material.map?.dispose()
-          o.material.dispose()
-        }
-      })
-    }
+    for (const cursor of cursors.values()) disposeCursorGroup(scene, cursor)
     cursors.clear()
+    for (const cursor of pendingCursors.values()) disposeCursorGroup(scene, cursor)
+    pendingCursors.clear()
   }
 
   return { update, dispose }

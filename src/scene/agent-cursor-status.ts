@@ -17,7 +17,9 @@ export function getCursorStatusVisibility({
   phase,
   hasConfirmedNote,
 }: CursorStatusInput): CursorStatusVisibility {
-  const showCheck = phase === 'settling'
+  const showCheck = phase === 'settling' || phase === 'done'
+  // Intent = still thinking — keep the spinner even when a preview note exists.
+  // Note appears once the cursor is flying / working.
   const isThinking = phase === 'intent'
   const showNote = hasConfirmedNote && !isThinking && !showCheck
   const showSpinner = active && !showCheck && !showNote

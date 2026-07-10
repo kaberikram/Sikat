@@ -146,13 +146,17 @@ export function createCamcorderRig(
       directorSlate.setLastSent('mic unavailable')
       return
     }
-    if (isVoiceListening()) return
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
     startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
       onFinal: (transcript) => {
-        void submitDirectorCommand(transcript).then((result) => {
+        const commandId = crypto.randomUUID()
+        void submitDirectorCommand(transcript, {
+          forceVision: true,
+          commandId,
+          onNoResponse: () => directorSlate.setLastSent('no response'),
+        }).then((result) => {
           const line = transcript.trim()
           if (result.offline) {
             directorSlate.setOffline(true)

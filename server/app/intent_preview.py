@@ -9,6 +9,10 @@ from .fallback_parser import parse_one_clause, split_clauses
 from .schema import Intent, SceneState
 
 _AGENT_RE = re.compile(r"\bagent\s*([1-4])\b", re.I)
+_ANIMATE_RE = re.compile(
+    r"\b(animate|animating|animation|bounce|bounc(?:e|ing)|float|orbit|spin|wander)\b",
+    re.I,
+)
 _MOTION_WORDS = (
     "arc", "bounce", "float", "drop", "spin", "orbit", "wander", "pulse",
     "sway", "drift", "figure8", "zigzag", "spiral", "launch", "swing", "shake",
@@ -30,7 +34,31 @@ def _agent_for_intent(intent: Intent | None, text: str) -> str:
             "set_scene": "Producer",
         }
         return action_agents.get(intent.action, "AssetAnimator")
+    # No grammar hit yet — still steer the likely specialist from verbs.
+    if _ANIMATE_RE.search(text):
+        return "AssetAnimator"
+    if re.search(r"\b(light|lights|dim|key|fill|rim)\b", text, re.I):
+        return "LightingTech"
+    if re.search(r"\b(bloom|glitch|fx|pixelate|dither)\b", text, re.I):
+        return "VFXOperator"
     return "Producer"
+
+
+def _colloquial_target(text: str, scene: SceneState) -> str | None:
+    """Map director slang (ball → sphere) the same way clause_handlers does."""
+    words = set(re.findall(r"[a-z]+", text.lower()))
+    if "ball" in words or "balls" in words:
+        for obj in scene.objects:
+            name_lower = obj.name.lower()
+            if "sphere" in name_lower or "ball" in name_lower or "orb" in name_lower:
+                return obj.name
+    for word, primitive in (("box", "box"), ("cube", "box"), ("cone", "cone"), ("cylinder", "cylinder")):
+        if word not in words:
+            continue
+        for obj in scene.objects:
+            if primitive in obj.name.lower():
+                return obj.name
+    return None
 
 
 def _target_for_intent(intent: Intent | None, text: str, scene: SceneState | None) -> str | None:
@@ -50,6 +78,9 @@ def _target_for_intent(intent: Intent | None, text: str, scene: SceneState | Non
                     best = (obj.name, len(name))
         if best:
             return best[0]
+        colloquial = _colloquial_target(text, scene)
+        if colloquial:
+            return colloquial
     return None
 
 
@@ -81,6 +112,8 @@ def _preview_note(
         return "on the comp"
     if action == "playback":
         return "on transport"
+    if action == "animate" or agent == "AssetAnimator":
+        return "animating"
     if agent.startswith("Agent"):
         return f"{agent.lower()} on it"
     return "on it"
@@ -100,6 +133,8 @@ def build_intent_preview(
     target = _target_for_intent(intent, text, scene)
     motion = _motion_hint(intent, text)
     action = intent.action if intent else None
+    if action is None and _ANIMATE_RE.search(text):
+        action = "animate"
 
     if not target and not motion and not action and not _AGENT_RE.search(text):
         return None

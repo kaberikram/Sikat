@@ -9,13 +9,16 @@ import {
   cancelCommand,
   markAgentActive,
   markAgentIdle,
-  applyClientIntentGuess,
+  markAgentWaiting,
+  releaseWaitingAgents,
   applyIntentPreview,
   reactToSuggestion,
+  releaseCommandPresence,
   setRuntimeLogger,
 } from './agent-runtime'
 import { submitDirectorCommand } from './director-command'
 import { markFirstPacket, formatLatencySummary } from './latency'
+import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
 import {
   isSpeechAvailable,
@@ -147,6 +150,7 @@ export function DirectorPod() {
     })
     const offCancel = socket.onCancel((msg) => {
       cancelCommand(msg)
+      releaseCommandPresence(msg.commandId)
       completeCommand(msg.commandId)
       pushLog('SYSTEM', `cancelled ${msg.commandId}${msg.reason ? ` (${msg.reason})` : ''}`, 'info')
     })
@@ -173,9 +177,25 @@ export function DirectorPod() {
         if (msg.agent !== 'Producer') markAgentActive(msg.agent, msg.note)
         else if (msg.note) pushLog('PRODUCER', msg.note)
       } else if (msg.agent !== 'Producer') {
-        markAgentIdle(msg.agent)
+        // Mid-command idle = this specialist finished a grammar batch; LLM may
+        // still be directing. Only retain a spinner before local choreography
+        // starts; packet queues own their own flying → done → fade lifecycle.
+        const stillOpen = pendingCommandIdsRef.current.size > 0
+        const p = presenceStore.getState().agents[msg.agent]
+        const phase = p?.phase
+        const hasStartedChoreography =
+          phase === 'flying' || phase === 'working' || phase === 'settling' || phase === 'done'
+        const alreadyOff = !p?.active || p.idleMode === 'faded' || phase === 'idle'
+        if (stillOpen && !hasStartedChoreography && !alreadyOff) markAgentWaiting(msg.agent)
+        else markAgentIdle(msg.agent)
       } else if (msg.forCommandId) {
+        // Producer idle is the authoritative command-complete signal. Release
+        // the preview-named agent too; markAgentIdle defers the fade if its
+        // local packet queue is still settling.
+        releaseCommandPresence(msg.forCommandId)
         completeCommand(msg.forCommandId)
+        // Drop any other specialist left thinking by the same hybrid command.
+        releaseWaitingAgents()
       }
     })
     const offLog = socket.onLog((msg) => {
@@ -183,7 +203,10 @@ export function DirectorPod() {
       pushLog(msg.agent, msg.message, msg.level)
     })
     const offError = socket.onError((msg) => {
-      if (msg.forCommandId) completeCommand(msg.forCommandId)
+      if (msg.forCommandId) {
+        releaseCommandPresence(msg.forCommandId)
+        completeCommand(msg.forCommandId)
+      }
       pushLog('SERVER', msg.message, 'error')
     })
     startSceneStateSync(socket)
@@ -276,9 +299,6 @@ export function DirectorPod() {
     onListeningChange: setListening,
     onFinal: (transcript: string, opts: { forceVision: boolean }) => {
       void submit(transcript, { forceVision: opts.forceVision })
-    },
-    onInterimGuess: (text: string) => {
-      applyClientIntentGuess(text)
     },
   }), [submit])
 

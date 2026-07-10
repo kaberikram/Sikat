@@ -56,3 +56,11 @@ async def test_direct_no_actionable_command_streams_nothing(producer, scene):
     assert describe_only is False
     assert packets == []
     assert statuses == []
+
+
+def test_agent_staging_timings_are_calm():
+    """Specialists fan out and multi-packet work stays readable on stage."""
+    from app.agents.producer import AGENT_STAGGER, AGENT_STEP_DELAY
+
+    assert AGENT_STAGGER >= 0.3
+    assert AGENT_STEP_DELAY >= 0.35
