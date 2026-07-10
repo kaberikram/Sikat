@@ -13,6 +13,7 @@ from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
+from ..shine_presets import shine_packets
 from ..motion_variation import enrich_motion_params
 from ..heuristics import Observation
 from ..verify import check_apply, verify_enabled
@@ -164,7 +165,9 @@ class Producer:
             for action in specialist.actions
         }
 
-    def _build_own(self, intent: Intent) -> list[CommandPacket]:
+    def _build_own(
+        self, intent: Intent, scene: SceneState | None = None
+    ) -> list[CommandPacket]:
         if intent.action == "playback" and intent.playback_action:
             packets = [
                 PlaybackPacket(
@@ -176,6 +179,8 @@ class Producer:
             if intent.playback_pause_after_seek:
                 packets.append(PlaybackPacket(payload=PlaybackPayload(action="pause")))
             return packets
+        if intent.action == "set_scene" and intent.mood == "shine":
+            return shine_packets(scene)
         if intent.action == "set_scene" and intent.mood:
             packets = mood_packets(intent.mood)
             if not packets:
@@ -215,7 +220,7 @@ class Producer:
             return []
 
         if intent.action in ("playback", "set_scene"):
-            built = self._build_own(intent)
+            built = self._build_own(intent, scene)
             if intent.action == "set_scene" and intent.mood and not built:
                 await emit(self.name, f"unknown mood '{intent.mood}'", "warn")
             elif intent.action == "set_scene" and built:
