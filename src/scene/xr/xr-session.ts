@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
 import { EDITOR_LAYER } from '../infrastructure'
-import { registerXrSessionEntry } from './xr-bridge'
+import { registerXrSessionEntry, registerXrSessionExit } from './xr-bridge'
 import type { CamcorderRig } from './camcorder-rig'
 import { forceLegacyXrLayerIfNeeded } from './xr-compat'
 
@@ -79,10 +79,21 @@ export function initXrSession(
     })
   }
 
+  async function exit(): Promise<void> {
+    if (!activeSession) return
+    try {
+      await activeSession.end()
+    } catch {
+      // already ended
+    }
+  }
+
   registerXrSessionEntry(enter)
+  registerXrSessionExit(exit)
 
   return () => {
     registerXrSessionEntry(null)
+    registerXrSessionExit(null)
     activeSession?.end().catch(() => {})
   }
 }

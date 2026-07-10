@@ -37,6 +37,8 @@ interface ViewfinderTargetContext {
   delta: number
   t: number
   isObjectGizmoActive: (obj: MotionObject) => boolean
+  /** Studio clear — never passthrough / null scene.background. */
+  clearColor?: string | THREE.Color
 }
 
 const scratchRenderSize = new THREE.Vector2()
@@ -68,6 +70,7 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
     delta,
     t,
     isObjectGizmoActive,
+    clearColor,
   } = ctx
 
   if (width <= 0 || height <= 0) return
@@ -91,14 +94,19 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   const prevClearColor = new THREE.Color()
   renderer.getClearColor(prevClearColor)
   const prevClearAlpha = renderer.getClearAlpha()
+  const prevBg = scene.background
   const studioBg =
-    scene.background instanceof THREE.Color ? scene.background : new THREE.Color('#f2f2f2')
+    clearColor instanceof THREE.Color
+      ? clearColor
+      : new THREE.Color(clearColor ?? '#f2f2f2')
 
   // Three.js swaps to the XR headset camera on every render while presenting —
   // bypass so the viewfinder RT uses virtCamera (controller-tracked).
   const xrWasEnabled = renderer.xr.enabled
   renderer.xr.enabled = false
 
+  // Force opaque studio bg for the film pass (headset may have set background null).
+  scene.background = studioBg
   renderer.setRenderTarget(target)
   renderer.setClearColor(studioBg, 1)
   renderer.clear()
@@ -106,6 +114,7 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   renderViewfinderFrame(stack, renderer, scene, virtCamera, viewfinder, delta, scratchRenderSize)
   renderer.setRenderTarget(prevTarget)
   renderer.setClearColor(prevClearColor, prevClearAlpha)
+  scene.background = prevBg
   renderer.xr.enabled = xrWasEnabled
 
   virtCamera.aspect = prevAspect

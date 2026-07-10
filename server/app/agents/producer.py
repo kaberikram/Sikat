@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from .. import active_commands, fallback_parser, llm, performers, session_context
+from ..converse import converse_intent, radio_reply
 from ..creative_parse import defer_clause_to_llm, is_open_direction
 from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
@@ -804,6 +805,10 @@ class Producer:
                     )
                 )
 
+        pure_defer = any_llm_owned and not grammar_handled_indices
+        if pure_defer:
+            await emit_status(self.name, "active", command_id, "hearing you")
+
         if any_llm_owned:
             llm_agen = llm.stream_intents(
                 text, scene, frame, on_partial=on_llm_partial, hints=hints or None
@@ -852,8 +857,9 @@ class Producer:
 
             if raw_intent.action == "describe":
                 all_intents.append(raw_intent)
-                if not llm_available:
-                    await self._emit_describe(raw_intent, emit_log)
+                # Grammar-owned describe (incl. open-speech converse) always logs.
+                # LLM-owned describe is deferred above and emitted from the stream.
+                await self._emit_describe(raw_intent, emit_log)
                 continue
 
             if raw_intent.action == "suggest":
@@ -964,6 +970,13 @@ class Producer:
                 all_packets.extend(rescued)
                 if describe_only and not rescued:
                     return [], True
+                if rescued:
+                    return all_packets, False
+
+            # Soft miss: radio reply instead of hard "couldn't interpret"
+            reply = converse_intent(text)
+            await emit_log(self.name, reply.describe_message or radio_reply(text), "info")
+            return [], True
 
         return all_packets, False
 

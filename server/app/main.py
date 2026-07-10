@@ -158,12 +158,11 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             emit_suggest=emit_suggest,
         )
         if not packets and not describe_only:
+            # Soft miss: crew redirect, not a hard error (open speech / miss).
+            from .converse import radio_reply
+
             await manager.broadcast(
-                error_message(
-                    f"couldn't interpret {msg.text!r} — name an object in the scene "
-                    f"(e.g. 'squash the sphere') or check the server log",
-                    msg.commandId,
-                )
+                agent_log_message("Producer", radio_reply(msg.text), "info", msg.commandId)
             )
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)

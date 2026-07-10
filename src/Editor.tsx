@@ -6,7 +6,7 @@ import { TimelineOverlay } from './ui/timeline-overlay'
 import { ObjectsOverlay } from './ui/objects-overlay'
 import { ExportOverlay } from './ui/export-overlay'
 import { useMountEffect } from './hooks/useMountEffect'
-import { probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
+import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
 
 export const Editor: React.FC = () => {
   const [pipMountEl, setPipMountEl] = useState<HTMLDivElement | null>(null)
@@ -27,6 +27,14 @@ export const Editor: React.FC = () => {
     }
   }
 
+  async function handleExitXr(): Promise<void> {
+    try {
+      await endXrSession()
+    } catch (err) {
+      console.error('XR exit failed', err)
+    }
+  }
+
   return (
     <div className="director-shell bg-[var(--bg-color)]">
       <main className="viewport relative overflow-hidden viewport-bg">
@@ -41,6 +49,16 @@ export const Editor: React.FC = () => {
             className="absolute top-3 left-3 z-30 border-4 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold brutalist-shadow hover:bg-[var(--accent-color)]"
           >
             ENTER XR
+          </button>
+        )}
+
+        {xrActive && (
+          <button
+            type="button"
+            onClick={() => void handleExitXr()}
+            className="absolute top-3 left-3 z-30 border-4 border-black bg-[var(--accent-color)] px-3 py-1.5 font-mono text-xs font-bold brutalist-shadow hover:bg-white"
+          >
+            EXIT XR
           </button>
         )}
 

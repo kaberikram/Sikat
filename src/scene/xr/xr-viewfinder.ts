@@ -18,6 +18,7 @@ export interface XrViewfinder {
     delta: number
     t: number
     isObjectGizmoActive: (obj: MotionObject) => boolean
+    clearColor?: string | THREE.Color
   }) => void
   dispose: () => void
 }
@@ -42,6 +43,7 @@ export function createXrViewfinder(viewfinder: ViewfinderComposer): XrViewfinder
     delta: number
     t: number
     isObjectGizmoActive: (obj: MotionObject) => boolean
+    clearColor?: string | THREE.Color
   }): void {
     const { screenMesh, width, height } = ctx
     if (width <= 0 || height <= 0) return

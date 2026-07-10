@@ -49,9 +49,17 @@ async def test_fx_clamped_via_schema(producer, scene):
 
 
 async def test_unparseable_yields_no_packets(producer, scene):
+    """Legacy handle_user_command path — joke still empty (no soft-miss there)."""
     packets, describe_only = await producer.handle_user_command("tell me a joke", scene)
     assert packets == []
     assert describe_only is False
+
+
+async def test_direct_unparseable_soft_miss(producer, scene):
+    """Live direct() path soft-misses open/unparsed speech instead of hard error."""
+    packets, describe_only = await producer.direct("tell me a joke", scene)
+    assert packets == []
+    assert describe_only is True
 
 
 async def test_emit_log_called(producer, scene):

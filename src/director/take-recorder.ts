@@ -55,7 +55,9 @@ export function startTakeRecorder(): () => void {
     const falling = !st.isRolling && prev.isRolling
 
     if (rising) {
-      snapshotAt(st.takeStartTime)
+      // Advance sample cursor BEFORE setState — zustand notifies this
+      // subscriber synchronously inside addCameraKeyframe; a stale
+      // lastSampleTime (-Infinity) re-enters and blows the call stack.
       const vc = st.virtualCamera
       state.lastPos = [...vc.position]
       state.lastRot = [...vc.rotation]
@@ -63,12 +65,13 @@ export function startTakeRecorder(): () => void {
       state.lastSampleTime = st.takeStartTime
       state.staticSince = null
       state.wasRolling = true
+      snapshotAt(st.takeStartTime)
       return
     }
 
     if (falling && state.wasRolling) {
-      snapshotAt(st.currentTime)
       state.wasRolling = false
+      snapshotAt(st.currentTime)
       return
     }
 
@@ -86,16 +89,19 @@ export function startTakeRecorder(): () => void {
     }
 
     if (state.staticSince != null && t - state.staticSince > STATIC_GAP) {
-      snapshotAt(state.staticSince)
+      const holdT = state.staticSince
+      state.staticSince = null
+      snapshotAt(holdT)
+    } else {
+      state.staticSince = null
     }
-    state.staticSince = null
 
     if (t - state.lastSampleTime >= SAMPLE_INTERVAL) {
-      snapshotAt(t)
       state.lastSampleTime = t
       state.lastPos = [...pos]
       state.lastRot = [...rot]
       state.lastFov = fov
+      snapshotAt(t)
     }
   })
 }

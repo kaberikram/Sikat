@@ -5,8 +5,18 @@ import {
   type XRInputManager as XRInputManagerType,
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
+import { submitDirectorCommand } from '../../director/director-command'
+import { getDirectorSocket } from '../../director/socket'
+import {
+  isSpeechAvailable,
+  isVoiceListening,
+  startVoiceSession,
+  stopVoiceSession,
+} from '../../director/voice-session'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import { createDirectorSlate } from './director-slate'
+import { makeBadgeTexture } from './xr-ui-chrome'
 
 /**
  * WebXR grip −Z is camera-forward (same as Three.js).
@@ -27,6 +37,10 @@ export interface CamcorderRig {
   xrInput: XRInputManagerType
   update: (delta: number, timeSec: number, xrManager: THREE.WebXRManager) => void
   bindSession: (session: XRSession) => void
+  setTakeEndedHandler: (
+    fn: ((takeStart: number, takeEnd: number, head: THREE.Object3D) => void) | null
+  ) => void
+  setSuppressRec: (fn: (() => boolean) | null) => void
   dispose: () => void
 }
 
@@ -62,6 +76,8 @@ export function createCamcorderRig(
   screenMesh.rotation.set(-0.436, 0, 0) // −25° tip toward the eyes
   screenMesh.renderOrder = 10
   group.add(screenMesh)
+
+  const directorSlate = createDirectorSlate(screenMesh)
 
   // Debug aim ray — matches virt cam forward (grip −Z pitched AIM_UP_DEG up).
   const aimRay = new THREE.Mesh(
@@ -100,6 +116,10 @@ export function createCamcorderRig(
 
   let takeLabel: THREE.Mesh | null = null
   let lastTakeNumber = 0
+  let onTakeEnded:
+    | ((takeStart: number, takeEnd: number, head: THREE.Object3D) => void)
+    | null = null
+  let suppressRec: (() => boolean) | null = null
 
   const lensOffset = new THREE.Vector3(0, 0.01, -LENS_FORWARD_M)
   const worldPos = new THREE.Vector3()
@@ -109,9 +129,47 @@ export function createCamcorderRig(
   const aimQuat = new THREE.Quaternion()
 
   function toggleRecord(): void {
-    const { isRolling, startTake, endTake } = useEditorStore.getState()
-    if (isRolling) endTake()
-    else startTake()
+    if (suppressRec?.()) return
+    const st = useEditorStore.getState()
+    if (st.isRolling) {
+      const takeStart = st.takeStartTime
+      st.endTake()
+      const takeEnd = useEditorStore.getState().currentTime
+      onTakeEnded?.(takeStart, takeEnd, xrInput.xrOrigin.head)
+      return
+    }
+    st.startTake()
+  }
+
+  function beginTalk(): void {
+    if (!isSpeechAvailable()) {
+      directorSlate.setLastSent('mic unavailable')
+      return
+    }
+    if (isVoiceListening()) return
+    directorSlate.setOffline(getDirectorSocket().status !== 'open')
+    startVoiceSession({
+      onListeningChange: (on) => directorSlate.setListening(on),
+      onInterim: (text) => directorSlate.setInterim(text),
+      onFinal: (transcript) => {
+        void submitDirectorCommand(transcript).then((result) => {
+          const line = transcript.trim()
+          if (result.offline) {
+            directorSlate.setOffline(true)
+            directorSlate.setLastSent(line || 'offline')
+          } else if (result.ok) {
+            directorSlate.setOffline(false)
+            directorSlate.setLastSent(line)
+          }
+        })
+      },
+    })
+  }
+
+  function endTalk(): void {
+    if (isVoiceListening()) stopVoiceSession()
+    directorSlate.setListening(false)
+    directorSlate.setInterim('')
   }
 
   function updateRollingIndicator(): void {
@@ -119,7 +177,7 @@ export function createCamcorderRig(
 
     if (isRolling && (!takeLabel || takeNumber !== lastTakeNumber)) {
       if (takeLabel) {
-        group.remove(takeLabel)
+        screenMesh.remove(takeLabel)
         const labelMat = takeLabel.material as THREE.MeshBasicMaterial
         labelMat.map?.dispose()
         takeLabel.geometry.dispose()
@@ -127,38 +185,36 @@ export function createCamcorderRig(
         takeLabel = null
       }
       lastTakeNumber = takeNumber
-      const canvas = document.createElement('canvas')
-      canvas.width = 256
-      canvas.height = 64
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.fillStyle = '#ffffff'
-        ctx.font = 'bold 28px monospace'
-        ctx.fillText(`TAKE ${takeNumber}`, 8, 40)
-      }
-      const tex = new THREE.CanvasTexture(canvas)
+      // One badge: TAKE N + red REC dot on the right edge (no separate box).
+      const tex = makeBadgeTexture(`TAKE ${takeNumber}`, { recDot: true })
       takeLabel = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.08, 0.02),
+        new THREE.PlaneGeometry(0.1, 0.022),
         new THREE.MeshBasicMaterial({
           map: tex,
           transparent: true,
           depthTest: false,
           side: THREE.DoubleSide,
+          toneMapped: false,
         })
       )
-      takeLabel.position.set(0, 0.096, -0.05775)
-      takeLabel.rotation.copy(screenMesh.rotation)
+      takeLabel.position.set(0, 0.032, 0.001)
       takeLabel.renderOrder = 11
-      group.add(takeLabel)
+      screenMesh.add(takeLabel)
       setEditorLayer(takeLabel)
     } else if (!isRolling && takeLabel) {
-      group.remove(takeLabel)
+      screenMesh.remove(takeLabel)
       const labelMat = takeLabel.material as THREE.MeshBasicMaterial
       labelMat.map?.dispose()
       takeLabel.geometry.dispose()
       labelMat.dispose()
       takeLabel = null
       lastTakeNumber = 0
+    }
+
+    // Blink the whole badge opacity so the baked REC dot pulses.
+    if (takeLabel && isRolling) {
+      ;(takeLabel.material as THREE.MeshBasicMaterial).opacity =
+        Math.sin(performance.now() * 0.012) > 0 ? 1 : 0.55
     }
   }
 
@@ -173,6 +229,10 @@ export function createCamcorderRig(
     ) {
       toggleRecord()
     }
+
+    // Hold A = push-to-talk (right hand only; trigger stays REC).
+    if (pad?.getButtonDown(InputComponent.A_Button)) beginTalk()
+    if (pad?.getButtonUp(InputComponent.A_Button)) endTalk()
 
     updateRollingIndicator()
 
@@ -199,7 +259,15 @@ export function createCamcorderRig(
     xrInput,
     update,
     bindSession: () => {},
+    setTakeEndedHandler: (fn) => {
+      onTakeEnded = fn
+    },
+    setSuppressRec: (fn) => {
+      suppressRec = fn
+    },
     dispose: () => {
+      endTalk()
+      directorSlate.dispose()
       group.removeFromParent()
       scene.remove(xrInput.xrOrigin)
       screenMesh.geometry.dispose()

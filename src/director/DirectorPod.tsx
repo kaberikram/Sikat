@@ -11,14 +11,18 @@ import {
   markAgentIdle,
   applyClientIntentGuess,
   applyIntentPreview,
-  idleGuessedAgent,
   reactToSuggestion,
   setRuntimeLogger,
 } from './agent-runtime'
-import { tryLocalCommand } from './local-commands'
-import { markCommandSent, markFirstPacket, formatLatencySummary } from './latency'
+import { submitDirectorCommand } from './director-command'
+import { markFirstPacket, formatLatencySummary } from './latency'
 import { startTakeRecorder } from './take-recorder'
-import { buildProducerReadback } from './intent-guess'
+import {
+  isSpeechAvailable,
+  isVoiceListening,
+  startVoiceSession,
+  stopVoiceSession,
+} from './voice-session'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
 import { ContextProperties } from '../ui/context-properties'
@@ -48,53 +52,6 @@ const PLACEHOLDERS = [
   'move the box up 2 over 3 seconds',
   'show timeline',
 ]
-
-// Instant pre-parse Producer note — rotates so back-to-back commands don't
-// all flash the same word before the real per-packet note takes over.
-const INSTANT_NOTES = ['copy', 'on it', 'hearing you', 'rolling on that', 'got it', 'standing by', 'yep', 'roger']
-const recentStatusNotes: string[] = []
-let instantNoteIdx = 0
-function nextInstantNote(): string {
-  const fresh = INSTANT_NOTES.filter((n) => !recentStatusNotes.includes(n))
-  const pool = fresh.length > 0 ? fresh : INSTANT_NOTES
-  const note = pool[instantNoteIdx % pool.length]
-  instantNoteIdx += 1
-  recentStatusNotes.push(note)
-  if (recentStatusNotes.length > 12) recentStatusNotes.shift()
-  return note
-}
-
-interface SpeechAlternativeLike {
-  transcript: string
-}
-interface SpeechResultLike extends ArrayLike<SpeechAlternativeLike> {
-  isFinal: boolean
-}
-interface SpeechResultEvent {
-  resultIndex: number
-  results: ArrayLike<SpeechResultLike>
-}
-interface SpeechErrorEvent {
-  error: string
-}
-interface SpeechRecognitionLike {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  maxAlternatives: number
-  onresult: ((event: SpeechResultEvent) => void) | null
-  onend: (() => void) | null
-  onerror: ((event: SpeechErrorEvent) => void) | null
-  start: () => void
-  stop: () => void
-}
-
-function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
-  const w = window as unknown as Record<string, unknown>
-  return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as
-    | (new () => SpeechRecognitionLike)
-    | null
-}
 
 const LOG_CLASS: Record<LogEntry['level'], string> = {
   info: '',
@@ -138,23 +95,9 @@ export function DirectorPod() {
   const setSelected = useEditorStore((s) => s.setSelected)
   const setCameraOpMode = useEditorStore((s) => s.setCameraOpMode)
 
-  // Live-mic plumbing. The recognition instance persists across renders; the
-  // latched flag lives in a ref so the (stale-closured) onend handler can read
-  // the current state to decide whether to auto-restart.
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
-  const listeningRef = useRef(false)
-  const micVisionRef = useRef(false)
-  const micGuessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stopMicRef = useRef<() => void>(() => {})
 
-  const clearMicGuessTimer = useCallback(() => {
-    if (micGuessTimerRef.current) {
-      clearTimeout(micGuessTimerRef.current)
-      micGuessTimerRef.current = null
-    }
-  }, [])
-
-  const speechAvailable = getSpeechRecognition() !== null
+  const speechAvailable = isSpeechAvailable()
   const hasContext = selectedId !== null
 
   const pushLog = useCallback((source: string, text: string, level: LogEntry['level'] = 'info') => {
@@ -204,10 +147,6 @@ export function DirectorPod() {
       }, 25_000)
     })
     const offAgentStatus = socket.onAgentStatus((msg) => {
-      if (msg.note) {
-        recentStatusNotes.push(msg.note)
-        if (recentStatusNotes.length > 12) recentStatusNotes.shift()
-      }
       if (msg.status === 'active') {
         if (msg.agent !== 'Producer') markAgentActive(msg.agent, msg.note)
         else if (msg.note) pushLog('PRODUCER', msg.note)
@@ -273,112 +212,37 @@ export function DirectorPod() {
     text: string,
     opts?: { forceVision?: boolean; commandId?: string }
   ) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-
-    const local = tryLocalCommand(trimmed)
-    if (local.handled) {
-      pushLog('DIRECTOR', trimmed)
-      if (local.message) pushLog('SYSTEM', local.message)
-      setInput('')
-      return
-    }
-
-    clearMicGuessTimer()
-    const socket = getDirectorSocket()
-    const commandId = opts?.commandId ?? crypto.randomUUID()
-    const readback = buildProducerReadback(trimmed)
-    pushLog('PRODUCER', readback ?? nextInstantNote())
-    applyClientIntentGuess(trimmed, commandId)
-    markCommandSent(commandId)
-
-    const sent = await socket.sendUserCommand(trimmed, { ...opts, commandId })
-    if (sent) {
-      pushLog('DIRECTOR', trimmed)
-      setInput('')
-    } else {
-      idleGuessedAgent(commandId)
-      pushLog('DIRECTOR', 'not connected — command dropped', 'error')
-    }
-  }, [pushLog, clearMicGuessTimer])
+    const result = await submitDirectorCommand(text, {
+      ...opts,
+      log: pushLog,
+    })
+    if (result.ok) setInput('')
+  }, [pushLog])
 
   const stopMic = useCallback(() => {
-    clearMicGuessTimer()
-    listeningRef.current = false
-    micVisionRef.current = false
+    stopVoiceSession()
     setListening(false)
     setInterim('')
-    const recognition = recognitionRef.current
-    recognitionRef.current = null
-    if (recognition) {
-      recognition.onresult = null
-      recognition.onend = null // detach before stop so it doesn't auto-restart
-      recognition.onerror = null
-      try {
-        recognition.stop()
-      } catch {
-        /* already stopped */
-      }
-    }
-  }, [clearMicGuessTimer])
+  }, [])
   stopMicRef.current = stopMic
 
+  const voiceHandlers = useCallback(() => ({
+    onInterim: setInterim,
+    onListeningChange: setListening,
+    onFinal: (transcript: string, opts: { forceVision: boolean }) => {
+      void submit(transcript, { forceVision: opts.forceVision })
+    },
+    onInterimGuess: (text: string) => {
+      applyClientIntentGuess(text)
+    },
+  }), [submit])
+
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
-    const Recognition = getSpeechRecognition()
-    if (!Recognition || listeningRef.current) return
-    if (opts?.forceVision) micVisionRef.current = true
-    const recognition = new Recognition()
-    recognition.lang = 'en-US'
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.maxAlternatives = 1
-    recognition.onresult = (event) => {
-      let ghost = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]
-        const transcript = result[0]?.transcript ?? ''
-        if (result.isFinal) void submit(transcript, { forceVision: micVisionRef.current })
-        else ghost += transcript
-      }
-      setInterim(ghost)
-      const interim = ghost.trim()
-      if (interim) {
-        clearMicGuessTimer()
-        micGuessTimerRef.current = setTimeout(() => {
-          applyClientIntentGuess(interim)
-          micGuessTimerRef.current = null
-        }, 300)
-      }
-    }
-    recognition.onerror = (event) => {
-      // A denied/unavailable mic is terminal; other errors let onend restart.
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        stopMic()
-      }
-    }
-    recognition.onend = () => {
-      // Browsers end the session periodically; restart while still latched.
-      if (listeningRef.current && recognitionRef.current === recognition) {
-        try {
-          recognition.start()
-        } catch {
-          stopMic()
-        }
-      }
-    }
-    recognitionRef.current = recognition
-    listeningRef.current = true
-    setListening(true)
-    setInterim('')
-    try {
-      recognition.start()
-    } catch {
-      stopMic()
-    }
-  }, [stopMic, submit])
+    startVoiceSession(voiceHandlers(), opts)
+  }, [voiceHandlers])
 
   const toggleMic = (forceVision = false) =>
-    listeningRef.current ? stopMic() : startMic({ forceVision })
+    isVoiceListening() ? stopMic() : startMic({ forceVision })
 
   return (
     <div className="director-pod-anchor">

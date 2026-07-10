@@ -9,6 +9,7 @@ import { updateStageMarker } from './stage-marker'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
 import type { CamcorderRig } from './xr/camcorder-rig'
+import type { ReviewScreen } from './xr/review-screen'
 import { syncXrStereoLayers } from './xr/xr-session'
 import type { XrViewfinder } from './xr/xr-viewfinder'
 
@@ -29,6 +30,7 @@ export function createAnimateLoop(ctx: {
   stageMarker: THREE.Group
   camcorderRig: CamcorderRig
   xrViewfinder: XrViewfinder
+  reviewScreen: ReviewScreen
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
@@ -147,14 +149,9 @@ export function createAnimateLoop(ctx: {
       // IWSDK updates grip/ray spaces; camcorder pose + REC read from gripSpaces.right.
       ctx.camcorderRig.update(delta, now / 1000, ctx.mainRenderer.xr)
 
-      // Virtual cam films the CG stage (white studio bg + layer-0 objects), not passthrough.
-      if (!(ctx.scene.background instanceof THREE.Color)) {
-        ctx.scene.background = new THREE.Color()
-      }
-      ctx.scene.background.set(lighting.background)
-
-      const pipW = ctx.pipRenderer.domElement.clientWidth
-      const pipH = ctx.pipRenderer.domElement.clientHeight
+      // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
+      const XR_VF_W = 640
+      const XR_VF_H = 360
       ctx.xrViewfinder.render({
         renderer: ctx.mainRenderer,
         scene: ctx.scene,
@@ -162,15 +159,34 @@ export function createAnimateLoop(ctx: {
         screenMesh: ctx.camcorderRig.screenMesh,
         objects: liveObjects,
         stack,
-        width: pipW,
-        height: pipH,
+        width: XR_VF_W,
+        height: XR_VF_H,
         delta,
         t,
         isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+        clearColor: lighting.background,
       })
 
+      // Review monitor: timeline camera playback (separate from live grip LCD).
+      if (ctx.reviewScreen.isOpen()) {
+        ctx.reviewScreen.update(ctx.camcorderRig.xrInput)
+        ctx.reviewScreen.renderPlayback({
+          renderer: ctx.mainRenderer,
+          scene: ctx.scene,
+          objects: liveObjects,
+          stack,
+          delta,
+          t,
+          clearColor: lighting.background,
+          isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+        })
+      }
+
       // Headset view: passthrough / transparent composite over the real world.
+      // (Viewfinder already filmed studio CG above — passthrough is eyes only.)
       ctx.scene.background = null
+    } else if (ctx.reviewScreen.isOpen()) {
+      ctx.reviewScreen.hide()
     }
 
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)

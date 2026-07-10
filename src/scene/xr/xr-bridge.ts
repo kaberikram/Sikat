@@ -1,12 +1,22 @@
 let enterXrSession: (() => Promise<void>) | null = null
+let endXrSessionFn: (() => Promise<void>) | null = null
 
 export function registerXrSessionEntry(fn: (() => Promise<void>) | null): void {
   enterXrSession = fn
 }
 
+export function registerXrSessionExit(fn: (() => Promise<void>) | null): void {
+  endXrSessionFn = fn
+}
+
 export async function requestXrSession(): Promise<void> {
   if (!enterXrSession) throw new Error('XR session not initialized')
   await enterXrSession()
+}
+
+export async function endXrSession(): Promise<void> {
+  if (!endXrSessionFn) return
+  await endXrSessionFn()
 }
 
 export async function probeImmersiveArSupport(): Promise<boolean> {

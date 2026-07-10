@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable
 
 from . import session_context
+from .converse import converse_intent, is_open_speech
 from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
 from .motion_vocab import extract_motion, extract_motion_params
 from .scene_context import describe_fallback_message
@@ -697,6 +698,15 @@ def _parse_move(
     )
 
 
+def _parse_converse(
+    clause: str, _scene: SceneState | None, _transition: Transition | None
+) -> Intent | None:
+    """Greetings / thanks / presence → describe radio reply (keyless path)."""
+    if not is_open_speech(clause):
+        return None
+    return converse_intent(clause)
+
+
 def _parse_describe(
     clause: str, scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
@@ -744,6 +754,7 @@ def _parse_describe(
 
 HANDLERS: list[Handler] = [
     _parse_playback,
+    _parse_converse,
     _parse_describe,
     _parse_mood,
     _parse_fx,

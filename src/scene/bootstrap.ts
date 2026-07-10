@@ -12,6 +12,7 @@ import { createAgentCursors } from './agent-cursors'
 import { createStageMarker, disposeStageMarker } from './stage-marker'
 import { bindFlyControls } from './fly-controls'
 import { createCamcorderRig } from './xr/camcorder-rig'
+import { createReviewScreen } from './xr/review-screen'
 import { initXrSession } from './xr/xr-session'
 import { createXrViewfinder } from './xr/xr-viewfinder'
 
@@ -148,6 +149,11 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     mainRenderer.getPixelRatio()
   )
   const xrViewfinder = createXrViewfinder(xrViewfinderComposer)
+  const reviewScreen = createReviewScreen(scene, mainRenderer, cameraFar)
+  camcorderRig.setTakeEndedHandler((takeStart, takeEnd, head) => {
+    reviewScreen.showAfterTake(takeStart, takeEnd, head)
+  })
+  camcorderRig.setSuppressRec(() => reviewScreen.isOpen())
   const disposeXr = initXrSession(mainRenderer, camcorderRig)
 
   const stopAnimate = createAnimateLoop({
@@ -165,6 +171,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     stageMarker,
     camcorderRig,
     xrViewfinder,
+    reviewScreen,
   })
 
   const handleMainResize = () => {
@@ -200,6 +207,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     disposeXr()
     camcorderRig.dispose()
     xrViewfinder.dispose()
+    reviewScreen.dispose()
     unsubStore()
     unsubShadows()
     roMain.disconnect()

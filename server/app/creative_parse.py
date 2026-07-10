@@ -51,6 +51,12 @@ def defer_clause_to_llm(
         return False
     if intent.action == "clarify":
         return True
+    # Open-speech converse (hello/thanks) — grammar radio is final; don't wait on LLM.
+    if intent.action == "describe":
+        from .converse import is_open_speech
+
+        if is_open_speech(clause):
+            return False
     if intent.action == "animate":
         return True
     if _CREATIVE_LANGUAGE.search(clause.lower()):

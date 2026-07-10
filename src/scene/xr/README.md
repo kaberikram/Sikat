@@ -16,19 +16,54 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 | Piece | Source |
 |-------|--------|
 | Session (`immersive-ar` → `immersive-vr`) | [`xr-session.ts`](./xr-session.ts) |
+| Exit session | [`xr-bridge.ts`](./xr-bridge.ts) `endXrSession()` + **EXIT XR** button in Editor |
 | Chrome emulator Layers compat | [`xr-compat.ts`](./xr-compat.ts) |
 | Grip / ray / head spaces + controller GLTF | `@iwsdk/xr-input` `XRInputManager` |
 | Camcorder screen + virt cam pose + REC | [`camcorder-rig.ts`](./camcorder-rig.ts) |
 | Viewfinder RT (same FX as desktop PiP) | [`xr-viewfinder.ts`](./xr-viewfinder.ts) + `viewfinder-pass.ts` |
+| Post-cut take review monitor | [`review-screen.ts`](./review-screen.ts) |
 
 ## Wiring
 
-1. `bootstrap.ts` — `createCamcorderRig(scene, userCamera, virtCamera)` creates `XRInputManager`, adds `xrOrigin` to the scene.
-2. `animate-loop.ts` (XR frames) — `camcorderRig.update(delta, timeSec, mainRenderer.xr)` **before** the viewfinder RT pass.
+1. `bootstrap.ts` — `createCamcorderRig` + `createReviewScreen`; cut handler opens review.
+2. `animate-loop.ts` (XR frames) — camcorder update → grip LCD RT → review playback RT (if open).
 3. Camcorder group is parented to `xrOrigin.gripSpaces.right`.
-4. REC: `gamepads.right.getButtonDown(InputComponent.Trigger)` or `getSelectStart()`.
+4. REC: `gamepads.right.getButtonDown(InputComponent.Trigger)` or `getSelectStart()` (suppressed while review is open).
 5. Controller/hand meshes forced to **EDITOR_LAYER (3)** so they never appear in the virtual cam film.
    **Do not use layers 1 or 2** — Three.js WebXR reserves those for left/right eye cameras; objects on layer 1 only draw in the left eye.
+
+## Dual monitors
+
+| Surface | Camera source | Purpose |
+|---------|---------------|---------|
+| Grip LCD | Live right-grip pose | Record / aim |
+| Floating review panel | Timeline keyframes (`playbackCam`) | Watch the take after cut |
+
+Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is headset eyes only.
+
+**UI chrome:** XR panels use the same desktop brutalist tokens (`#FFE600` / `#FF6B00` / `#0094FF`, thick black borders, hard offset shadow) via canvas textures in [`xr-ui-chrome.ts`](./xr-ui-chrome.ts) — Three.js meshes can't use CSS.
+
+## Exit XR (emulator)
+
+- In-app **EXIT XR** button (top-left) while presenting — calls `session.end()`.
+- Emulator panel Exit / End session, or **Esc**, also works.
+
+## Right-hand controls
+
+| Input | Action |
+|-------|--------|
+| **Trigger** | REC / cut take |
+| **Hold A** | Push-to-talk → Director crew (Web Speech → `user_command`) |
+
+A compact DIRECTOR slate sits under the grip LCD: status (`DIRECTOR` / `LISTENING` / `OFFLINE`) + white transcript box (live interim while holding A, last sent after release). Reuses [`voice-session.ts`](../../director/voice-session.ts) + [`director-command.ts`](../../director/director-command.ts) — same path as the desktop mic, not a separate realtime voice API.
+
+## Review screen controls (v1)
+
+After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto-plays the take once.
+
+- **Trigger** on PLAY / scrub / X — play-pause, seek, dismiss
+- **Squeeze** on frame — grab-move
+- **Squeeze** on blue corner cube — scale
 
 ## Peers / versions
 
@@ -38,7 +73,8 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 
 ## Out of scope (for now)
 
-- Ray/grab pointers (`pointerSettings.enabled: false`)
+- Full desktop timeline UI in XR
+- Ray/grab pointers (`pointerSettings.enabled: false`) — review uses raycast hit-tests only
 - UIKitML spatial UI
 - Locomotion / physics / scene understanding
 - IWSDK MCP coding-agent tooling (separate from Director crew)
@@ -46,6 +82,11 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 ## Manual verify checklist
 
 - [ ] Chrome Immersive Web Emulator: ENTER XR → screen tracks right grip
-- [ ] Viewfinder shows studio CG (not headset passthrough)
-- [ ] Trigger toggles TAKE / REC
+- [ ] EXIT XR button ends session without refresh
+- [ ] Viewfinder shows studio CG / white bg (not black, not passthrough)
+- [ ] Trigger toggles TAKE / REC — blinking red dot on LCD while rolling
+- [ ] Cut → floating review screen appears, plays camera path on studio bg
+- [ ] PLAY / scrub / dismiss / grab-move / corner-scale work
+- [ ] Grip LCD stays live aim; review shows timeline playback
+- [ ] Hold A → slate LISTENING + live STT; release stops mic; finals reach crew when server up
 - [ ] Quest Browser: same, with passthrough on headset view only

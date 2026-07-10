@@ -503,8 +503,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
   snapshotCameraKeyframes: (time) => {
     const vc = get().virtualCamera
-    get().addCameraKeyframe(time, 'position', vc.position)
-    get().addCameraKeyframe(time, 'rotation', vc.rotation)
-    get().addCameraKeyframe(time, 'fov', [vc.fov, 0, 0])
+    // One setState — three nested addCameraKeyframe notifies would re-enter
+    // take-recorder's subscribe while sampling.
+    const strip = vc.keyframes.filter(
+      (k) => !(k.time === time && (k.property === 'position' || k.property === 'rotation' || k.property === 'fov')),
+    )
+    set({
+      virtualCamera: {
+        ...vc,
+        keyframes: [
+          ...strip,
+          { time, property: 'position' as const, value: vc.position },
+          { time, property: 'rotation' as const, value: vc.rotation },
+          { time, property: 'fov' as const, value: [vc.fov, 0, 0] as [number, number, number] },
+        ].sort((a, b) => a.time - b.time),
+      },
+    })
   },
 }))
