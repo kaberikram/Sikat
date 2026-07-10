@@ -11,6 +11,7 @@ import {
   type CommandCancelMessage,
   type AgentQuestionMessage,
   type AgentSuggestionMessage,
+  type PlanUpdateMessage,
   type ErrorMessage,
   type SceneSnapshot,
   parseServerMessage,
@@ -46,6 +47,7 @@ export class DirectorSocket {
   private cancelListeners = new Set<Listener<CommandCancelMessage>>()
   private questionListeners = new Set<Listener<AgentQuestionMessage>>()
   private suggestionListeners = new Set<Listener<AgentSuggestionMessage>>()
+  private planUpdateListeners = new Set<Listener<PlanUpdateMessage>>()
   private errorListeners = new Set<Listener<ErrorMessage>>()
   private statusListeners = new Set<Listener<SocketStatus>>()
   private openListeners = new Set<() => void>()
@@ -102,6 +104,8 @@ export class DirectorSocket {
         for (const cb of this.questionListeners) cb(msg)
       else if (msg.type === 'agent_suggestion')
         for (const cb of this.suggestionListeners) cb(msg)
+      else if (msg.type === 'plan_update')
+        for (const cb of this.planUpdateListeners) cb(msg)
       else for (const cb of this.errorListeners) cb(msg)
     }
     this.ws.onclose = () => {
@@ -199,6 +203,11 @@ export class DirectorSocket {
   onSuggestion(cb: Listener<AgentSuggestionMessage>): () => void {
     this.suggestionListeners.add(cb)
     return () => this.suggestionListeners.delete(cb)
+  }
+
+  onPlanUpdate(cb: Listener<PlanUpdateMessage>): () => void {
+    this.planUpdateListeners.add(cb)
+    return () => this.planUpdateListeners.delete(cb)
   }
 
   onError(cb: Listener<ErrorMessage>): () => void {

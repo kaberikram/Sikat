@@ -43,6 +43,7 @@ Breaking change: `camera` → **`virtualCamera`**.
 | `agent_command` | `packet` (CommandPacket below) |
 | `intent_preview` | `commandId`, `agent`, `note`, `confidence (guess\|grammar\|llm_partial)`, `target?`, `action?`, `motion?` |
 | `agent_status` | `agent`, `status (active\|idle)`, `forCommandId?`, `note?` |
+| `plan_update` | `commandId`, `status`, `say?`, `mode?`, `stepIndex?`, `stepsTotal?`, `stepLabel?` |
 | `command_cancel` | `commandId`, `supersededBy?`, `target?`, `command?`, `reason? (supersede\|stop\|amend)` |
 | `agent_question` | `agent`, `commandId`, `question`, `options[]` |
 | `agent_suggestion` | `suggestionId`, `agent`, `text`, `kind (observation\|suggestion\|reaction)`, `suggestedCommand?`, `subjectObject?` |

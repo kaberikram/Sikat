@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
-from .. import active_commands, fallback_parser, llm, performers, session_context
+from .. import active_commands, fallback_parser, llm, performers, session_context, undo
 from ..converse import converse_intent, radio_reply
-from ..creative_parse import defer_clause_to_llm, is_open_direction
+from ..creative_parse import _CREATIVE_LANGUAGE, _grammar_has_complete_intent, defer_clause_to_llm, is_open_direction
+from ..motion_policy import soften_default_motion
 from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
 from ..fallback_parser import parse_one_clause, split_clauses
@@ -44,7 +46,7 @@ from .base import (
     _noop_suggest,
 )
 from .directors_assistant import DirectorsAssistant
-from .planner import Planner
+from .planner import PlanRunner
 from .lighting_tech import LightingTech
 from .vfx_operator import VFXOperator
 
@@ -197,6 +199,7 @@ class Producer:
         emit_status: EmitStatus = _noop_status,
         command_id: str | None = None,
         scene: SceneState | None = None,
+        utterance: str | None = None,
     ) -> list[CommandPacket]:
         if intent.action == "assign":
             if intent.addressee and intent.target:
@@ -223,14 +226,16 @@ class Producer:
 
         specialist = self._routes.get(intent.action)
         working = intent
-        if intent.action == "animate" and not intent.track_keyframes:
-            motion = intent.motion or intent.preset
+        if intent.action == "animate" and utterance:
+            working = soften_default_motion(utterance, working)
+        if working.action == "animate" and not working.track_keyframes:
+            motion = working.motion or working.preset
             if motion:
                 stage_r = scene.stage.radius if scene else 25.0
                 params = enrich_motion_params(
-                    intent.motion_params, motion, command_id, stage_r
+                    working.motion_params, motion, command_id, stage_r
                 )
-                working = intent.model_copy(update={"motion_params": params})
+                working = working.model_copy(update={"motion_params": params})
         if intent.addressee and not working.target:
             assignment = performers.get(intent.addressee)
             if assignment:
@@ -577,6 +582,7 @@ class Producer:
         scene: SceneState | None = None,
         emit_cancel: EmitCancel = _noop_cancel,
         emit_suggest: EmitSuggest = _noop_suggest,
+        utterance: str | None = None,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
@@ -589,7 +595,7 @@ class Producer:
             voiced = intent_with_radio(intent)
             await self._maybe_emit_freeze_cancel(voiced, command_id, emit_cancel)
             built = await self._build_packets_for_intent(
-                voiced, emit_log, emit_status, command_id, scene
+                voiced, emit_log, emit_status, command_id, scene, utterance=utterance
             )
             for packet in built:
                 packet.commandId = command_id
@@ -619,11 +625,12 @@ class Producer:
         *,
         refinement: bool = False,
         prior_command_id: str | None = None,
+        utterance: str | None = None,
     ) -> list[CommandPacket]:
         voiced = intent_with_radio(intent)
         await self._maybe_emit_freeze_cancel(voiced, command_id, emit_cancel)
         built = await self._build_packets_for_intent(
-            voiced, emit_log, emit_status, command_id, scene
+            voiced, emit_log, emit_status, command_id, scene, utterance=utterance
         )
         for packet in built:
             packet.commandId = command_id
@@ -685,6 +692,7 @@ class Producer:
         emit_status: EmitStatus,
         emit_cancel: EmitCancel,
         scene: SceneState | None,
+        utterance: str | None = None,
     ) -> list[CommandPacket]:
         if intent.action in ("describe", "suggest", "clarify"):
             return []
@@ -705,6 +713,7 @@ class Producer:
             emit_cancel,
             scene,
             refinement=False,
+            utterance=utterance,
         )
 
     async def _direct_multi_clause(
@@ -746,7 +755,7 @@ class Producer:
                 for cl, intent in parsed
             )
             if all_deferred:
-                return await Planner(self).run(
+                return await PlanRunner(self).run(
                     text,
                     scene,
                     command_id,
@@ -756,6 +765,16 @@ class Producer:
                     frame,
                     emit_cancel,
                     emit_suggest,
+                    _noop_question,
+                    _noop_emit,
+                    prefer_strong=bool(
+                        re.search(
+                            r"\b(?:animate|animation|bounce|float|wander|orbit|spin|sway|drop|rise)\b",
+                            text,
+                            re.I,
+                        )
+                        or _CREATIVE_LANGUAGE.search(text)
+                    ),
                 )
 
         grammar_handled_indices: set[int] = set()
@@ -881,6 +900,7 @@ class Producer:
                 emit_cancel,
                 scene,
                 refinement=False,
+                utterance=text,
             )
             all_packets.extend(built)
             grammar_emitted.append(voiced)
@@ -916,6 +936,7 @@ class Producer:
                     emit_status,
                     emit_cancel,
                     scene,
+                    utterance=text,
                 )
                 if built:
                     llm_directed_count += 1
@@ -994,6 +1015,7 @@ class Producer:
         emit_cancel: EmitCancel = _noop_cancel,
         emit_question: EmitQuestion = _noop_question,
         emit_suggest: EmitSuggest = _noop_suggest,
+        emit_plan_update: EmitPreview = _noop_preview,
     ) -> tuple[list[CommandPacket], bool]:
         """Staged execution: plan the crew's work, then stream it over time.
 
@@ -1003,18 +1025,84 @@ class Producer:
         Returns (packets, describe_only). When describe_only is True the command
         was satisfied with agent_log messages only — no error should be emitted.
         """
+        resumed = await self._try_resume_clarify(
+            text, scene, command_id, emit_log, emit_packet, emit_status, emit_cancel, emit_question
+        )
+        if resumed is not None:
+            return resumed
+
+        if re.search(r"\b(?:undo(?:\s+that)?|take it back|revert)\b", text, re.I):
+            entry = session_context.get_session().pop_latest_plan()
+            if entry is None:
+                await emit_log(self.name, "nothing in the take journal to undo", "info")
+                return [], True
+            packets, notes = undo.build_inverse_packets(entry)
+            await emit_status(self.name, "active", command_id, "rolling it back")
+            await self._stream_packets_staged(
+                packets, command_id, emit_log, emit_packet, emit_status, "rolling it back", emit_cancel, scene
+            )
+            for note in notes:
+                await emit_log(self.name, note, "info")
+            return packets, not packets
+
         clauses = split_clauses(text)
-        return await self._direct_multi_clause(
-            text,
-            clauses,
-            scene,
-            command_id,
-            emit_log,
-            emit_packet,
-            emit_status,
-            frame,
-            emit_preview,
-            emit_cancel,
-            emit_question,
-            emit_suggest,
+        parsed = [parse_one_clause(clause, scene) for clause in clauses]
+        grammar_clarify = next(
+            (intent for intent in parsed if intent is not None and intent.action == "clarify"),
+            None,
+        )
+        if grammar_clarify is not None:
+            await self._emit_clarify(
+                grammar_clarify, text, command_id, emit_log, emit_question, emit_cancel,
+                emit_packet, emit_status, scene
+            )
+            return [], True
+        is_complete_grammar = (
+            bool(parsed)
+            and all(intent is not None and _grammar_has_complete_intent(intent) for intent in parsed)
+            and not _CREATIVE_LANGUAGE.search(text)
+        )
+        if is_complete_grammar:
+            intents = [intent for intent in parsed if intent is not None]
+            packets = await self._stream_intents(
+                intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
+                utterance=text,
+            )
+            session_context.record(text, intents)
+            log.debug("instant via grammar: %d intent(s)", len(intents))
+            return packets, not packets
+
+        if llm.select_tier(frame, escalated=False) is None:
+            intents = fallback_parser.parse(text, scene)
+            if intents:
+                clarify = next((intent for intent in intents if intent.action == "clarify"), None)
+                if clarify is not None:
+                    await self._emit_clarify(
+                        clarify, text, command_id, emit_log, emit_question, emit_cancel,
+                        emit_packet, emit_status, scene
+                    )
+                    return [], True
+                packets = await self._stream_intents(
+                    intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
+                    utterance=text,
+                )
+                session_context.record(text, intents)
+                return packets, not packets
+            reply = converse_intent(text)
+            await self._emit_describe(reply, emit_log)
+            return [], True
+
+        has_animation_request = any(
+            intent is not None and intent.action == "animate" for intent in parsed
+        ) or bool(
+            re.search(
+                r"\b(?:animate|animation|bounce|float|wander|orbit|spin|sway|drop|rise)\b",
+                text,
+                re.I,
+            )
+        )
+        return await PlanRunner(self).run(
+            text, scene, command_id, emit_log, emit_packet, emit_status, frame, emit_cancel,
+            emit_suggest, emit_question, emit_plan_update,
+            prefer_strong=has_animation_request or bool(_CREATIVE_LANGUAGE.search(text)),
         )

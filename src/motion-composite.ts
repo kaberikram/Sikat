@@ -3,7 +3,7 @@
  * replacing it — e.g. "bounce while moving along the path you set".
  */
 import { interpolateKeyframes } from './keyframe-interpolation'
-import type { PresetKeyframes } from './animation-presets'
+import { buildBounceHopSchedule, type PresetKeyframes } from './animation-presets'
 import { resolveMotionId, type MotionId, type MotionParams } from './motion-synth'
 
 export type Vec3 = [number, number, number]
@@ -42,19 +42,19 @@ function compositeBounce(path: PresetKeyframes, params: MotionParams): PresetKey
   const height = params.height ?? 1.5
   const hops = Math.max(1, Math.round(params.hops ?? Math.max(2, duration / 0.45)))
   const decay = params.decay ?? 0.55
+  const schedule = buildBounceHopSchedule(duration, height, hops, decay)
   const fallback = sorted[0].value
   const out: PresetKeyframes = []
-  const samples = Math.max(48, sorted.length * 6)
+  const samples = Math.max(64, sorted.length * 8)
 
   for (let i = 0; i <= samples; i++) {
     const t = (i / samples) * duration
     const base = samplePath(sorted, t, fallback)
-    const hopDur = duration / hops
-    const localT = (t % hopDur) / hopDur
-    const hopIdx = Math.min(hops - 1, Math.floor(t / hopDur))
-    const hopHeight = height * Math.pow(decay, hopIdx)
-    const arc = 4 * localT * (1 - localT)
-    out.push({ time: t, value: [base[0], base[1] + arc * hopHeight, base[2]] })
+    const hop = schedule.find((h) => t <= h.end) ?? schedule[schedule.length - 1]
+    const span = Math.max(1e-6, hop.end - hop.start)
+    const local = Math.min(1, Math.max(0, (t - hop.start) / span))
+    const arc = 4 * local * (1 - local)
+    out.push({ time: t, value: [base[0], base[1] + arc * hop.height, base[2]] })
   }
   return out
 }

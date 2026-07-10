@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react'
 import { Mic, Plus, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
-import type { AgentQuestionMessage, AgentSuggestionMessage } from './protocol'
+import type { AgentQuestionMessage, AgentSuggestionMessage, PlanUpdateMessage } from './protocol'
 import { startSceneStateSync } from './scene-state-sync'
 import {
   enqueuePacket,
@@ -37,6 +37,16 @@ interface LogEntry {
   text: string
   level: 'info' | 'warn' | 'error'
   createdAt: number
+}
+
+interface PlanProgress {
+  commandId: string
+  say: string | null
+  mode: PlanUpdateMessage['mode']
+  status: PlanUpdateMessage['status']
+  stepIndex: number | null
+  stepsTotal: number | null
+  stepLabel: string | null
 }
 
 const MAX_LOG = 40
@@ -84,9 +94,10 @@ export function DirectorPod() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
   const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionMessage | null>(null)
-  const [pendingSuggestion, setPendingSuggestion] = useState<AgentSuggestionMessage | null>(null)
+  const [pendingSuggestions, setPendingSuggestions] = useState<AgentSuggestionMessage[]>([])
+  const [planProgress, setPlanProgress] = useState<PlanProgress | null>(null)
   const [isProcessingCommand, setIsProcessingCommand] = useState(false)
-  const suggestionExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
@@ -119,6 +130,7 @@ export function DirectorPod() {
     if (timer) clearTimeout(timer)
     pendingCommandTimersRef.current.delete(commandId)
     pendingCommandIdsRef.current.delete(commandId)
+    setPlanProgress((progress) => progress?.commandId === commandId ? null : progress)
     setIsProcessingCommand(pendingCommandIdsRef.current.size > 0)
   }, [])
 
@@ -164,13 +176,29 @@ export function DirectorPod() {
         pushLog(msg.agent, msg.text)
         return
       }
-      if (suggestionExpiryRef.current) clearTimeout(suggestionExpiryRef.current)
-      setPendingSuggestion(msg)
+      setPendingSuggestions((current) => [...current.filter((item) => item.suggestionId !== msg.suggestionId), msg].slice(-3))
       pushLog(msg.agent, msg.text)
-      suggestionExpiryRef.current = setTimeout(() => {
-        setPendingSuggestion(null)
-        suggestionExpiryRef.current = null
-      }, 25_000)
+      const timer = suggestionExpiryRef.current.get(msg.suggestionId)
+      if (timer) clearTimeout(timer)
+      suggestionExpiryRef.current.set(msg.suggestionId, setTimeout(() => {
+        setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== msg.suggestionId))
+        suggestionExpiryRef.current.delete(msg.suggestionId)
+      }, 25_000))
+    })
+    const offPlanUpdate = socket.onPlanUpdate((msg) => {
+      if (msg.status === 'done') {
+        setPlanProgress(null)
+        return
+      }
+      setPlanProgress({
+        commandId: msg.commandId,
+        say: msg.say ?? null,
+        mode: msg.mode ?? null,
+        status: msg.status,
+        stepIndex: msg.stepIndex ?? null,
+        stepsTotal: msg.stepsTotal ?? null,
+        stepLabel: msg.stepLabel ?? null,
+      })
     })
     const offAgentStatus = socket.onAgentStatus((msg) => {
       if (msg.status === 'active') {
@@ -246,6 +274,7 @@ export function DirectorPod() {
       offCancel()
       offQuestion()
       offSuggestion()
+      offPlanUpdate()
       offAgentStatus()
       offLog()
       offError()
@@ -254,7 +283,8 @@ export function DirectorPod() {
       window.removeEventListener('keydown', onKeyDown)
       stopTakeRecorder()
       stopMicRef.current() // tear down any live mic on unmount
-      if (suggestionExpiryRef.current) clearTimeout(suggestionExpiryRef.current)
+      for (const timer of suggestionExpiryRef.current.values()) clearTimeout(timer)
+      suggestionExpiryRef.current.clear()
       for (const timer of pendingCommandTimersRef.current.values()) clearTimeout(timer)
       pendingCommandTimersRef.current.clear()
       pendingCommandIdsRef.current.clear()
@@ -392,8 +422,17 @@ export function DirectorPod() {
           <span className="opacity-60 uppercase">{status}</span>
         </div>
 
-        {pendingSuggestion && (
-          <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/40">
+        {planProgress && (
+          <div className="px-2 py-1.5 border-t-2 border-black bg-[var(--jsr-blue)]/15 text-[9px] font-mono">
+            <div className="font-bold">{planProgress.say ?? 'planning the take…'}</div>
+            <div className="opacity-70 uppercase">
+              {planProgress.stepIndex ?? 0}/{planProgress.stepsTotal ?? '…'} · {planProgress.stepLabel ?? planProgress.status}
+            </div>
+          </div>
+        )}
+
+        {pendingSuggestions.map((pendingSuggestion) => (
+          <div key={pendingSuggestion.suggestionId} className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/40">
             <p className="text-[9px] font-bold mb-1.5">
               [{pendingSuggestion.agent}] {pendingSuggestion.text}
             </p>
@@ -404,11 +443,10 @@ export function DirectorPod() {
                   className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
                   onClick={() => {
                     const cmd = pendingSuggestion.suggestedCommand
-                    setPendingSuggestion(null)
-                    if (suggestionExpiryRef.current) {
-                      clearTimeout(suggestionExpiryRef.current)
-                      suggestionExpiryRef.current = null
-                    }
+                    setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
+                    const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
+                    if (timer) clearTimeout(timer)
+                    suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
                     if (cmd) void submit(cmd)
                   }}
                 >
@@ -419,18 +457,17 @@ export function DirectorPod() {
                 type="button"
                 className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
                 onClick={() => {
-                  setPendingSuggestion(null)
-                  if (suggestionExpiryRef.current) {
-                    clearTimeout(suggestionExpiryRef.current)
-                    suggestionExpiryRef.current = null
-                  }
+                  setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
+                  const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
+                  if (timer) clearTimeout(timer)
+                  suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
                 }}
               >
                 DISMISS
               </button>
             </div>
           </div>
-        )}
+        ))}
 
         {pendingQuestion && (
           <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/30">

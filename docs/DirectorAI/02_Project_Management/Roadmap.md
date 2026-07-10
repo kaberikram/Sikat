@@ -52,6 +52,15 @@ Phased brief: `06_Implementation_Brief/Scene_Aware_Director.md`. All phases comp
 
 Hybrid LLM routing: DeepSeek for text-only, Anthropic when viewfinder JPEG attached.
 
+## Agent-Loop Director
+
+- [x] Whole-utterance `DirectorPlan` streaming with fast Haiku planning and
+      Sonnet escalation for bespoke choreography.
+- [x] Plan progress wire/UI, pitch mode, plan journal, and deterministic
+      best-effort undo from the command-entry scene snapshot.
+- [ ] Remove the remaining legacy clause-routing compatibility helpers once
+      downstream tests and deployments no longer exercise them.
+
 ## Shipped — Phase 2+3 of the PRD (this branch)
 
 The core loop: **text/voice command → agent swarm → JSON over WebSocket → live scene mutation.**

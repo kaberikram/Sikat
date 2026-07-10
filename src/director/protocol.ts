@@ -310,6 +310,29 @@ export interface AgentQuestionMessage {
   options: string[]
 }
 
+export type PlanUpdateStatus =
+  | 'planning'
+  | 'escalating'
+  | 'step_start'
+  | 'step_done'
+  | 'adjusting'
+  | 'pitched'
+  | 'done'
+
+export type PlanMode = 'execute' | 'pitch' | 'amend' | 'surprise'
+
+export interface PlanUpdateMessage {
+  type: 'plan_update'
+  timestamp: number
+  commandId: string
+  status: PlanUpdateStatus
+  say?: string | null
+  mode?: PlanMode | null
+  stepIndex?: number | null
+  stepsTotal?: number | null
+  stepLabel?: string | null
+}
+
 export type ServerMessage =
   | AgentCommandMessage
   | AgentLogMessage
@@ -318,6 +341,7 @@ export type ServerMessage =
   | CommandCancelMessage
   | AgentQuestionMessage
   | AgentSuggestionMessage
+  | PlanUpdateMessage
   | ErrorMessage
 
 /** Cheap structural check — the server already pydantic-validated the packet. */
@@ -336,6 +360,8 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     return raw as CommandCancelMessage
   if (msg.type === 'agent_question' && typeof (raw as AgentQuestionMessage).question === 'string')
     return raw as AgentQuestionMessage
+  if (msg.type === 'plan_update' && typeof (raw as PlanUpdateMessage).commandId === 'string')
+    return raw as PlanUpdateMessage
   if (
     msg.type === 'agent_suggestion' &&
     typeof (raw as AgentSuggestionMessage).text === 'string' &&

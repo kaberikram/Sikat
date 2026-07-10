@@ -274,6 +274,10 @@ interface EditorState {
     property: CameraKeyframeProperty,
     value: [number, number, number]
   ) => void
+  setCameraPropertyKeyframes: (
+    property: Exclude<CameraKeyframeProperty, 'scale'>,
+    keyframes: Array<{ time: number; value: [number, number, number] }>
+  ) => void
   /** Replaces all keyframes of a single property on an object. Used by preset animations like turnaround. */
   setObjectPropertyKeyframes: (
     objectId: string,
@@ -491,6 +495,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       virtualCamera: {
         ...vc,
         keyframes: [...otherKeyframes, { time, property, value }].sort((a, b) => a.time - b.time),
+      },
+    }
+  }),
+  setCameraPropertyKeyframes: (property, keyframes) => set((state) => {
+    const vc = state.virtualCamera
+    const others = vc.keyframes.filter((keyframe) => keyframe.property !== property)
+    return {
+      virtualCamera: {
+        ...vc,
+        keyframes: [
+          ...others,
+          ...keyframes.map((keyframe) => ({ ...keyframe, property })),
+        ].sort((a, b) => a.time - b.time),
       },
     }
   }),

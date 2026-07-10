@@ -17,6 +17,7 @@ import {
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
 import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
+import { buildBounceScaleKeyframes } from '../animation-presets'
 import {
   canCompositeOntoPath,
   compositeMotionOntoPath,
@@ -35,7 +36,7 @@ import type {
   Vec3,
 } from './protocol'
 
-const EASE_SAMPLES = 8
+const EASE_SAMPLES = 24
 
 const activeClips = new Map<string, () => void>()
 
@@ -343,12 +344,33 @@ export function applyCommandPacket(packet: CommandPacket): string {
       }
 
       const clipEnd = keyframes[keyframes.length - 1]?.time ?? duration
+      const motionId = resolveMotionId(motion)
       if (isRefinement) {
         const fromTime = st.currentTime
         st.mergeObjectPropertyKeyframes(obj.id, property, keyframes, fromTime)
+        if (motionId === 'bounce') {
+          const scaleKeys = buildBounceScaleKeyframes(
+            obj.scale,
+            duration,
+            params.hops ?? 2,
+            params.decay ?? 0.55,
+            params.flat ?? 0.55
+          )
+          st.mergeObjectPropertyKeyframes(obj.id, 'scale', scaleKeys, fromTime)
+        }
         if (clipEnd > fromTime) beginClipPlayback(clipEnd, p.repeat === true, packet.commandId, obj.id)
       } else {
         st.setObjectPropertyKeyframes(obj.id, property, keyframes)
+        if (motionId === 'bounce') {
+          const scaleKeys = buildBounceScaleKeyframes(
+            obj.scale,
+            duration,
+            params.hops ?? 2,
+            params.decay ?? 0.55,
+            params.flat ?? 0.55
+          )
+          st.setObjectPropertyKeyframes(obj.id, 'scale', scaleKeys)
+        }
         beginClipPlayback(clipEnd, p.repeat === true, packet.commandId, obj.id)
       }
       const mode = useComposite ? `${motion} along path` : motion
@@ -435,9 +457,10 @@ export function applyCommandPacket(packet: CommandPacket): string {
           console.warn('SET_KEYFRAMES: camera scale keyframes ignored')
           return 'camera scale keyframes skipped'
         }
-        for (const kf of p.keyframes) {
-          st.addCameraKeyframe(kf.time, p.property, kf.value)
-        }
+        st.setCameraPropertyKeyframes(
+          p.property,
+          p.keyframes.map((keyframe) => ({ time: keyframe.time, value: keyframe.value }))
+        )
         return `camera ${p.property} keyframes set`
       }
       const obj = resolveTarget(p.target)

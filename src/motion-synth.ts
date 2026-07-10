@@ -159,14 +159,43 @@ function buildWobble(baseRot: Vec3, duration: number, p: MotionParams): PresetKe
   return sampleTrack(duration, (t) => [rx, ry, rz + Math.sin(t * Math.PI * 2 * cycles) * amp])
 }
 
+function dist3(a: Vec3, b: Vec3): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+}
+
+function lerp3(a: Vec3, b: Vec3, t: number): Vec3 {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
+function lerpAt(a: Vec3, b: Vec3, ta: number, tb: number, t: number): Vec3 {
+  if (Math.abs(tb - ta) < 1e-6) return a
+  return lerp3(a, b, (t - ta) / (tb - ta))
+}
+
+/** Centripetal Catmull-Rom sample between p1→p2 (t in 0..1). */
+function catmullSample(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: number): Vec3 {
+  const t0 = 0
+  const t1 = t0 + Math.sqrt(Math.max(dist3(p0, p1), 1e-4))
+  const t2 = t1 + Math.sqrt(Math.max(dist3(p1, p2), 1e-4))
+  const t3 = t2 + Math.sqrt(Math.max(dist3(p2, p3), 1e-4))
+  const u = t1 + (t2 - t1) * t
+  const a1 = lerpAt(p0, p1, t0, t1, u)
+  const a2 = lerpAt(p1, p2, t1, t2, u)
+  const a3 = lerpAt(p2, p3, t2, t3, u)
+  const b1 = lerpAt(a1, a2, t0, t2, u)
+  const b2 = lerpAt(a2, a3, t1, t3, u)
+  return lerpAt(b1, b2, t1, t2, u)
+}
+
+/** Soft roam: gentle heading changes, curved through waypoints (no zig-zag). */
 function buildWander(base: Vec3, duration: number, p: MotionParams, stage: StageContext): PresetKeyframes {
-  const margin = 0.88
+  const margin = 0.82
   const maxR = stage.radius * margin
   const [cx, , cz] = stage.center
   const [x, y, z] = base
   const seed = p.seed ?? hashVec3(base)
-  const n = Math.max(3, Math.min(8, Math.round(p.waypoints ?? 5)))
-  const bob = p.amplitude ?? maxR * 0.06
+  const n = Math.max(3, Math.min(6, Math.round(p.waypoints ?? 4)))
+  const bob = p.amplitude ?? maxR * 0.04
 
   const wps: Vec3[] = [clampToStageDisc([x, y, z], stage)]
   let relX = x - cx
@@ -174,8 +203,9 @@ function buildWander(base: Vec3, duration: number, p: MotionParams, stage: Stage
   let angle = seededRandom(seed) * Math.PI * 2
 
   for (let i = 0; i < n; i++) {
-    angle += (0.55 + seededRandom(seed + i * 7.1) * 1.35) * (seededRandom(seed + i * 3.3) > 0.5 ? 1 : -1)
-    const step = maxR * (0.18 + seededRandom(seed + i * 11.9) * 0.42)
+    // Soft turns — avoid sharp corner waypoints that read as robotic.
+    angle += (0.25 + seededRandom(seed + i * 7.1) * 0.7) * (seededRandom(seed + i * 3.3) > 0.45 ? 1 : -1)
+    const step = maxR * (0.22 + seededRandom(seed + i * 11.9) * 0.28)
     relX += Math.cos(angle) * step
     relZ += Math.sin(angle) * step
     const dist = Math.hypot(relX, relZ)
@@ -183,30 +213,32 @@ function buildWander(base: Vec3, duration: number, p: MotionParams, stage: Stage
       const k = maxR / dist
       relX *= k
       relZ *= k
+      angle += Math.PI * 0.35
     }
-    const vy = y + (seededRandom(seed + i * 5.5) - 0.35) * bob
+    const vy = y + Math.sin(i * 0.9 + seed) * bob * 0.55
     wps.push(clampToStageDisc([cx + relX, vy, cz + relZ], stage))
   }
 
-  const out: PresetKeyframes = []
   const segments = wps.length - 1
-  const samplesPerSeg = Math.max(4, Math.ceil(SAMPLES / segments))
+  const samplesPerSeg = Math.max(8, Math.ceil((SAMPLES * 1.5) / segments))
+  const out: PresetKeyframes = []
   for (let s = 0; s < segments; s++) {
-    const a = wps[s]
-    const b = wps[s + 1]
-    for (let j = 0; j <= samplesPerSeg; j++) {
+    const p0 = wps[Math.max(0, s - 1)]
+    const p1 = wps[s]
+    const p2 = wps[s + 1]
+    const p3 = wps[Math.min(wps.length - 1, s + 2)]
+    for (let j = 0; j < samplesPerSeg; j++) {
       const local = j / samplesPerSeg
       const globalT = (s + ease(local, 'easeInOut')) / segments
+      const point = catmullSample(p0, p1, p2, p3, local)
+      const floatY = Math.sin(globalT * Math.PI * 2 * 1.25) * bob * 0.35
       out.push({
         time: globalT * duration,
-        value: [
-          a[0] + (b[0] - a[0]) * local,
-          a[1] + (b[1] - a[1]) * local,
-          a[2] + (b[2] - a[2]) * local,
-        ],
+        value: clampToStageDisc([point[0], point[1] + floatY, point[2]], stage),
       })
     }
   }
+  out.push({ time: duration, value: wps[wps.length - 1] })
   return out
 }
 
@@ -317,12 +349,13 @@ function buildZigzag(base: Vec3, duration: number, p: MotionParams, stage: Stage
   const angle = seededRandom(seed + 9.1) * Math.PI * 2
   const dx = Math.cos(angle) * span
   const dz = Math.sin(angle) * span
+  // Soft sine weave — not square-wave left/right snaps.
   return sampleTrack(duration, (t) =>
     clampToStageDisc(
       [
-        x + t * dx,
-        y + (Math.floor(t * cycles * 2) % 2 === 0 ? amp : -amp * 0.5),
-        z + t * dz,
+        x + t * dx + Math.sin(t * Math.PI * 2 * cycles) * amp * Math.cos(angle + Math.PI / 2),
+        y + Math.sin(t * Math.PI * 2 * cycles * 0.5) * amp * 0.25,
+        z + t * dz + Math.sin(t * Math.PI * 2 * cycles) * amp * Math.sin(angle + Math.PI / 2),
       ],
       stage
     )

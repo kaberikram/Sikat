@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from .suggestion_gate import SuggestionGate, GateConfig
 
 if TYPE_CHECKING:
-    from .schema import CommandPacket, SceneState
+    from .schema import CommandPacket, Intent, SceneState
 
 _MAX = 8
 CLARIFY_TIMEOUT_SEC = 20.0
@@ -45,6 +45,17 @@ class PendingClarify:
     created_at: float = field(default_factory=time.monotonic)
 
 
+@dataclass
+class PlanJournalEntry:
+    command_id: str
+    text: str
+    say: str
+    mode: str
+    steps: list[Intent] = field(default_factory=list)
+    packets: list[CommandPacket] = field(default_factory=list)
+    pre_scene: SceneState | None = None
+
+
 def _summarize(intent: Intent) -> str:
     parts = [intent.action]
     if intent.target:
@@ -74,6 +85,7 @@ class SessionContext:
         self.suggestion_gate: SuggestionGate = SuggestionGate(time.monotonic, GateConfig.from_env())
         self._pending_plan: PendingPlan | None = None
         self._plan_cancel: asyncio.Event = asyncio.Event()
+        self.plan_journal: deque[PlanJournalEntry] = deque(maxlen=4)
 
     def note_addressee(self, addressee: int | None) -> None:
         if addressee is not None:
@@ -182,6 +194,7 @@ class SessionContext:
         self.suggestion_gate = SuggestionGate(time.monotonic, GateConfig.from_env())
         self._pending_plan = None
         self._plan_cancel = asyncio.Event()
+        self.plan_journal.clear()
 
     def set_pending_plan(self, plan: PendingPlan) -> None:
         self._pending_plan = plan
@@ -204,6 +217,15 @@ class SessionContext:
 
     def plan_cancelled(self) -> asyncio.Event:
         return self._plan_cancel
+
+    def record_plan(self, entry: PlanJournalEntry) -> None:
+        self.plan_journal.append(entry)
+
+    def latest_plan(self) -> PlanJournalEntry | None:
+        return self.plan_journal[-1] if self.plan_journal else None
+
+    def pop_latest_plan(self) -> PlanJournalEntry | None:
+        return self.plan_journal.pop() if self.plan_journal else None
 
 
 def _server_edit_key(packet: CommandPacket) -> str | None:

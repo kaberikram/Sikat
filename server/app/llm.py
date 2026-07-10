@@ -7,18 +7,21 @@ import logging
 import os
 import re
 import time
-from typing import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
+from typing import AsyncIterator, Awaitable, Callable, Literal
 
 from . import session_context
 from .performers import brief as performers_brief
 from .performers import crew_brief
+from .prompts import build_plan_prompt
 from .scene_context import format_scene_brief
-from .schema import Intent, IntentList, SceneFrame, SceneState
+from .schema import DirectorPlan, Intent, IntentList, PlanMode, PlanStep, SceneFrame, SceneState
 
 log = logging.getLogger("director.llm")
 
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5"
 """Non-reasoning Sonnet — choreo/refine tier. Avoid *-max / extended-thinking IDs."""
+ANTHROPIC_FAST_DEFAULT_MODEL = "claude-haiku-4-5"
 DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 """Fast tier — reserved for optional future preview helpers; not used for animate refine."""
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -287,6 +290,38 @@ def select_provider(frame: SceneFrame | None = None) -> str | None:
     return None
 
 
+def select_tier(
+    frame: SceneFrame | None,
+    *,
+    escalated: bool,
+) -> tuple[Literal["anthropic", "deepseek"], str] | None:
+    """Select the planning tier.
+
+    The normal agent loop uses Anthropic vision-capable models. DeepSeek remains
+    an explicit compatibility path for keyless deployments only.
+    """
+    override = os.environ.get("DIRECTOR_LLM_PROVIDER", "").strip().lower()
+    if override == "none":
+        return None
+    if override == "deepseek":
+        if frame is not None:
+            log.warning("DeepSeek planning cannot use a vision frame")
+            return None
+        if not os.environ.get("DEEPSEEK_API_KEY"):
+            return None
+        return "deepseek", os.environ.get("DIRECTOR_FAST_MODEL", DEEPSEEK_DEFAULT_MODEL)
+    if override not in ("", "anthropic"):
+        log.warning("unknown DIRECTOR_LLM_PROVIDER %r; using Anthropic planning", override)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    if escalated:
+        return "anthropic", os.environ.get(
+            "DIRECTOR_STRONG_MODEL",
+            os.environ.get("DIRECTOR_QUALITY_MODEL", ANTHROPIC_DEFAULT_MODEL),
+        )
+    return "anthropic", os.environ.get("DIRECTOR_FAST_MODEL", ANTHROPIC_FAST_DEFAULT_MODEL)
+
+
 def _model_for(provider: str) -> str:
     if provider == "deepseek":
         return os.environ.get(
@@ -391,10 +426,10 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
 _JSON_SCHEMA_HINT = """
 Respond with a single JSON object of exactly this shape:
 {"intents": [ {"action": "<one of the actions above>", "say": "<in-character radio line>", ...only relevant fields...}, ... ]}
-Example for "add a blue sphere and make it wander":
+Example for "add a blue sphere and make it float":
 {"intents": [
   {"action": "spawn", "primitive": "sphere", "color": "#0a84ff", "say": "sphere in, blue, stage left"},
-  {"action": "animate", "target": "SPHERE_SPAWN", "motion": "wander", "motion_params": {"waypoints": 5}, "say": "wandering the floor, five stops"}
+  {"action": "animate", "target": "SPHERE_SPAWN", "motion": "float", "motion_params": {"amplitude": 0.4, "frequency": 1.4}, "animate_repeat": true, "say": "gentle hover on the blue"}
 ]}
 If nothing is actionable, respond with {"intents": []}. Output JSON only."""
 
@@ -612,6 +647,59 @@ def extract_complete_intents(buffer: str, consumed: int) -> tuple[list[str], int
     return slices, new_consumed
 
 
+def extract_complete_array_items(
+    buffer: str,
+    consumed: int,
+    *,
+    key: str = "steps",
+) -> tuple[list[str], int]:
+    """Return completed object slices only from the requested top-level array."""
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*\[', buffer)
+    if not match:
+        return [], consumed
+    array_start = buffer.find("[", match.start(), match.end())
+    if array_start < 0:
+        return [], consumed
+
+    slices: list[str] = []
+    depth = 0
+    in_string = False
+    escape = False
+    object_start: int | None = None
+    new_consumed = consumed
+    for index in range(array_start, len(buffer)):
+        char = buffer[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "[":
+            depth += 1
+        elif char == "{":
+            if depth == 1:
+                object_start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 1 and object_start is not None:
+                end = index + 1
+                if end > consumed:
+                    slices.append(buffer[object_start:end])
+                    new_consumed = end
+                object_start = None
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                break
+    return slices, new_consumed
+
+
 def _validate_intent_slice(raw: str) -> Intent | None:
     try:
         return Intent.model_validate_json(raw)
@@ -633,6 +721,127 @@ def extract_partial_preview_fields(buffer: str) -> dict[str, str | int] | None:
     if len(fields) < 2:
         return None
     return fields
+
+
+@dataclass(frozen=True)
+class Say:
+    text: str
+
+
+@dataclass(frozen=True)
+class Meta:
+    mode: PlanMode
+    needs_deeper_creativity: bool
+
+
+@dataclass(frozen=True)
+class Step:
+    step: PlanStep
+
+
+@dataclass(frozen=True)
+class Done:
+    plan: DirectorPlan
+
+
+PlanEvent = Say | Meta | Step | Done
+
+
+def _extract_plan_meta(buffer: str) -> Meta | None:
+    mode_match = re.search(r'"mode"\s*:\s*"(execute|pitch|amend|surprise)"', buffer)
+    creativity_match = re.search(r'"needs_deeper_creativity"\s*:\s*(true|false)', buffer)
+    if not mode_match or not creativity_match:
+        return None
+    return Meta(
+        mode=mode_match.group(1),  # type: ignore[arg-type]
+        needs_deeper_creativity=creativity_match.group(1) == "true",
+    )
+
+
+def _extract_plan_say(buffer: str) -> str | None:
+    match = re.search(r'"say"\s*:\s*"((?:\\.|[^"\\])*)"', buffer)
+    if not match:
+        return None
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        return None
+
+
+async def stream_plan(
+    text: str,
+    scene: SceneState | None,
+    frame: SceneFrame | None = None,
+    *,
+    tier: Literal["fast", "strong"] = "fast",
+    extra_context: str | None = None,
+    adjustment: bool = False,
+) -> AsyncIterator[PlanEvent]:
+    """Stream one DirectorPlan, yielding fields as soon as they close."""
+    selection = select_tier(frame, escalated=tier == "strong")
+    if selection is None:
+        return
+    provider, model = selection
+    if provider == "deepseek":
+        # Compatibility tier: DeepSeek only supports the legacy intent stream,
+        # so adapt it to a single execute plan rather than exposing a second
+        # execution path to Producer.
+        yield Meta(mode="execute", needs_deeper_creativity=False)
+        async for intent in stream_intents(text, scene, frame):
+            yield Step(PlanStep.model_validate(intent.model_dump()))
+        yield Done(DirectorPlan(mode="execute"))
+        return
+    client = get_async_anthropic_client()
+    if client is None:
+        return
+
+    buffer = ""
+    consumed = 0
+    yielded_say = False
+    yielded_meta = False
+    started = time.monotonic()
+    try:
+        system = build_plan_prompt(
+            scene,
+            _history_section(),
+            tier=tier,
+            amend_context=extra_context,
+            adjustment=adjustment,
+        )
+        async with client.messages.stream(
+            model=model,
+            max_tokens=4096 if tier == "strong" else 1200,
+            system=system,
+            messages=[{"role": "user", "content": _build_user_content(text, frame)}],
+        ) as stream:
+            async for chunk in stream.text_stream:
+                buffer += chunk
+                if not yielded_say:
+                    say = _extract_plan_say(buffer)
+                    if say:
+                        yielded_say = True
+                        yield Say(say)
+                if not yielded_meta:
+                    meta = _extract_plan_meta(buffer)
+                    if meta is not None:
+                        yielded_meta = True
+                        yield meta
+                        if meta.needs_deeper_creativity:
+                            return
+                slices, consumed = extract_complete_array_items(buffer, consumed)
+                for raw in slices:
+                    try:
+                        yield Step(PlanStep.model_validate_json(raw))
+                    except Exception:
+                        log.warning("skipping invalid streamed plan step: %s", raw[:160])
+        try:
+            yield Done(DirectorPlan.model_validate_json(buffer))
+        except Exception:
+            log.warning("plan stream ended without a valid DirectorPlan")
+    except Exception:
+        log.exception("stream_plan failed")
+    finally:
+        log.info("stream_plan %s (%s) finished in %.2fs", tier, model, time.monotonic() - started)
 
 
 async def _stream_anthropic(

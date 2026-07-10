@@ -126,6 +126,9 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
     async def emit_preview(payload: dict) -> None:
         await manager.broadcast(payload)
 
+    async def emit_plan_update(payload: dict) -> None:
+        await manager.broadcast(payload)
+
     async def emit_cancel(payload: dict) -> None:
         await manager.broadcast(payload)
 
@@ -156,6 +159,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             emit_cancel=emit_cancel,
             emit_question=emit_question,
             emit_suggest=emit_suggest,
+            emit_plan_update=emit_plan_update,
         )
         if not packets and not describe_only:
             # Soft miss: crew redirect, not a hard error (open speech / miss).

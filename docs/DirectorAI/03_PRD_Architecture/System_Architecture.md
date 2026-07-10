@@ -8,10 +8,12 @@
 2. **Grounding** — `scene-state-sync.ts` streams debounced (300 ms) scene snapshots
    (object ids/names/transforms, camera, playback state) so agents can resolve
    "the sphere" to `CORE_SPHERE`.
-3. **Parse** — Director's Assistant (`agents/directors_assistant.py`): Anthropic
-   structured outputs when `ANTHROPIC_API_KEY` is set; otherwise (or on any
-   failure) the deterministic grammar in `fallback_parser.py`. Output: `Intent[]`.
-4. **Route + build** — Producer maps each intent to a specialist; specialists are
+3. **Plan** — `llm.stream_plan` sends the full utterance to the fast Anthropic
+   tier and streams one `DirectorPlan` (`say`, mode, steps); it escalates to
+   Sonnet for bespoke choreography. Pure complete grammar commands bypass the
+   planner, while keyless operation uses `fallback_parser.py`.
+4. **Route + build** — `PlanRunner` stages each `PlanStep` through Producer;
+   specialists are
    pure Python that emit pydantic-validated `CommandPacket`s (units converted,
    values clamped). `set_scene` moods expand server-side into lights+FX batches.
 5. **Multicast** — `main.py` broadcasts `agent_log` breadcrumbs and `agent_command`

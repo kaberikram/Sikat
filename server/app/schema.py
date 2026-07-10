@@ -640,6 +640,41 @@ def intent_preview_message(
     }
 
 
+PlanUpdateStatus = Literal[
+    "planning",
+    "escalating",
+    "step_start",
+    "step_done",
+    "adjusting",
+    "pitched",
+    "done",
+]
+
+
+def plan_update_message(
+    command_id: str,
+    *,
+    status: PlanUpdateStatus,
+    say: str | None = None,
+    mode: str | None = None,
+    step_index: int | None = None,
+    steps_total: int | None = None,
+    step_label: str | None = None,
+) -> dict:
+    """Progress from the Director planning loop; not a CommandPacket."""
+    return {
+        "type": "plan_update",
+        "timestamp": now(),
+        "commandId": command_id,
+        "status": status,
+        "say": say,
+        "mode": mode,
+        "stepIndex": step_index,
+        "stepsTotal": steps_total,
+        "stepLabel": step_label,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Director's Assistant intermediate representation
 # ---------------------------------------------------------------------------
@@ -742,3 +777,21 @@ class Intent(BaseModel):
 
 class IntentList(BaseModel):
     intents: list[Intent] = Field(default_factory=list)
+
+
+PlanMode = Literal["execute", "pitch", "amend", "surprise"]
+
+
+class PlanStep(Intent):
+    """One executable instruction in a whole-utterance Director plan."""
+
+    agent: str | None = None
+
+
+class DirectorPlan(BaseModel):
+    """The streamed planning envelope emitted by the Director LLM."""
+
+    say: str | None = None
+    mode: PlanMode = "execute"
+    needs_deeper_creativity: bool = False
+    steps: list[PlanStep] = Field(default_factory=list, max_length=6)
