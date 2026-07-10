@@ -232,3 +232,48 @@ def test_clause_split_semicolon():
 
 def test_fx_substring_non_match():
     assert parse("stage wash rig") == []
+
+
+def test_scene_too_bright_dims_not_brightens():
+    # Complaint + fix verb in the same clause (no comma) — cross-clause
+    # merging of a separate complaint/fix pair is out of scope for grammar.
+    (i,) = parse("reduce the too bright lights")
+    assert i.action == "update_lights"
+    assert i.ambient_intensity == 0.3
+    assert i.key_intensity == 0.7
+
+
+def test_too_dark_brightens_not_dims():
+    (i,) = parse("fix the way too dark lighting")
+    assert i.action == "update_lights"
+    assert i.ambient_intensity == 1.0
+    assert i.key_intensity == 2.2
+
+
+def test_make_it_brighter_still_increases():
+    (i,) = parse("make it brighter")
+    assert i.action == "update_lights"
+    assert i.ambient_intensity == 1.0
+    assert i.key_intensity == 2.2
+
+
+def test_bloom_too_much_reduces_without_explicit_synonym():
+    (i,) = parse("bloom too much, reduce it")
+    assert i.action == "update_fx"
+    assert i.section == "bloom"
+    strength = next(s.value for s in i.fx_set if s.key == "strength")
+    assert 0.4 < strength < 1.8
+
+
+def test_way_too_much_bloom_reduces_further_than_a_little():
+    (i,) = parse("bloom is way too much")
+    (j,) = parse("bloom is a little too much")
+    strength_i = next(s.value for s in i.fx_set if s.key == "strength")
+    strength_j = next(s.value for s in j.fx_set if s.key == "strength")
+    assert strength_i < strength_j
+
+
+def test_reduce_bloom_unchanged_snaps_to_low():
+    (i,) = parse("reduce bloom")
+    strength = next(s.value for s in i.fx_set if s.key == "strength")
+    assert strength == 0.4

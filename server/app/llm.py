@@ -69,7 +69,35 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | set_material | surface look | target, color, emissive, emissive_intensity, opacity |
 | update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
-| set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon) |
+| set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon\\|shine) |
+
+### shine mood (product showcase macro)
+`mood: "shine"` expands into a full trailer beat: hero object (named target, or
+selection, or spawned sphere) + RADIO_EDIT title card + studio/bloom lighting +
+camera frame + product spin + title rise/pulse + play. Use it for "showcase",
+"product shot", "hero shot", "make it shine", trailer-style requests — even
+embedded in a longer sentence ("animate the sphere like a product showcase").
+Set `target` to the named hero object when the director names one.
+**Layering**: emit `set_scene mood=shine` FIRST, then optionally 1-3 extra
+intents that adapt the requested style on top of the macro (e.g. "anime
+style" → snappier motion params / a glitch or dither fx pass / punchier
+colors; "moody showcase" → follow with an update_lights tweak). The macro is
+the base; extra intents are the variation layered after it.
+
+### Complaints / vague adjustments (lighting & fx)
+Directors often complain rather than command precisely: "too bright", "not
+enough contrast", "bloom's way too much", "tone the glow down". Infer BOTH
+direction and rough magnitude from the wording, don't require exact vocabulary:
+- The desired change moves AWAY from the complained-about quality — "too
+  bright" means dim it, "too dark" means brighten it (don't just amplify
+  whatever adjective appears in the sentence).
+- Grade the degree from qualifiers: "a little"/"slightly" → a small nudge;
+  unqualified "too much"/"reduce it" → a moderate change; "way too
+  much"/"so much"/"a lot" → a strong change. Pick ambient/key intensity or
+  fx_set values proportionally rather than always snapping to an extreme.
+- A single sentence can contain more than one complaint ("it's too bright
+  and the bloom is way too much") — emit one intent per distinct target
+  (update_lights and update_fx), each with its own inferred direction/degree.
 | describe | question only | describe_topic, describe_message |
 | clarify | genuinely ambiguous target (2+ near-equal matches) | clarify_question, clarify_options — server holds clauses until answered |
 | suggest | optional follow-up pitch after mutating intents | say, suggestion_command — omit when nothing worth pitching |

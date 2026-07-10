@@ -69,15 +69,25 @@ def _light_fx_packets() -> list[CommandPacket]:
     return packets
 
 
-def resolve_hero(scene: SceneState | None) -> tuple[ObjectSnapshot | None, str]:
-    """Returns (existing hero object or None, hero name to use/spawn)."""
+def resolve_hero(
+    scene: SceneState | None, target: str | None = None
+) -> tuple[ObjectSnapshot | None, str]:
+    """Returns (existing hero object or None, hero name to use/spawn).
+
+    An explicit ``target`` (e.g. resolved from "shine the blue ball") wins
+    over the scene's current selection or the session's last-touched object.
+    """
+    if target and scene:
+        obj = next((o for o in scene.objects if o.name == target), None)
+        if obj:
+            return obj, obj.name
     if scene and scene.selectedId:
         obj = next((o for o in scene.objects if o.id == scene.selectedId), None)
         if obj:
             return obj, obj.name
-    target = session_context.last_target()
-    if target and scene:
-        obj = next((o for o in scene.objects if o.name == target), None)
+    session_target = session_context.last_target()
+    if session_target and scene:
+        obj = next((o for o in scene.objects if o.name == session_target), None)
         if obj:
             return obj, obj.name
     return None, HERO_SPAWN_NAME
@@ -89,8 +99,8 @@ def _hero_position(hero: ObjectSnapshot | None) -> Vec3:
     return hero.sampled.position
 
 
-def shine_packets(scene: SceneState | None) -> list[CommandPacket]:
-    hero, hero_name = resolve_hero(scene)
+def shine_packets(scene: SceneState | None, target: str | None = None) -> list[CommandPacket]:
+    hero, hero_name = resolve_hero(scene, target)
     hero_pos = _hero_position(hero)
 
     packets: list[CommandPacket] = []

@@ -91,7 +91,37 @@ MOOD_WORDS: dict[str, str] = {
     "shine": "shine",
     "showcase": "shine",
     "product showcase": "shine",
+    "hero shot": "shine",
+    "product shot": "shine",
 }
+
+# Words whose bare mood mapping (bright->studio, dark->noir) conflicts with
+# _parse_lights' own vocabulary — skip the mood claim when the clause is
+# complaining about brightness/darkness rather than naming an aesthetic.
+_MOOD_LIGHT_WORDS = ("bright", "dark")
+_MOOD_TRIGGER = re.compile(
+    r"\b(mood|scene|vibe|look|feel|feels?|lighting|atmosphere|make it|style|showcase|shot)\b"
+)
+_COMPLAINT_FRAME = re.compile(r"\b(too|way too|much too|so)\b")
+
+# FX complaint framing: "too much bloom" / "way too heavy" / "tone it down" —
+# always means reduce, regardless of which intensity word (heavy/strong) is used.
+_FX_COMPLAINT = re.compile(
+    r"\b(too much|way too much|far too much|much too much|too heavy|too strong|"
+    r"excessive|overdone|tone (?:it )?down|dial (?:it )?back)\b"
+)
+_DEGREE_MILD = re.compile(r"\b(a bit|a little|slightly|somewhat)\b")
+_DEGREE_STRONG = re.compile(r"\b(a lot|way too much|far too much|much too much|so much|way too)\b")
+
+
+def _complaint_degree(clause: str) -> float:
+    """Graded amount (0-1) for a complaint/adjustment, reusing the same small
+    qualifier vocabulary _parse_amendment uses for transform nudges."""
+    if _DEGREE_STRONG.search(clause):
+        return 1.0
+    if _DEGREE_MILD.search(clause):
+        return 0.35
+    return 0.75
 
 DIRECTIONS: dict[str, tuple[float, float, float]] = {
     "up": (0, 1, 0),
@@ -326,16 +356,23 @@ def _parse_playback(
 
 
 def _parse_mood(
-    clause: str, _scene: SceneState | None, _transition: Transition | None
+    clause: str, scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
     for word, mood in MOOD_WORDS.items():
-        if re.search(rf"\b{word}\b", clause) and (
-            clause == word
-            or re.search(
-                r"\b(mood|scene|vibe|look|feel|feels?|lighting|atmosphere|make it)\b", clause
-            )
-        ):
-            return Intent(action="set_scene", mood=mood)
+        if word in _MOOD_LIGHT_WORDS and _COMPLAINT_FRAME.search(clause):
+            # "too bright" / "way too dark" is a lighting complaint, not a
+            # mood pick — let _parse_lights handle it with correct polarity.
+            continue
+        if not re.search(rf"\b{word}\b", clause):
+            continue
+        multi_word = " " in word
+        starts_with = clause.startswith(word) and len(clause) > len(word)
+        if not (clause == word or multi_word or starts_with or _MOOD_TRIGGER.search(clause)):
+            continue
+        intent = Intent(action="set_scene", mood=mood)
+        if mood == "shine":
+            intent.target = _find_target(clause, scene)
+        return intent
     return None
 
 
@@ -351,7 +388,13 @@ def _parse_fx(
             elif re.search(r"\b(on|enable|add|activate|show|start|turn on|with)\b", clause):
                 enabled = True
             primary, high, low = PRIMARY_FX_PARAM[section]
-            if re.search(r"\b(more|boost|increase|crank|heavy|stronger)\b", clause):
+            if _FX_COMPLAINT.search(clause):
+                # "too much bloom" / "tone down the bloom" — always a reduction,
+                # even though the clause may also contain "heavy"/"strong".
+                enabled = True
+                degree = _complaint_degree(clause)
+                settings.append(FxSetting(key=primary, value=round(high - (high - low) * degree, 3)))
+            elif re.search(r"\b(more|boost|increase|crank|heavy|stronger)\b", clause):
                 enabled = True
                 settings.append(FxSetting(key=primary, value=high))
             elif re.search(r"\b(less|reduce|decrease|subtle|lighter|weaker)\b", clause):
@@ -387,8 +430,21 @@ def _parse_lights(
         intent.background = color or "#111111"
         return intent
     touched = False
+    # A complaint flips the direction implied by the bare word: "too bright"
+    # means dim it, "too dark" means brighten it — the opposite of what the
+    # plain dim/bright branches below would do if they just matched the word.
+    complaint_bright = bool(re.search(r"\b(too|way too|much too|so)\s+bright(?:er)?\b", clause))
+    complaint_dark = bool(
+        re.search(r"\b(too|way too|much too|so)\s+(dark(?:er)?|dim(?:mer)?)\b", clause)
+    )
     if re.search(r"\b(off|kill)\b", clause):
         intent.ambient_intensity, intent.key_intensity = 0.05, 0.0
+        touched = True
+    elif complaint_bright:
+        intent.ambient_intensity, intent.key_intensity = 0.3, 0.7
+        touched = True
+    elif complaint_dark:
+        intent.ambient_intensity, intent.key_intensity = 1.0, 2.2
         touched = True
     elif re.search(r"\b(dim|dimmer|dark|darker|lower|down|less)\b", clause):
         intent.ambient_intensity, intent.key_intensity = 0.3, 0.7
@@ -740,7 +796,11 @@ def _parse_describe(
     elif re.search(r"\bhow does (this|it) look\b", clause):
         topic = "scene"
     elif re.search(r"\btoo (dark|bright|moody|flat)\b", clause):
-        if re.search(r"\b(fix|warm|cool|dim|brighten|lighter|darker|adjust)\b", clause):
+        if re.search(
+            r"\b(fix|warm|cool|dim|brighten|lighter|darker|adjust|reduce|decrease|less|"
+            r"lower|tone down|dial back)\b",
+            clause,
+        ):
             return None
         topic = "scene"
     else:

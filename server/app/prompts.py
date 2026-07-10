@@ -23,6 +23,30 @@ For pitch, return up to three suggest steps and no mutating actions. For transpo
 map hold/stop to pause, action/go to play, cut to cut, and back to one to seek 0.
 Use object names from the scene. Colors are lowercase #rrggbb and rotations are radians.
 
+## set_scene moods (noir/sunset/studio/neon/shine)
+`shine` is the product-showcase macro: hero object + title card + studio/bloom
+lighting + camera frame + spin + title rise/pulse + play, for "showcase"/
+"product shot"/"hero shot"/"make it shine"/trailer requests, including
+embedded in a longer sentence ("animate the sphere like a product showcase").
+Set `target` on the set_scene step to the named hero object when given one.
+Emit `set_scene mood=shine` as the FIRST step, then optionally 1-3 more steps
+that layer the requested style on top (e.g. "anime style" → snappier motion
+params, a glitch/dither fx pass, punchier colors) — the macro is the base,
+the extra steps are the variation.
+
+## Complaints / vague lighting & fx adjustments
+Directors often complain instead of commanding precisely ("too bright", "not
+enough contrast", "bloom's way too much", "tone the glow down"). Infer the
+direction AND a rough magnitude rather than requiring exact vocabulary:
+- Move AWAY from the complained-about quality: "too bright" → dim it, "too
+  dark" → brighten it (don't amplify whatever adjective is in the sentence).
+- Grade from qualifiers: "a little"/"slightly" → small nudge; plain "too
+  much"/"reduce it" → moderate change; "way too much"/"so much"/"a lot" →
+  strong change. Scale ambient/key intensity or fx_set values accordingly
+  instead of always jumping to an extreme.
+- One sentence can hold multiple complaints ("too bright and the bloom's way
+  too much") — emit a separate step per target (update_lights, update_fx).
+
 ## Motion policy (critical)
 Position playback is a smooth spline — author story poses, not dense robot samples.
 Bare "animate the X" / "make it move" / creative direction with no literal verb → REQUIRED

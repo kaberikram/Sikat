@@ -180,7 +180,7 @@ class Producer:
                 packets.append(PlaybackPacket(payload=PlaybackPayload(action="pause")))
             return packets
         if intent.action == "set_scene" and intent.mood == "shine":
-            return shine_packets(scene)
+            return shine_packets(scene, target=intent.target)
         if intent.action == "set_scene" and intent.mood:
             packets = mood_packets(intent.mood)
             if not packets:
