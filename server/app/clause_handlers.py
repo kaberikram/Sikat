@@ -88,6 +88,9 @@ MOOD_WORDS: dict[str, str] = {
     "minimal": "studio",
     "vibrant": "neon",
     "bright": "studio",
+    "shine": "shine",
+    "showcase": "shine",
+    "product showcase": "shine",
 }
 
 DIRECTIONS: dict[str, tuple[float, float, float]] = {
