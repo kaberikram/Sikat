@@ -10,7 +10,9 @@ import re
 # (pattern, replacement) — applied in order.
 _PHRASE_SUBS: list[tuple[re.Pattern[str], str]] = [
     # Camera shorthand
-    (re.compile(r"\b(close[- ]up|tight(?:er)? shot|hero shot)\b"), "zoom in"),
+    # "hero shot"/"product shot" are left alone here — they're product-showcase
+    # language (see MOOD_WORDS in clause_handlers.py), not a camera zoom.
+    (re.compile(r"\b(close[- ]up|tight(?:er)? shot)\b"), "zoom in"),
     (re.compile(r"\b(wide(?:r)? shot|wide angle|establishing shot)\b"), "zoom out"),
     (re.compile(r"\bframe (?:the |a )?"), "camera look at the "),
     (re.compile(r"\bpoint (?:the )?camera at (?:the )?"), "camera look at the "),
