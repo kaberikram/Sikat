@@ -19,6 +19,7 @@ import {
   CURSOR_SETTLE_MS,
   CURSOR_MOTION_FADE_MS,
   CURSOR_FADE_MS,
+  CURSOR_GUESS_TIMEOUT_MS,
 } from './presence'
 import { useEditorStore } from '../store'
 import type {
@@ -65,11 +66,38 @@ const lingerTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const suggestionGlance = new Set<string>()
 const commandSteering = new Map<string, CommandSteering>()
 const lastGuessByCommand = new Map<string, string>()
+const guessTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function clearLingerTimer(agent: string): void {
   const t = lingerTimers.get(agent)
   if (t) clearTimeout(t)
   lingerTimers.delete(agent)
+}
+
+function clearGuessTimer(commandId: string): void {
+  const timer = guessTimers.get(commandId)
+  if (timer) clearTimeout(timer)
+  guessTimers.delete(commandId)
+}
+
+function clearGuessTimersForAgent(agent: string): void {
+  for (const [commandId, steering] of commandSteering) {
+    if (steering.agent === agent) clearGuessTimer(commandId)
+  }
+}
+
+function armGuessWatchdog(commandId: string): void {
+  clearGuessTimer(commandId)
+  guessTimers.set(
+    commandId,
+    setTimeout(() => {
+      guessTimers.delete(commandId)
+      const steering = commandSteering.get(commandId)
+      if (!steering || steering.confidenceRank > CONFIDENCE_RANK.client_guess) return
+      idleGuessedAgent(commandId)
+      logger('SYSTEM', 'no response — check the Director server', 'warn')
+    }, CURSOR_GUESS_TIMEOUT_MS)
+  )
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -148,10 +176,11 @@ function commitSteering(
   if (!cursorVisible(agent)) return
 
   const presence = presenceStore.getState()
+  const confirmed = conf !== 'client_guess' && conf !== 'guess'
   presence.setActive(agent, true)
-  presence.setNote(agent, note)
 
   if (!commandId) {
+    presence.setNote(agent, note, confirmed)
     presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
     return
   }
@@ -161,11 +190,10 @@ function commitSteering(
 
   if (existing) {
     if (rank < existing.confidenceRank) {
-      if (agent === existing.agent) presence.setNote(agent, note)
       return
     }
     if (rank === existing.confidenceRank && agent === existing.agent) {
-      presence.setNote(agent, note)
+      presence.setNote(agent, note, confirmed)
       return
     }
     if (existing.agent !== agent) {
@@ -175,6 +203,9 @@ function commitSteering(
 
   commandSteering.set(commandId, { agent, confidenceRank: rank })
   lastGuessByCommand.set(commandId, agent)
+  presence.setNote(agent, note, confirmed)
+  if (confirmed) clearGuessTimer(commandId)
+  else armGuessWatchdog(commandId)
   presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
 }
 
@@ -189,6 +220,7 @@ function handoffSteeringToPacket(commandId: string | null | undefined, agent: st
   }
   commandSteering.set(commandId, { agent, confidenceRank: PACKET_CONFIDENCE_RANK })
   lastGuessByCommand.set(commandId, agent)
+  clearGuessTimer(commandId)
 }
 
 /** Object id this packet addresses, for barge-in supersede matching. Only
@@ -244,6 +276,7 @@ export function cancelCommand(msg: CommandCancelMessage): void {
     if (queue.length === 0) queues.delete(agent)
   }
 
+  clearGuessTimer(msg.commandId)
   commandSteering.delete(msg.commandId)
   lastGuessByCommand.delete(msg.commandId)
 }
@@ -293,7 +326,9 @@ export function markAgentActive(agent: string, note?: string | null): void {
   if (!cursorVisible(agent)) return
   const presence = presenceStore.getState()
   presence.setActive(agent, true)
-  if (note != null) presence.setNote(agent, note)
+  clearGuessTimersForAgent(agent)
+  presence.setPhase(agent, 'intent')
+  if (note != null) presence.setNote(agent, note, true)
 }
 
 function targetPositionForGuess(guess: IntentGuess): Vec3 {
@@ -330,6 +365,7 @@ export function applyIntentPreview(msg: IntentPreviewMessage): void {
 }
 
 export function idleGuessedAgent(commandId: string): void {
+  clearGuessTimer(commandId)
   const agent = lastGuessByCommand.get(commandId)
   if (agent) markAgentIdle(agent)
   lastGuessByCommand.delete(commandId)
@@ -339,6 +375,7 @@ export function idleGuessedAgent(commandId: string): void {
 export function markAgentIdle(agent: string): void {
   if (!cursorVisible(agent)) return
   if (suggestionGlance.has(agent)) return
+  clearGuessTimersForAgent(agent)
   const queued = queues.get(agent)?.length ?? 0
   if (!running.has(agent) && queued === 0) {
     scheduleAgentFadeOut(agent)
@@ -419,7 +456,7 @@ async function runAgent(agent: string): Promise<void> {
     inFlight.set(flightKey, abort)
 
     const serverNote = presence.agents[agent]?.note
-    presence.setNote(agent, serverNote ?? noteForPacket(packet))
+    presence.setNote(agent, serverNote ?? noteForPacket(packet), true)
 
     try {
       if (packet.refinement) {
@@ -488,6 +525,7 @@ async function runAgent(agent: string): Promise<void> {
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         logger(agent, `cancelled ${packet.command}`, 'info')
+        presence.setNote(agent, null)
         continue
       }
       throw e
@@ -511,4 +549,6 @@ export function resetAgentRuntime(): void {
   lastGuessByCommand.clear()
   for (const t of lingerTimers.values()) clearTimeout(t)
   lingerTimers.clear()
+  for (const t of guessTimers.values()) clearTimeout(t)
+  guessTimers.clear()
 }

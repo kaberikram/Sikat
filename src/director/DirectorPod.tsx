@@ -37,6 +37,7 @@ interface LogEntry {
 }
 
 const MAX_LOG = 40
+const COMMAND_INPUT_TIMEOUT_MS = 30_000
 let logCounter = 0
 
 const STATUS_COLORS: Record<SocketStatus, string> = {
@@ -81,7 +82,10 @@ export function DirectorPod() {
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
   const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionMessage | null>(null)
   const [pendingSuggestion, setPendingSuggestion] = useState<AgentSuggestionMessage | null>(null)
+  const [isProcessingCommand, setIsProcessingCommand] = useState(false)
   const suggestionExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingCommandIdsRef = useRef(new Set<string>())
+  const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -107,6 +111,23 @@ export function DirectorPod() {
     ])
   }, [])
 
+  const completeCommand = useCallback((commandId: string) => {
+    const timer = pendingCommandTimersRef.current.get(commandId)
+    if (timer) clearTimeout(timer)
+    pendingCommandTimersRef.current.delete(commandId)
+    pendingCommandIdsRef.current.delete(commandId)
+    setIsProcessingCommand(pendingCommandIdsRef.current.size > 0)
+  }, [])
+
+  const trackCommand = useCallback((commandId: string) => {
+    pendingCommandIdsRef.current.add(commandId)
+    setIsProcessingCommand(true)
+    const previousTimer = pendingCommandTimersRef.current.get(commandId)
+    if (previousTimer) clearTimeout(previousTimer)
+    const timer = setTimeout(() => completeCommand(commandId), COMMAND_INPUT_TIMEOUT_MS)
+    pendingCommandTimersRef.current.set(commandId, timer)
+  }, [completeCommand])
+
   useMountEffect(() => {
     const socket = getDirectorSocket()
     const offStatus = socket.onStatus(setStatus)
@@ -126,6 +147,7 @@ export function DirectorPod() {
     })
     const offCancel = socket.onCancel((msg) => {
       cancelCommand(msg)
+      completeCommand(msg.commandId)
       pushLog('SYSTEM', `cancelled ${msg.commandId}${msg.reason ? ` (${msg.reason})` : ''}`, 'info')
     })
     const offQuestion = socket.onQuestion((msg) => {
@@ -152,13 +174,18 @@ export function DirectorPod() {
         else if (msg.note) pushLog('PRODUCER', msg.note)
       } else if (msg.agent !== 'Producer') {
         markAgentIdle(msg.agent)
+      } else if (msg.forCommandId) {
+        completeCommand(msg.forCommandId)
       }
     })
     const offLog = socket.onLog((msg) => {
       if (isBlockedCrewLog(msg.message)) return
       pushLog(msg.agent, msg.message, msg.level)
     })
-    const offError = socket.onError((msg) => pushLog('SERVER', msg.message, 'error'))
+    const offError = socket.onError((msg) => {
+      if (msg.forCommandId) completeCommand(msg.forCommandId)
+      pushLog('SERVER', msg.message, 'error')
+    })
     startSceneStateSync(socket)
     const stopTakeRecorder = startTakeRecorder()
     socket.connect()
@@ -205,6 +232,9 @@ export function DirectorPod() {
       stopTakeRecorder()
       stopMicRef.current() // tear down any live mic on unmount
       if (suggestionExpiryRef.current) clearTimeout(suggestionExpiryRef.current)
+      for (const timer of pendingCommandTimersRef.current.values()) clearTimeout(timer)
+      pendingCommandTimersRef.current.clear()
+      pendingCommandIdsRef.current.clear()
     }
   })
 
@@ -212,12 +242,27 @@ export function DirectorPod() {
     text: string,
     opts?: { forceVision?: boolean; commandId?: string }
   ) => {
-    const result = await submitDirectorCommand(text, {
-      ...opts,
-      log: pushLog,
-    })
-    if (result.ok) setInput('')
-  }, [pushLog])
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const commandId = opts?.commandId ?? crypto.randomUUID()
+    setInput('')
+    trackCommand(commandId)
+    try {
+      const result = await submitDirectorCommand(trimmed, {
+        ...opts,
+        commandId,
+        log: pushLog,
+      })
+      if (!result.ok || result.local) completeCommand(commandId)
+    } catch (error) {
+      completeCommand(commandId)
+      pushLog(
+        'DIRECTOR',
+        error instanceof Error ? error.message : 'command submission failed',
+        'error'
+      )
+    }
+  }, [completeCommand, pushLog, trackCommand])
 
   const stopMic = useCallback(() => {
     stopVoiceSession()
@@ -392,6 +437,7 @@ export function DirectorPod() {
 
         <form
           className="flex border-t-2 border-black"
+          aria-busy={isProcessingCommand}
           onSubmit={(e) => {
             e.preventDefault()
             submit(input)
@@ -425,7 +471,14 @@ export function DirectorPod() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={interim || (listening ? 'listening…' : PLACEHOLDERS[placeholderIdx])}
+            placeholder={
+              interim ||
+              (listening
+                ? 'listening…'
+                : isProcessingCommand
+                  ? 'crew is working…'
+                  : PLACEHOLDERS[placeholderIdx])
+            }
             className="flex-1 px-2 py-1.5 text-[10px] font-mono outline-none min-w-0"
           />
           {speechAvailable && (

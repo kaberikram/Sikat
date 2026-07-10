@@ -17,9 +17,10 @@ import type { Vec3 } from './protocol'
 export const CURSOR_FLIGHT_MS = 450 // glide from the previous spot to the target
 export const CURSOR_INTENT_MS = 200 // fast drift during pre-parse acknowledgment
 export const CURSOR_WORK_MS = 120 // hover on target before the change commits
-export const CURSOR_SETTLE_MS = 140 // linger after committing before the next task
+export const CURSOR_SETTLE_MS = 240 // linger after committing so DONE + check reads
 export const CURSOR_MOTION_FADE_MS = 600 // brief tail after motion work, then gone
 export const CURSOR_FADE_MS = 1200 // brief tail after other work, then gone
+export const CURSOR_GUESS_TIMEOUT_MS = 8000 // clear a silent server request
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling'
 export type IdleMode = 'none' | 'linger' | 'faded'
@@ -104,6 +105,8 @@ export interface AgentPresence {
   moveDurationMs: number
   /** What the agent is doing right now, shown under the cursor label; null when idle. */
   note: string | null
+  /** True only after an authoritative server preview/status or packet arrives. */
+  noteConfirmed: boolean
   /** When set, the scene cursor tracks this object's live position each frame. */
   followObjectId: string | null
   idleMode: IdleMode
@@ -119,7 +122,7 @@ interface PresenceState {
    *  optional duration lets callers pace a hop (defaults to a full flight). */
   flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
   setPhase: (agent: string, phase: CursorPhase) => void
-  setNote: (agent: string, note: string | null) => void
+  setNote: (agent: string, note: string | null, confirmed?: boolean) => void
   followObject: (agent: string, objectId: string | null) => void
   touchLastObject: (agent: string, objectId: string | null) => void
 }
@@ -133,6 +136,7 @@ function seed(agent: string): AgentPresence {
     moveStartedAt: 0,
     moveDurationMs: CURSOR_FLIGHT_MS,
     note: null,
+    noteConfirmed: false,
     followObjectId: null,
     idleMode: 'none',
     lastTouchedObjectId: null,
@@ -156,6 +160,7 @@ export const presenceStore = create<PresenceState>((set) => ({
         active,
         idleMode: active ? 'none' : 'faded',
         note: active ? s.agents[agent]?.note ?? null : null,
+        noteConfirmed: active ? s.agents[agent]?.noteConfirmed ?? false : false,
       })
     ),
   enterLinger: (agent, lastTouchedObjectId = null) =>
@@ -194,7 +199,15 @@ export const presenceStore = create<PresenceState>((set) => ({
       })
     ),
   setPhase: (agent, phase) => set((s) => patch(s, agent, { phase })),
-  setNote: (agent, note) => set((s) => patch(s, agent, { note })),
+  setNote: (agent, note, confirmed = false) =>
+    set((s) => {
+      const previous = s.agents[agent] ?? seed(agent)
+      const noteConfirmed =
+        note == null
+          ? false
+          : confirmed || (previous.note === note && previous.noteConfirmed)
+      return patch(s, agent, { note, noteConfirmed })
+    }),
   followObject: (agent, objectId) => set((s) => patch(s, agent, { followObjectId: objectId })),
   touchLastObject: (agent, objectId) =>
     set((s) => patch(s, agent, { lastTouchedObjectId: objectId })),
