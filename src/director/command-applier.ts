@@ -24,6 +24,7 @@ import {
   existingPositionPath,
 } from '../motion-composite'
 import { buildSpawnMesh } from './spawn-factory'
+import { callStoreAction } from './store-action-bridge'
 import { startTween, cancelTween, retargetTween } from './tween'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
@@ -510,6 +511,11 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const wantPlaying = p.action === 'play'
       if (st.isPlaying !== wantPlaying) st.togglePlay()
       return wantPlaying ? 'preview play' : 'hold'
+    }
+
+    case 'CALL_STORE_ACTION': {
+      const p = packet.payload
+      return callStoreAction(p.action, p.args)
     }
 
     default:

@@ -2,6 +2,7 @@
  * Shared director command submit — desktop pod + XR voice finals.
  */
 import { beginPendingCommand, releaseCommandPresence } from './agent-runtime'
+import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
 import { getDirectorSocket } from './socket'
@@ -33,6 +34,13 @@ export async function submitDirectorCommand(
   const log = opts?.log
   const local = tryLocalCommand(trimmed)
   if (local.handled) {
+    // "cut"/"stop" are swallowed locally — also stop any in-flight SceneAgent
+    // loop, which otherwise never hears about it (its cancel rides user_command).
+    const agentSession = activeAgentSessionId()
+    if (agentSession) {
+      getDirectorSocket().sendAgentAbort(agentSession)
+      clearAgentSession(agentSession)
+    }
     log?.('DIRECTOR', trimmed)
     if (local.message) log?.('SYSTEM', local.message)
     return { ok: true, local: true }

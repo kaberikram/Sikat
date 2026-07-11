@@ -90,6 +90,12 @@ export interface PlaybackPayload {
   time?: number | null
 }
 
+/** Generic Zustand store dispatch — args validated client-side only. */
+export interface CallStoreActionPayload {
+  action: string
+  args: unknown[]
+}
+
 interface PacketBase {
   timestamp: number
   commandId?: string | null
@@ -112,6 +118,7 @@ export type CommandPacket = PacketBase &
     | { command: 'UPDATE_FX'; payload: UpdateFxPayload }
     | { command: 'SET_KEYFRAMES'; payload: SetKeyframesPayload }
     | { command: 'PLAYBACK'; payload: PlaybackPayload }
+    | { command: 'CALL_STORE_ACTION'; payload: CallStoreActionPayload }
   )
 
 // ---------------------------------------------------------------------------
@@ -219,6 +226,25 @@ export interface UserCommandMessage {
   commandId?: string | null
   scene?: Omit<SceneSnapshot, 'type' | 'timestamp'> | null
   frame?: SceneFrame | null
+}
+
+/** Client's reply to one agent_tool_use round trip (SceneAgent loop). */
+export interface AgentToolResultMessage {
+  type: 'agent_tool_result'
+  timestamp: number
+  commandId: string
+  requestId: string
+  ok: boolean
+  results: string[]
+  scene?: SceneSnapshot | null
+  frame?: SceneFrame | null
+}
+
+/** User stopped an in-flight SceneAgent session (e.g. said "cut"). */
+export interface AgentAbortMessage {
+  type: 'agent_abort'
+  timestamp: number
+  commandId: string
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +359,18 @@ export interface PlanUpdateMessage {
   stepLabel?: string | null
 }
 
+export type AgentToolName = 'run_commands' | 'call_store_action' | 'get_scene' | 'capture_frame'
+
+/** One SceneAgent tool invocation for this client to execute and answer. */
+export interface AgentToolUseMessage {
+  type: 'agent_tool_use'
+  timestamp: number
+  commandId: string
+  requestId: string
+  tool: AgentToolName
+  payload: Record<string, unknown>
+}
+
 export type ServerMessage =
   | AgentCommandMessage
   | AgentLogMessage
@@ -342,6 +380,7 @@ export type ServerMessage =
   | AgentQuestionMessage
   | AgentSuggestionMessage
   | PlanUpdateMessage
+  | AgentToolUseMessage
   | ErrorMessage
 
 /** Cheap structural check — the server already pydantic-validated the packet. */
@@ -362,6 +401,12 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     return raw as AgentQuestionMessage
   if (msg.type === 'plan_update' && typeof (raw as PlanUpdateMessage).commandId === 'string')
     return raw as PlanUpdateMessage
+  if (
+    msg.type === 'agent_tool_use' &&
+    typeof (raw as AgentToolUseMessage).requestId === 'string' &&
+    typeof (raw as AgentToolUseMessage).tool === 'string'
+  )
+    return raw as AgentToolUseMessage
   if (
     msg.type === 'agent_suggestion' &&
     typeof (raw as AgentSuggestionMessage).text === 'string' &&

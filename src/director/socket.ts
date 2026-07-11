@@ -7,6 +7,9 @@ import {
   type CommandPacket,
   type AgentLogMessage,
   type AgentStatusMessage,
+  type AgentToolResultMessage,
+  type AgentToolUseMessage,
+  type AgentAbortMessage,
   type IntentPreviewMessage,
   type CommandCancelMessage,
   type AgentQuestionMessage,
@@ -48,6 +51,7 @@ export class DirectorSocket {
   private questionListeners = new Set<Listener<AgentQuestionMessage>>()
   private suggestionListeners = new Set<Listener<AgentSuggestionMessage>>()
   private planUpdateListeners = new Set<Listener<PlanUpdateMessage>>()
+  private toolUseListeners = new Set<Listener<AgentToolUseMessage>>()
   private errorListeners = new Set<Listener<ErrorMessage>>()
   private statusListeners = new Set<Listener<SocketStatus>>()
   private openListeners = new Set<() => void>()
@@ -106,6 +110,8 @@ export class DirectorSocket {
         for (const cb of this.suggestionListeners) cb(msg)
       else if (msg.type === 'plan_update')
         for (const cb of this.planUpdateListeners) cb(msg)
+      else if (msg.type === 'agent_tool_use')
+        for (const cb of this.toolUseListeners) cb(msg)
       else for (const cb of this.errorListeners) cb(msg)
     }
     this.ws.onclose = () => {
@@ -168,6 +174,24 @@ export class DirectorSocket {
 
   sendSceneState(snapshot: Omit<SceneSnapshot, 'type' | 'timestamp'>): boolean {
     return this.sendRaw({ type: 'scene_state', timestamp: Date.now() / 1000, ...snapshot })
+  }
+
+  sendToolResult(msg: AgentToolResultMessage): boolean {
+    return this.sendRaw(msg)
+  }
+
+  sendAgentAbort(commandId: string): boolean {
+    const msg: AgentAbortMessage = {
+      type: 'agent_abort',
+      timestamp: Date.now() / 1000,
+      commandId,
+    }
+    return this.sendRaw(msg)
+  }
+
+  onToolUse(cb: Listener<AgentToolUseMessage>): () => void {
+    this.toolUseListeners.add(cb)
+    return () => this.toolUseListeners.delete(cb)
   }
 
   onPacket(cb: Listener<CommandPacket>): () => void {

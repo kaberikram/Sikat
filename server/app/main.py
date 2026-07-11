@@ -21,10 +21,13 @@ from pydantic import ValidationError
 
 from . import scene_state
 from . import session_context
+from .agent_bridge import AgentBridge
 from .agents.producer import Producer
 from .converse import radio_reply
 from .intent_preview import build_intent_preview
 from .schema import (
+    AgentAbort,
+    AgentToolResult,
     MoveCameraPacket,
     MoveCameraPayload,
     SceneState,
@@ -50,6 +53,7 @@ class ConnectionManager:
         self.active: set[WebSocket] = set()
         self.sessions: dict[WebSocket, SessionContext] = {}
         self.observers: dict[WebSocket, asyncio.Task] = {}
+        self.bridges: dict[WebSocket, AgentBridge] = {}
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -57,6 +61,7 @@ class ConnectionManager:
         session = SessionContext()
         self.sessions[ws] = session
         self.observers[ws] = asyncio.create_task(run_observer(session, ws))
+        self.bridges[ws] = AgentBridge(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
         self.active.discard(ws)
@@ -64,6 +69,9 @@ class ConnectionManager:
         task = self.observers.pop(ws, None)
         if task is not None:
             task.cancel()
+        bridge = self.bridges.pop(ws, None)
+        if bridge is not None:
+            bridge.close()
 
     async def broadcast(self, payload: dict) -> None:
         for ws in list(self.active):
@@ -161,6 +169,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             emit_question=emit_question,
             emit_suggest=emit_suggest,
             emit_plan_update=emit_plan_update,
+            bridge=manager.bridges.get(ws),
         )
         if not packets and not describe_only:
             # Soft miss: crew redirect, not a hard error (open speech / miss).
@@ -212,6 +221,14 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, UserCommand):
                 # LLM latency must never block the socket read loop
                 asyncio.create_task(_handle_user_command(msg, ws))
+            elif isinstance(msg, AgentToolResult):
+                bridge = manager.bridges.get(ws)
+                if bridge is not None:
+                    bridge.resolve(msg)
+            elif isinstance(msg, AgentAbort):
+                session = manager.sessions.get(ws)
+                if session is not None:
+                    session.cancel_active_plan()
             elif isinstance(msg, Telemetry):
                 await _handle_telemetry(msg)
     except WebSocketDisconnect:

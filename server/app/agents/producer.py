@@ -47,6 +47,7 @@ from .base import (
     _noop_status,
     _noop_suggest,
 )
+from . import scene_agent
 from .directors_assistant import DirectorsAssistant
 from .planner import PlanRunner
 from .lighting_tech import LightingTech
@@ -1018,6 +1019,7 @@ class Producer:
         emit_question: EmitQuestion = _noop_question,
         emit_suggest: EmitSuggest = _noop_suggest,
         emit_plan_update: EmitPreview = _noop_preview,
+        bridge=None,
     ) -> tuple[list[CommandPacket], bool]:
         """Staged execution: plan the crew's work, then stream it over time.
 
@@ -1102,6 +1104,29 @@ class Producer:
             reply = converse_intent(text)
             await self._emit_describe(reply, emit_log)
             return [], True
+
+        # Autonomous SceneAgent loop: big multi-step asks with a live bridge
+        # (Anthropic-only) bypass the one-shot planner entirely.
+        if (
+            bridge is not None
+            and scene_agent.agent_mode_requested(text)
+            and llm.get_async_anthropic_client() is not None
+        ):
+            session = session_context.get_session()
+            session.begin_plan()
+            ran = await scene_agent.run_goal(
+                text,
+                scene,
+                frame,
+                bridge,
+                command_id or "agent",
+                emit_log,
+                emit_status,
+                emit_plan_update,
+                session.plan_cancelled(),
+            )
+            if ran:
+                return [], True
 
         has_animation_request = any(
             intent is not None and intent.action == "animate" for intent in parsed

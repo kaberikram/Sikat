@@ -202,6 +202,8 @@ function noteForPacket(packet: CommandPacket): string {
       return 'keyframes'
     case 'PLAYBACK':
       return 'cueing'
+    case 'CALL_STORE_ACTION':
+      return `store: ${packet.payload.action}`
     default:
       return 'working'
   }
