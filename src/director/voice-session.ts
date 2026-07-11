@@ -78,7 +78,15 @@ function getNativeSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | n
  */
 function sepiaServerUrl(): string | null {
   const configured = import.meta.env.VITE_SEPIA_STT_URL as string | undefined
-  if (configured) return configured
+  if (configured) {
+    // The polyfill uses this to construct a WebSocket URL, so it must have a
+    // protocol. If the user set just a hostname, prepend https://.
+    if (/^https?:\/\//.test(configured)) return configured.replace(/\/+$/, '')
+    console.warn(
+      '[voice] VITE_SEPIA_STT_URL missing protocol — prepending https://'
+    )
+    return `https://${configured.replace(/^\/+|\/+$/g, '')}`
+  }
   if (typeof location === 'undefined') return null
   if (location.protocol === 'https:') return null
   return `http://${location.hostname}:20741`
