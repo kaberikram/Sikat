@@ -7,7 +7,7 @@ import { ObjectsOverlay } from './ui/objects-overlay'
 import { ExportOverlay } from './ui/export-overlay'
 import { useMountEffect } from './hooks/useMountEffect'
 import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
-import { isSpeechAvailable, requestMicPermission } from './director/voice-session'
+import { requestMicPermission } from './director/voice-session'
 
 export const Editor: React.FC = () => {
   const [pipMountEl, setPipMountEl] = useState<HTMLDivElement | null>(null)
@@ -25,8 +25,9 @@ export const Editor: React.FC = () => {
       // Ask for mic access here, before going immersive: the permission
       // dialog can't render once inside the XR session on headset browsers
       // (e.g. Meta Quest Browser), so push-to-talk would otherwise silently
-      // fail with no trigger to grant it.
-      if (isSpeechAvailable()) await requestMicPermission()
+      // fail with no trigger to grant it. Request unconditionally —
+      // getUserMedia is independent of SpeechRecognition feature detection.
+      await requestMicPermission()
       await requestXrSession()
     } catch (err) {
       console.error('XR session failed', err)
