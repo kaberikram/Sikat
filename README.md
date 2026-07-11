@@ -182,13 +182,15 @@ If you see `XRWebGLBinding … is not of type 'XRSession'`, Chrome 147+ native W
 
 v1 does **not** send headset telemetry to the server (local pose only) — avoids MOVE_CAMERA feedback loops.
 
-**Voice on Quest (Deepgram):** Quest Browser has no native Web Speech API, so hold-A push-to-talk falls back to [Deepgram Nova-2](https://deepgram.com) over a direct WebSocket. No self-hosted STT server needed — just an API key:
+**Voice on Quest (Deepgram):** Quest Browser has no native Web Speech API, so hold-A push-to-talk falls back to [Deepgram Nova-3](https://deepgram.com) via the official [`@deepgram/sdk`](https://www.npmjs.com/package/@deepgram/sdk). No self-hosted STT server needed — just an API key:
 
 1. Sign up at [deepgram.com](https://deepgram.com) and get an API key (free tier includes $200 credit).
 2. Set the key in your Vercel environment variables: `VITE_DEEPGRAM_API_KEY = your-key`.
 3. Redeploy Vercel — the key is baked into the build at compile time.
 
 Desktop Chrome keeps using the native (Google-backed) SpeechRecognition API; Deepgram only kicks in where the native API is missing (Quest Browser, Firefox).
+
+**Forcing Deepgram on Desktop:** Chrome's native SpeechRecognition sometimes silently fails (starts but produces no transcripts, no error). Set `VITE_DISABLE_WEBSREECH=true` in your Vercel env to force Deepgram even on desktop.
 
 **Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.
 

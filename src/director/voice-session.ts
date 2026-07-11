@@ -4,12 +4,17 @@
  *
  * Chrome/Edge get the native (Google-backed) SpeechRecognition API.
  * On browsers without it (Meta Quest Browser, Firefox), falls back to
- * Deepgram Nova-2 over a direct WebSocket — no self-hosted STT server needed.
+ * Deepgram Nova-3 via the official @deepgram/sdk — no self-hosted STT needed.
  *
  * Chrome's native SpeechRecognition needs a cooldown between stop() and
  * start() — rapid toggles can trigger spurious "language-not-supported".
  * When the native path is cooling down, we fall through to Deepgram.
+ *
+ * Set VITE_DISABLE_WEBSREECH=true to force Deepgram even when the native
+ * Web Speech API is available (useful when native silently fails).
  */
+
+import { DeepgramClient } from '@deepgram/sdk'
 
 interface SpeechResultEvent {
   resultIndex: number
@@ -46,7 +51,8 @@ export interface VoiceSessionHandlers {
 // ---- state ----
 
 let recognition: SpeechRecognitionLike | null = null
-let deepgramWs: WebSocket | null = null
+let deepgramClient: DeepgramClient | null = null
+let deepgramConnection: DeepgramConnection | null = null
 let deepgramAudioCtx: AudioContext | null = null
 let deepgramProcessor: ScriptProcessorNode | null = null
 let deepgramStream: MediaStream | null = null
@@ -54,6 +60,16 @@ let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
 let finishTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Minimal interface for the Deepgram SDK connection object. */
+interface DeepgramConnection {
+  sendMedia(data: ArrayBuffer | Blob | ArrayBufferView): void
+  sendCloseStream(data: Record<string, unknown>): void
+  close(): void
+  connect(): void
+  waitForOpen(): Promise<void>
+  on(event: string, callback: (...args: any[]) => void): void
+}
 
 /**
  * After a native session stops, we block new native starts for this many ms.
@@ -77,13 +93,17 @@ function getNativeSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | n
     | null
 }
 
+function isWebSpeechDisabled(): boolean {
+  return import.meta.env.VITE_DISABLE_WEBSREECH === 'true'
+}
+
 function nativeIsReady(): boolean {
+  if (isWebSpeechDisabled()) return false
   return getNativeSpeechRecognitionCtor() !== null && Date.now() >= nativeCooldownUntil
 }
 
 // ---- Deepgram path ----
 
-const DG_WS_URL = 'wss://api.deepgram.com/v1/listen'
 const DG_SAMPLE_RATE = 16000
 
 function getDeepgramApiKey(): string | null {
@@ -92,6 +112,13 @@ function getDeepgramApiKey(): string | null {
 
 function isDeepgramAvailable(): boolean {
   return getDeepgramApiKey() !== null
+}
+
+function getOrCreateDeepgramClient(): DeepgramClient | null {
+  const apiKey = getDeepgramApiKey()
+  if (!apiKey) return null
+  if (!deepgramClient) deepgramClient = new DeepgramClient({ apiKey })
+  return deepgramClient
 }
 
 /**
@@ -108,11 +135,11 @@ function float32ToPcm16(buffer: Float32Array): ArrayBuffer {
 }
 
 function deepgramStop(): void {
-  const ws = deepgramWs
+  const conn = deepgramConnection
   const ctx = deepgramAudioCtx
   const proc = deepgramProcessor
   const stream = deepgramStream
-  deepgramWs = null
+  deepgramConnection = null
   deepgramAudioCtx = null
   deepgramProcessor = null
   deepgramStream = null
@@ -121,35 +148,73 @@ function deepgramStop(): void {
   try { ctx?.close() } catch { /* ignore */ }
   for (const track of stream?.getTracks() ?? []) track.stop()
 
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-    try { ws.send(JSON.stringify({ type: 'CloseStream' })) } catch { /* ignore */ }
-    ws.close()
+  if (conn) {
+    try { conn.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
+    try { conn.close() } catch { /* ignore */ }
   }
 }
 
-function deepgramStart(): void {
-  const apiKey = getDeepgramApiKey()
-  if (!apiKey) return
+async function deepgramStart(): Promise<void> {
+  const client = getOrCreateDeepgramClient()
+  if (!client) return
 
-  const ws = new WebSocket(DG_WS_URL, ['token', apiKey])
-  deepgramWs = ws
+  try {
+    const connection = await client.listen.v1.connect({
+      model: 'nova-3',
+      language: 'en',
+      encoding: 'linear16',
+      sample_rate: DG_SAMPLE_RATE,
+      interim_results: 'true',
+      smart_format: 'true',
+      punctuate: 'true',
+      utterance_end_ms: '1000',
+    }) as unknown as DeepgramConnection
+    deepgramConnection = connection
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      type: 'Configure',
-      features: {
-        model: 'nova-2',
-        encoding: 'linear16',
-        sample_rate: DG_SAMPLE_RATE,
-        channels: 1,
-        interim_results: true,
-        utterance_end_ms: 1000,
-        smart_format: true,
-        punctuate: true,
-      },
-    }))
+    connection.on('message', (message) => {
+      if (message.type === 'Results') {
+        const alt = message.channel?.alternatives?.[0]
+        if (!alt || alt.transcript === undefined) return
+        const transcript = (alt.transcript as string).trim()
+        if (!transcript) return
+        if (message.is_final) handlers.onFinal?.(transcript, { forceVision })
+        else handlers.onInterim?.(transcript)
+      }
+      if (message.type === 'Error') {
+        console.warn('[voice] Deepgram error:', message.description)
+        handlers.onError?.('network')
+        deepgramStop()
+      }
+    })
 
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    connection.on('error', () => {
+      console.warn('[voice] Deepgram connection error')
+      handlers.onError?.('network')
+      deepgramStop()
+    })
+
+    connection.on('close', () => {
+      if (connection === deepgramConnection) deepgramStop()
+    })
+
+    connection.connect()
+    await connection.waitForOpen()
+
+    // Bail if the session was stopped while we were connecting.
+    if (connection !== deepgramConnection) {
+      try { connection.close() } catch { /* ignore */ }
+      return
+    }
+
+    // Setup mic capture after connection is established.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Bail if the session was stopped while requesting permission.
+      if (connection !== deepgramConnection) {
+        for (const track of stream.getTracks()) track.stop()
+        return
+      }
+
       deepgramStream = stream
       const ctx = new AudioContext({ sampleRate: DG_SAMPLE_RATE })
       deepgramAudioCtx = ctx
@@ -161,48 +226,23 @@ function deepgramStart(): void {
       deepgramProcessor = proc
 
       proc.onaudioprocess = (e) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(float32ToPcm16(e.inputBuffer.getChannelData(0)))
+        if (connection === deepgramConnection) {
+          connection.sendMedia(float32ToPcm16(e.inputBuffer.getChannelData(0)))
         }
       }
 
       source.connect(proc)
       proc.connect(ctx.destination)
       handlers.onListeningChange?.(true)
-    }).catch((err) => {
+    } catch (err) {
       console.warn('[voice] getUserMedia failed:', err)
       handlers.onError?.('not-allowed')
       deepgramStop()
-    })
-  }
-
-  ws.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data as string)
-      if (msg.type === 'Results') {
-        const channel = msg.channel
-        const alt = channel?.alternatives?.[0]
-        if (!alt || alt.transcript === undefined) return
-        const transcript = (alt.transcript as string).trim()
-        if (!transcript) return
-        if (msg.is_final) handlers.onFinal?.(transcript, { forceVision })
-        else handlers.onInterim?.(transcript)
-      }
-      if (msg.type === 'Error') {
-        console.warn('[voice] Deepgram error:', msg.description)
-        handlers.onError?.('network')
-        deepgramStop()
-      }
-    } catch { /* ignore unparseable messages */ }
-  }
-
-  ws.onerror = () => {
+    }
+  } catch (err) {
+    console.warn('[voice] Deepgram connection failed:', err)
     handlers.onError?.('network')
     deepgramStop()
-  }
-
-  ws.onclose = () => {
-    if (ws === deepgramWs) deepgramStop()
   }
 }
 
@@ -256,7 +296,7 @@ export function stopVoiceSession(): void {
   forceVision = false
   clearFinishTimer()
 
-  if (deepgramWs) deepgramStop()
+  if (deepgramConnection) deepgramStop()
   detachNativeRecognition()
 
   handlers.onListeningChange?.(false)
@@ -269,14 +309,12 @@ export function finishVoiceSession(): void {
   handlers.onListeningChange?.(false)
   handlers.onInterim?.('')
 
-  if (deepgramWs) {
-    const ws = deepgramWs
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(JSON.stringify({ type: 'CloseStream' })) } catch { /* ignore */ }
-    }
+  if (deepgramConnection) {
+    const conn = deepgramConnection
+    try { conn.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
     clearFinishTimer()
     finishTimer = setTimeout(() => {
-      if (deepgramWs === ws) stopVoiceSession()
+      if (deepgramConnection === conn) stopVoiceSession()
     }, FINISH_GRACE_MS)
     return
   }
@@ -295,12 +333,12 @@ export function finishVoiceSession(): void {
   }
 }
 
-export function startVoiceSession(
+export async function startVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
-): void {
+): Promise<void> {
   // Tear down any live or draining session.
-  if (recognition || deepgramWs) stopVoiceSession()
+  if (recognition || deepgramConnection) stopVoiceSession()
 
   handlers = next
   if (opts?.forceVision) forceVision = true
@@ -375,10 +413,10 @@ export function startVoiceSession(
   }
 }
 
-export function toggleVoiceSession(
+export async function toggleVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
-): void {
+): Promise<void> {
   if (listening) finishVoiceSession()
-  else startVoiceSession(next, opts)
+  else await startVoiceSession(next, opts)
 }
