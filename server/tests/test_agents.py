@@ -94,3 +94,63 @@ async def test_unknown_mood_returns_no_packets(producer, scene):
     assert mood_packets("gothic") == []
     packets, _ = await producer.handle_user_command("gothic atmosphere", scene)
     assert packets == []
+
+
+def test_track_property_defaults_to_position():
+    from app.agents.asset_animator import AssetAnimator
+    from app.schema import Intent, Keyframe
+
+    intent = Intent(
+        action="animate",
+        target="CORE_SPHERE",
+        track_keyframes=[
+            Keyframe(time=0, value=(0.0, 0.0, 0.0)),
+            Keyframe(time=1, value=(1.0, 1.0, 1.0)),
+        ],
+        # track_property intentionally omitted
+    )
+    animator = AssetAnimator()
+    packets = animator.build(intent)
+    assert len(packets) >= 2
+    assert packets[0].command == "SET_KEYFRAMES"
+    assert packets[0].payload.property == "position"
+
+
+def test_camera_target_produces_null_target_keyframes():
+    from app.agents.asset_animator import AssetAnimator
+    from app.schema import Intent, Keyframe
+
+    intent = Intent(
+        action="animate",
+        target="CAMERA",
+        track_property="position",
+        track_keyframes=[
+            Keyframe(time=0, value=(0.0, 1.0, 0.0)),
+            Keyframe(time=1, value=(5.0, 1.5, 3.0)),
+        ],
+    )
+    animator = AssetAnimator()
+    packets = animator.build(intent)
+    assert len(packets) >= 2
+    assert packets[0].command == "SET_KEYFRAMES"
+    assert packets[0].payload.target is None
+
+
+def test_virtual_camera_target_produces_null_target():
+    from app.agents.asset_animator import AssetAnimator
+    from app.schema import Intent, Keyframe
+
+    intent = Intent(
+        action="animate",
+        target="VIRTUAL_CAMERA",
+        track_property="position",
+        track_keyframes=[
+            Keyframe(time=0, value=(0.0, 1.0, 0.0)),
+            Keyframe(time=1, value=(5.0, 1.5, 3.0)),
+        ],
+    )
+    animator = AssetAnimator()
+    packets = animator.build(intent)
+    assert len(packets) >= 2
+    assert packets[0].command == "SET_KEYFRAMES"
+    assert packets[0].payload.target is None

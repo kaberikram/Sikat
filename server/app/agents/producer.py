@@ -9,6 +9,7 @@ from .. import active_commands, fallback_parser, llm, performers, session_contex
 from ..converse import converse_intent, radio_reply
 from ..creative_parse import _CREATIVE_LANGUAGE, _grammar_has_complete_intent, defer_clause_to_llm, is_open_direction
 from ..motion_policy import soften_default_motion
+from ..motion_floor import is_animation_seeking
 from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
 from ..fallback_parser import parse_one_clause, split_clauses
@@ -775,14 +776,7 @@ class Producer:
                     emit_suggest,
                     _noop_question,
                     _noop_emit,
-                    prefer_strong=bool(
-                        re.search(
-                            r"\b(?:animate|animation|bounce|float|wander|orbit|spin|sway|drop|rise)\b",
-                            text,
-                            re.I,
-                        )
-                        or _CREATIVE_LANGUAGE.search(text)
-                    ),
+                    prefer_strong=is_animation_seeking(text) or _CREATIVE_LANGUAGE.search(text),
                 )
 
         grammar_handled_indices: set[int] = set()
@@ -1111,13 +1105,7 @@ class Producer:
 
         has_animation_request = any(
             intent is not None and intent.action == "animate" for intent in parsed
-        ) or bool(
-            re.search(
-                r"\b(?:animate|animation|bounce|float|wander|orbit|spin|sway|drop|rise)\b",
-                text,
-                re.I,
-            )
-        )
+        ) or is_animation_seeking(text)
         return await PlanRunner(self).run(
             text, scene, command_id, emit_log, emit_packet, emit_status, frame, emit_cancel,
             emit_suggest, emit_question, emit_plan_update,

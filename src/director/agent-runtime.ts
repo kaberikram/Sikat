@@ -369,8 +369,9 @@ export function enqueuePacket(packet: CommandPacket): void {
   if (!running.has(agent)) void runAgent(agent)
 }
 
-export function markAgentActive(agent: string, note?: string | null): void {
+export function markAgentActive(agent: string, note?: string | null, commandId?: string | null): void {
   if (!cursorVisible(agent)) return
+  if (commandId) resolvePending(commandId, agent)
   const presence = presenceStore.getState()
   presence.setActive(agent, true)
   clearResponseTimersForAgent(agent)

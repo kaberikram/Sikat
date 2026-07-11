@@ -13,7 +13,8 @@ from typing import AsyncIterator, Awaitable, Callable, Literal
 from . import session_context
 from .performers import brief as performers_brief
 from .performers import crew_brief
-from .prompts import build_plan_prompt
+from .prompts import ANIMATION_EDIT_PROMPT, build_plan_prompt
+from .salvage import salvage_step
 from .scene_context import format_scene_brief
 from .schema import DirectorPlan, Intent, IntentList, PlanMode, PlanStep, SceneFrame, SceneState
 
@@ -243,6 +244,8 @@ When describing or editing animation, reference:
 - track keyframe counts and time ranges (position kf: lines in briefing = the live path)
 - sampled NOW position vs BASE (if different, animation is active)
 
+{animation_edit}
+
 ## Follow-up / layering (CRITICAL — read existing tracks first)
 When an object already has **position keyframes** (a path, wander, drift):
 - "bounce while moving", "bounce on the path", "keep moving but bounce", "add bounce"
@@ -451,6 +454,7 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
         scene_brief=scene_brief,
         history_section=_history_section(),
         parse_hints=parse_hints,
+        animation_edit=ANIMATION_EDIT_PROMPT,
     )
 
 
@@ -737,8 +741,13 @@ def _validate_intent_slice(raw: str) -> Intent | None:
     try:
         return Intent.model_validate_json(raw)
     except Exception:
-        log.warning("skipping invalid streamed intent slice: %s", raw[:160])
-        return None
+        pass
+    salvaged = salvage_step(raw)
+    if salvaged is not None:
+        log.warning("salvaged previously-invalid streamed intent: %s", raw[:160])
+        return salvaged
+    log.warning("skipping invalid streamed intent slice: %s", raw[:160])
+    return None
 
 
 def extract_partial_preview_fields(buffer: str) -> dict[str, str | int] | None:
@@ -866,7 +875,12 @@ async def stream_plan(
                     try:
                         yield Step(PlanStep.model_validate_json(raw))
                     except Exception:
-                        log.warning("skipping invalid streamed plan step: %s", raw[:160])
+                        salvaged = salvage_step(raw)
+                        if salvaged is not None:
+                            log.warning("salvaged streamed plan step: %s", raw[:160])
+                            yield Step(PlanStep.model_validate(salvaged.model_dump()))
+                        else:
+                            log.warning("skipping invalid streamed plan step: %s", raw[:160])
         try:
             yield Done(DirectorPlan.model_validate_json(buffer))
         except Exception:

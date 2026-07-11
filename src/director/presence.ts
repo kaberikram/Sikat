@@ -88,7 +88,7 @@ export function agentMetaFor(agent: string): AgentMeta {
     }
   }
   const stage = useEditorStore.getState().stage
-  return { color: '#888888', station: [stage.position[0], stage.position[1] + 4, stage.position[2]] }
+  return { color: '#30d158', station: [stage.position[0], stage.position[1] + 4, stage.position[2]] }
 }
 
 export function stationFor(agent: string): Vec3 {

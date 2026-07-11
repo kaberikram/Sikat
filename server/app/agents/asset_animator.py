@@ -86,12 +86,17 @@ class AssetAnimator:
             motion = intent.motion or intent.preset
             if not intent.target:
                 return []
-            if intent.track_keyframes and intent.track_property:
+            if intent.track_keyframes:
+                prop = intent.track_property or "position"
+                target_name = intent.target
+                payload_target: Target | None = Target(name=target_name)
+                if target_name.upper() in ("CAMERA", "VIRTUAL_CAMERA"):
+                    payload_target = None
                 packets: list[CommandPacket] = [
                     SetKeyframesPacket(
                         payload=SetKeyframesPayload(
-                            target=Target(name=intent.target),
-                            property=intent.track_property,
+                            target=payload_target,
+                            property=prop,
                             keyframes=intent.track_keyframes,
                         )
                     )

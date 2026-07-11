@@ -59,6 +59,10 @@ function buildTrackSummaries(
   }))
 }
 
+function isSmallKeyframeSet(kfs: Array<{ property: string }>): boolean {
+  return kfs.length <= 24
+}
+
 function buildTrackFull(
   keyframes: Array<{ time: number; property: string; value: [number, number, number] }>,
   property: string
@@ -87,7 +91,7 @@ function buildObjectSnapshot(
   fullMode: boolean
 ): ObjectSnapshot {
   const properties = [...new Set(obj.keyframes.map((k) => k.property))]
-  const tracks: KeyframeTrack[] = fullMode
+  const tracks: KeyframeTrack[] = fullMode || isSmallKeyframeSet(obj.keyframes)
     ? properties.map((p) => buildTrackFull(obj.keyframes, p))
     : buildTrackSummaries(obj.keyframes, properties)
 
@@ -110,7 +114,7 @@ function buildVirtualCameraSnapshot(
   fullMode: boolean
 ): VirtualCameraSnapshot {
   const properties = [...new Set(vc.keyframes.map((k) => k.property))]
-  const tracks: KeyframeTrack[] = fullMode
+  const tracks: KeyframeTrack[] = fullMode || isSmallKeyframeSet(vc.keyframes)
     ? properties.map((p) => buildTrackFull(vc.keyframes, p))
     : buildTrackSummaries(vc.keyframes, properties)
   const { sampled, sampledFov } = sampleVirtualCameraAtTime(vc, currentTime)

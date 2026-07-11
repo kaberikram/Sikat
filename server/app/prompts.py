@@ -65,26 +65,44 @@ Bare animate / creative / multi-beat direction → needs_deeper_creativity true 
 empty steps array immediately (escalate to the animation director).
 """
 
-STRONG_ADDENDUM = """You are the animation director.
-Bare or creative animate MUST author track_keyframes — never float/figure8/orbit/wander
-as a catalog shortcut. Literal bounce/spin/orbit/drop → motion id (client craft synth).
-For emotional multi-beat paths, author 6–12 absolute world-space position poses around
-BASE; close key times = fast moves; wide gaps = holds. Stay inside stage radius.
-Layer bounce/float onto an existing XZ path when one exists.
+LAYER_BOUNCE_HINT = "Layer bounce/float onto an existing XZ path when one exists."
 
-Example for "animate the blue ball" when BASE is near (0, 1, 0):
-{"action":"animate","target":"Blue Ball","track_property":"position","animate_repeat":true,
- "track_keyframes":[
-   {"time":0,"value":[0,1,0]},{"time":0.6,"value":[0.35,1.35,0.1]},
-   {"time":1.4,"value":[0.55,1.15,-0.2]},{"time":2.2,"value":[0.15,1.45,-0.35]},
-   {"time":3.0,"value":[-0.3,1.2,-0.15]},{"time":3.8,"value":[-0.4,1.4,0.2]},
-   {"time":4.6,"value":[-0.1,1.1,0.35]},{"time":5.5,"value":[0,1,0]}
- ],"say":"soft figure path on the blue"}
+ANIMATION_EDIT_PROMPT = """\
+## Editing existing animation
+To REVISE an existing animation: read the current position kf: list in
+the briefing, keep what works, change what's asked, and emit the FULL
+replacement track. SET_KEYFRAMES replaces the entire property track (there
+is no partial edit). Reference specific existing times/values when the
+director critiques ("the middle is too slow" → tighten the middle key gaps).
 
-Example for "bounce the blue ball":
-{"action":"animate","target":"Blue Ball","motion":"bounce",
- "motion_params":{"height":1.6,"hops":3,"decay":0.55},"say":"three hops, settling soft"}
+## Camera keyframing
+To animate the camera: action animate, target CAMERA, track_property
+position or fov, track_keyframes. "CAMERA" or "VIRTUAL_CAMERA" targets
+the virtual camera.
 """
+
+STRONG_ADDENDUM = "You are the animation director. " + (
+    "Bare or creative animate MUST author track_keyframes — never float/figure8/orbit/wander "
+    "as a catalog shortcut. Literal bounce/spin/orbit/drop → motion id (client craft synth). "
+    "For emotional multi-beat paths, author 6–12 absolute world-space position poses around "
+    "BASE; close key times = fast moves; wide gaps = holds. Stay inside stage radius. "
+    + LAYER_BOUNCE_HINT + " "
+    + ANIMATION_EDIT_PROMPT + " "
+    + (
+        "Example for 'animate the blue ball' when BASE is near (0, 1, 0): "
+        '{"action":"animate","target":"Blue Ball","track_property":"position","animate_repeat":true,'
+        ' "track_keyframes":['
+        '   {"time":0,"value":[0,1,0]},{"time":0.6,"value":[0.35,1.35,0.1]},'
+        '   {"time":1.4,"value":[0.55,1.15,-0.2]},{"time":2.2,"value":[0.15,1.45,-0.35]},'
+        '   {"time":3.0,"value":[-0.3,1.2,-0.15]},{"time":3.8,"value":[-0.4,1.4,0.2]},'
+        '   {"time":4.6,"value":[-0.1,1.1,0.35]},{"time":5.5,"value":[0,1,0]}'
+        ' ],"say":"soft figure path on the blue"}'
+        + " "
+        + "Example for 'bounce the blue ball': "
+        + '{"action":"animate","target":"Blue Ball","motion":"bounce",'
+        + '"motion_params":{"height":1.6,"hops":3,"decay":0.55},"say":"three hops, settling soft"}'
+    )
+)
 
 
 def build_plan_prompt(

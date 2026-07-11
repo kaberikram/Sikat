@@ -100,6 +100,7 @@ export function DirectorPod() {
   const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const packetsByCommandRef = useRef(new Map<string, number>())
 
   const selectedId = useEditorStore((s) => s.selectedId)
   const isPlaying = useEditorStore((s) => s.isPlaying)
@@ -151,6 +152,12 @@ export function DirectorPod() {
     setRuntimeLogger(pushLog)
     const offPacket = socket.onPacket((packet) => {
       setPendingQuestion(null)
+      if (packet.commandId) {
+        packetsByCommandRef.current.set(
+          packet.commandId,
+          (packetsByCommandRef.current.get(packet.commandId) || 0) + 1
+        )
+      }
       const elapsed = markFirstPacket(packet.commandId)
       if (elapsed != null) pushLog('SYSTEM', `⏱ first packet ${elapsed.toFixed(2)}s`)
       enqueuePacket(packet)
@@ -168,7 +175,7 @@ export function DirectorPod() {
     })
     const offQuestion = socket.onQuestion((msg) => {
       setPendingQuestion(msg)
-      markAgentActive(msg.agent, msg.question)
+      markAgentActive(msg.agent, msg.question, msg.commandId)
     })
     const offSuggestion = socket.onSuggestion((msg) => {
       reactToSuggestion(msg)
@@ -202,7 +209,7 @@ export function DirectorPod() {
     })
     const offAgentStatus = socket.onAgentStatus((msg) => {
       if (msg.status === 'active') {
-        if (msg.agent !== 'Producer') markAgentActive(msg.agent, msg.note)
+        if (msg.agent !== 'Producer') markAgentActive(msg.agent, msg.note, msg.forCommandId)
         else if (msg.note) pushLog('PRODUCER', msg.note)
       } else if (msg.agent !== 'Producer') {
         // Mid-command idle = this specialist finished a grammar batch; LLM may
@@ -220,6 +227,15 @@ export function DirectorPod() {
         // Producer idle is the authoritative command-complete signal. Release
         // the preview-named agent too; markAgentIdle defers the fade if its
         // local packet queue is still settling.
+        const packetCount = packetsByCommandRef.current.get(msg.forCommandId) || 0
+        if (packetCount === 0) {
+          pushLog(
+            'PRODUCER',
+            msg.note ? `no changes — ${msg.note}` : 'no changes — plan produced nothing',
+            'warn'
+          )
+        }
+        packetsByCommandRef.current.delete(msg.forCommandId)
         releaseCommandPresence(msg.forCommandId)
         completeCommand(msg.forCommandId)
         // Drop any other specialist left thinking by the same hybrid command.

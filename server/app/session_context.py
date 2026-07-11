@@ -77,6 +77,7 @@ class SessionContext:
         self._clarify_target: str | None = None
         self.recent_notes: deque[str] = deque(maxlen=_RECENT_NOTES_MAX)
         self.latest_scene: SceneState | None = None
+        self.latest_full_scene: SceneState | None = None
         self.prev_scene: SceneState | None = None
         self.scene_event: asyncio.Event = asyncio.Event()
         self.recent_server_edits: dict[str, float] = {}
@@ -155,8 +156,42 @@ class SessionContext:
 
     def update_scene(self, msg: SceneState) -> None:
         self.prev_scene = self.latest_scene
-        self.latest_scene = msg
+        if msg.mode == "full":
+            self.latest_full_scene = msg
+            self.latest_scene = msg
+        else:
+            self.latest_scene = msg
+            if self.latest_full_scene is not None:
+                self.latest_scene = self._merge_full_tracks(msg, self.latest_full_scene)
         self.scene_event.set()
+
+    def _merge_full_tracks(
+        self, heartbeat: SceneState, full: SceneState
+    ) -> SceneState:
+        """Copy full keyframe tracks from a full snapshot into a heartbeat scene
+        for objects whose track summary counts match."""
+        from .schema import KeyframeTrackFull
+
+        merged_objects = []
+        for obj in heartbeat.objects:
+            full_obj = next((o for o in full.objects if o.id == obj.id), None)
+            if full_obj is None:
+                merged_objects.append(obj)
+                continue
+            merged_tracks = []
+            for hb_track in obj.tracks:
+                matching_full = next(
+                    (t for t in full_obj.tracks
+                     if isinstance(t, KeyframeTrackFull)
+                     and t.property == hb_track.property),
+                    None,
+                )
+                if matching_full is not None:
+                    merged_tracks.append(matching_full)
+                else:
+                    merged_tracks.append(hb_track)
+            merged_objects.append(obj.model_copy(update={"tracks": merged_tracks}))
+        return heartbeat.model_copy(update={"objects": merged_objects})
 
     def note_server_edit(self, packet: CommandPacket) -> None:
         now = time.monotonic()
@@ -186,6 +221,7 @@ class SessionContext:
         self._clarify_target = None
         self.recent_notes.clear()
         self.latest_scene = None
+        self.latest_full_scene = None
         self.prev_scene = None
         self.scene_event = asyncio.Event()
         self.recent_server_edits.clear()

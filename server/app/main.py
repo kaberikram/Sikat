@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from . import scene_state
 from . import session_context
 from .agents.producer import Producer
+from .converse import radio_reply
 from .intent_preview import build_intent_preview
 from .schema import (
     MoveCameraPacket,
@@ -163,10 +164,8 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
         )
         if not packets and not describe_only:
             # Soft miss: crew redirect, not a hard error (open speech / miss).
-            from .converse import radio_reply
-
             await manager.broadcast(
-                agent_log_message("Producer", radio_reply(msg.text), "info", msg.commandId)
+                agent_log_message("Producer", radio_reply(msg.text), "warn", msg.commandId)
             )
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)

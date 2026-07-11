@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 
-from .. import fallback_parser, llm, session_context
+from .. import fallback_parser, llm, motion_floor, session_context
 from ..schema import CommandPacket, Intent, SceneState, plan_update_message
 
 log = logging.getLogger("director.planner")
@@ -140,6 +140,12 @@ class PlanRunner:
             except asyncio.TimeoutError:
                 pass
 
+        all_packets, describe_only = await self._recover_empty_plan(
+            text, scene_now, frame, command_id, plan_say, plan_mode,
+            all_packets, all_steps, describe_only,
+            emit_log, emit_packet, emit_status, emit_cancel,
+        )
+
         session.clear_pending_plan()
         if not all_steps and not session.plan_cancelled().is_set():
             rescue = fallback_parser.parse(text, scene)
@@ -165,6 +171,69 @@ class PlanRunner:
             plan_update_message(command_id or "", status="done", say=plan_say, mode=plan_mode,
                                 steps_total=len(all_steps))
         )
+        return all_packets, describe_only
+
+    async def _recover_empty_plan(
+        self,
+        text: str,
+        scene_now: SceneState | None,
+        frame,
+        command_id: str | None,
+        plan_say: str,
+        plan_mode: str,
+        all_packets: list[CommandPacket],
+        all_steps: list[Intent],
+        describe_only: bool,
+        emit_log,
+        emit_packet,
+        emit_status,
+        emit_cancel,
+    ) -> tuple[list[CommandPacket], bool]:
+        """Escalation chain: corrective re-plan -> motion floor -> honest state."""
+        action_seeking = motion_floor.is_animation_seeking(text) or not describe_only
+        if not all_packets and plan_mode != "pitch":
+            if plan_say or action_seeking:
+                await emit_status("Producer", "active", command_id, "rethinking that…")
+                async for event in llm.stream_plan(
+                    text,
+                    scene_now,
+                    frame,
+                    tier="strong",
+                    extra_context=(
+                        "Your previous plan produced ZERO executable steps "
+                        "(all were dropped as invalid). Return concrete mutating "
+                        "steps now. Keyframe values must be [x,y,z] with exactly "
+                        "3 numbers."
+                    ),
+                    adjustment=True,
+                ):
+                    if isinstance(event, llm.Say):
+                        pass
+                    elif isinstance(event, llm.Meta):
+                        pass
+                    elif isinstance(event, llm.Step):
+                        cap = min(4, MAX_STEPS - len(all_steps))
+                        if len(all_steps) >= cap:
+                            continue
+                        step = event.step
+                        all_steps.append(step)
+                        if step.action in ("describe", "suggest", "clarify", "pitch"):
+                            continue
+                        describe_only = False
+                        built = await self._producer._emit_staged_intent(
+                            step, command_id, emit_log, emit_packet, emit_status,
+                            emit_cancel, scene_now, utterance=text,
+                        )
+                        all_packets.extend(built)
+            if not all_packets and action_seeking:
+                await emit_log("Producer", "plan didn't land — improvising a take", "warn")
+                floor = motion_floor.motion_floor_packets(text, command_id)
+                for pkt in floor:
+                    await emit_packet(pkt, command_id)
+                all_packets.extend(floor)
+                describe_only = False
+            if plan_say and not all_packets:
+                describe_only = False
         return all_packets, describe_only
 
     @staticmethod
