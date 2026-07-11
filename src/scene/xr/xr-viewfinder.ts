@@ -27,6 +27,7 @@ export function createXrViewfinder(viewfinder: ViewfinderComposer): XrViewfinder
   const target = new THREE.WebGLRenderTarget(1, 1, {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
+    samples: 4,
   })
 
   let screenMaterial: THREE.MeshBasicMaterial | null = null

@@ -91,6 +91,7 @@ export function createReviewScreen(
   const target = new THREE.WebGLRenderTarget(REVIEW_RT_W, REVIEW_RT_H, {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
+    samples: 4,
   })
 
   // Hard shadow plate (brutalist-shadow)

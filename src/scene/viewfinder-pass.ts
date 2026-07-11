@@ -91,6 +91,13 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   }
 
   const prevTarget = renderer.getRenderTarget()
+
+  // XR sessions may disable autoClear — save and force it for our pass.
+  const prevAutoClear = renderer.autoClear
+  const prevAutoClearColor = renderer.autoClearColor
+  renderer.autoClear = true
+  renderer.autoClearColor = true
+
   const prevClearColor = new THREE.Color()
   renderer.getClearColor(prevClearColor)
   const prevClearAlpha = renderer.getClearAlpha()
@@ -109,11 +116,12 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   scene.background = studioBg
   renderer.setRenderTarget(target)
   renderer.setClearColor(studioBg, 1)
-  renderer.clear()
   viewfinder.composer.setSize(width, height)
   renderViewfinderFrame(stack, renderer, scene, virtCamera, viewfinder, delta, scratchRenderSize)
   renderer.setRenderTarget(prevTarget)
   renderer.setClearColor(prevClearColor, prevClearAlpha)
+  renderer.autoClear = prevAutoClear
+  renderer.autoClearColor = prevAutoClearColor
   scene.background = prevBg
   renderer.xr.enabled = xrWasEnabled
 
