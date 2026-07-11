@@ -90,14 +90,20 @@ function getSepiaSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | nu
   if (sepiaCtor !== undefined) return sepiaCtor
   const serverUrl = sepiaServerUrl()
   if (!serverUrl) {
+    console.log('[voice] SEPIA STT server URL not configured — polyfill unavailable')
     sepiaCtor = null
     return null
   }
+  console.log('[voice] initialising SEPIA polyfill — server:', serverUrl)
   const config = new SepiaSpeechRecognitionConfig()
   config.serverUrl = serverUrl
   const accessToken = import.meta.env.VITE_SEPIA_STT_TOKEN as string | undefined
-  if (accessToken) config.accessToken = accessToken
+  if (accessToken) {
+    config.accessToken = accessToken
+    console.log('[voice] SEPIA auth token set')
+  }
   sepiaCtor = sepiaSpeechRecognitionInit(config) as new () => SpeechRecognitionLike
+  console.log('[voice] SEPIA polyfill initialised')
   return sepiaCtor
 }
 
@@ -204,8 +210,12 @@ export function startVoiceSession(
 ): void {
   const NativeCtor = getNativeSpeechRecognitionCtor()
   const Recognition = NativeCtor ?? getSepiaSpeechRecognitionCtor()
-  if (!Recognition) return
+  if (!Recognition) {
+    console.log('[voice] no speech recognition available')
+    return
+  }
   const polyfilled = !NativeCtor
+  console.log('[voice] using', polyfilled ? 'SEPIA polyfill' : 'native SpeechRecognition')
   // Take over any live or draining session (desktop mic ↔ XR hold-A).
   if (recognition) stopVoiceSession()
 
@@ -223,12 +233,14 @@ export function startVoiceSession(
       addEventListener?: (type: string, cb: () => void) => void
     }
     recEvents.addEventListener?.('audiostart', () => {
+      console.log('[voice] polyfill audiostart — mic open')
       if (recognition === rec) {
         polyfillStartPending = false
         polyfillMicOpen = true
       }
     })
     recEvents.addEventListener?.('audioend', () => {
+      console.log('[voice] polyfill audioend — mic closed')
       polyfillMicOpen = false
     })
   }
@@ -245,6 +257,7 @@ export function startVoiceSession(
   }
 
   rec.onerror = (event) => {
+    console.log('[voice] error:', event.error)
     if (
       event.error === 'not-allowed' ||
       event.error === 'service-not-allowed' ||
