@@ -1,7 +1,15 @@
 /**
  * Shared Web Speech session — used by DirectorPod mic and XR push-to-talk.
  * No React; callers pass callbacks.
+ *
+ * Falls back to the SEPIA SpeechRecognition polyfill (self-hosted STT server)
+ * on browsers without a native implementation, e.g. Meta Quest Browser.
  */
+import {
+  sepiaSpeechRecognitionInit,
+  SepiaSpeechRecognitionConfig,
+} from 'sepia-speechrecognition-polyfill'
+
 interface SpeechResultEvent {
   resultIndex: number
   results: ArrayLike<{
@@ -30,14 +38,32 @@ export interface VoiceSessionHandlers {
   onInterim?: (text: string) => void
   onFinal?: (text: string, opts: { forceVision: boolean }) => void
   onListeningChange?: (listening: boolean) => void
+  /** Fatal recognition error ('not-allowed', 'network', …) — session already stopped. */
+  onError?: (error: string) => void
 }
 
+/**
+ * How long to keep a stopped session's handlers alive waiting for the last
+ * final transcript. The SEPIA polyfill's own final-result fallback timer is
+ * 4s, so wait slightly longer than that.
+ */
+const FINISH_GRACE_MS = 5000
+
 let recognition: SpeechRecognitionLike | null = null
+let recognitionIsPolyfill = false
 let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
+let finishTimer: ReturnType<typeof setTimeout> | null = null
+// Polyfill capture state, tracked via its audiostart/audioend events. Needed
+// because polyfill start/stop share one toggle: calling stop() on an idle
+// recorder would *open* the mic, so only toggle while it's opening or open.
+let polyfillStartPending = false
+let polyfillMicOpen = false
 
-function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+const noop = (): void => {}
+
+function getNativeSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   if (typeof window === 'undefined') return null
   const w = window as unknown as Record<string, unknown>
   return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as
@@ -45,8 +71,41 @@ function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
     | null
 }
 
+/**
+ * Where the SEPIA STT server lives. Same insecure-content rule as the
+ * director socket: an HTTPS page may not talk to a plain-http STT server,
+ * so in that case require an explicit VITE_SEPIA_STT_URL.
+ */
+function sepiaServerUrl(): string | null {
+  const configured = import.meta.env.VITE_SEPIA_STT_URL as string | undefined
+  if (configured) return configured
+  if (typeof location === 'undefined') return null
+  if (location.protocol === 'https:') return null
+  return `http://${location.hostname}:20741`
+}
+
+let sepiaCtor: (new () => SpeechRecognitionLike) | null | undefined
+
+function getSepiaSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  if (sepiaCtor !== undefined) return sepiaCtor
+  const serverUrl = sepiaServerUrl()
+  if (!serverUrl) {
+    sepiaCtor = null
+    return null
+  }
+  const config = new SepiaSpeechRecognitionConfig()
+  config.serverUrl = serverUrl
+  const accessToken = import.meta.env.VITE_SEPIA_STT_TOKEN as string | undefined
+  if (accessToken) config.accessToken = accessToken
+  sepiaCtor = sepiaSpeechRecognitionInit(config) as new () => SpeechRecognitionLike
+  return sepiaCtor
+}
+
 export function isSpeechAvailable(): boolean {
-  return getSpeechRecognitionCtor() !== null
+  return (
+    getNativeSpeechRecognitionCtor() !== null ||
+    getSepiaSpeechRecognitionCtor() !== null
+  )
 }
 
 /**
@@ -75,17 +134,26 @@ export function isVoiceListening(): boolean {
   return listening
 }
 
-export function stopVoiceSession(): void {
-  listening = false
-  forceVision = false
-  handlers.onListeningChange?.(false)
-  handlers.onInterim?.('')
+function clearFinishTimer(): void {
+  if (finishTimer) {
+    clearTimeout(finishTimer)
+    finishTimer = null
+  }
+}
+
+function detachRecognition(opts: { stop: boolean }): void {
+  clearFinishTimer()
   const rec = recognition
   recognition = null
-  if (rec) {
-    rec.onresult = null
-    rec.onend = null
-    rec.onerror = null
+  recognitionIsPolyfill = false
+  polyfillStartPending = false
+  if (!rec) return
+  // No-op handlers, not null: the SEPIA polyfill dispatches events
+  // unconditionally, so a null handler would throw.
+  rec.onresult = noop
+  rec.onend = noop
+  rec.onerror = noop
+  if (opts.stop) {
     try {
       rec.stop()
     } catch {
@@ -94,14 +162,52 @@ export function stopVoiceSession(): void {
   }
 }
 
+export function stopVoiceSession(): void {
+  const stillCapturing = recognitionIsPolyfill
+    ? polyfillStartPending || polyfillMicOpen
+    : listening
+  listening = false
+  forceVision = false
+  handlers.onListeningChange?.(false)
+  handlers.onInterim?.('')
+  detachRecognition({ stop: stillCapturing })
+}
+
+/**
+ * Stop capturing but keep result handlers alive for a grace period: both
+ * Chrome and the SEPIA polyfill deliver the last final transcript *after*
+ * stop(), so tearing down immediately on push-to-talk release would drop
+ * any utterance that hadn't finalized yet.
+ */
+export function finishVoiceSession(): void {
+  const rec = recognition
+  if (!rec || !listening) return
+  listening = false
+  handlers.onListeningChange?.(false)
+  handlers.onInterim?.('')
+  try {
+    rec.stop()
+  } catch {
+    stopVoiceSession()
+    return
+  }
+  polyfillStartPending = false
+  clearFinishTimer()
+  finishTimer = setTimeout(() => {
+    if (recognition === rec) stopVoiceSession()
+  }, FINISH_GRACE_MS)
+}
+
 export function startVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
 ): void {
-  const Recognition = getSpeechRecognitionCtor()
+  const NativeCtor = getNativeSpeechRecognitionCtor()
+  const Recognition = NativeCtor ?? getSepiaSpeechRecognitionCtor()
   if (!Recognition) return
-  // Take over any live session (desktop mic ↔ XR hold-A).
-  if (listening) stopVoiceSession()
+  const polyfilled = !NativeCtor
+  // Take over any live or draining session (desktop mic ↔ XR hold-A).
+  if (recognition) stopVoiceSession()
 
   handlers = next
   if (opts?.forceVision) forceVision = true
@@ -111,6 +217,21 @@ export function startVoiceSession(
   rec.continuous = true
   rec.interimResults = true
   rec.maxAlternatives = 1
+
+  if (polyfilled) {
+    const recEvents = rec as unknown as {
+      addEventListener?: (type: string, cb: () => void) => void
+    }
+    recEvents.addEventListener?.('audiostart', () => {
+      if (recognition === rec) {
+        polyfillStartPending = false
+        polyfillMicOpen = true
+      }
+    })
+    recEvents.addEventListener?.('audioend', () => {
+      polyfillMicOpen = false
+    })
+  }
 
   rec.onresult = (event) => {
     let ghost = ''
@@ -124,28 +245,50 @@ export function startVoiceSession(
   }
 
   rec.onerror = (event) => {
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+    if (
+      event.error === 'not-allowed' ||
+      event.error === 'service-not-allowed' ||
+      event.error === 'language-not-supported'
+    ) {
+      // The polyfill's recorder never opened the mic on these (init/auth
+      // failures) — clear capture flags so we don't toggle it back on.
+      polyfillStartPending = false
+      polyfillMicOpen = false
       stopVoiceSession()
+      handlers.onError?.(event.error)
+    } else if (event.error === 'network') {
+      stopVoiceSession()
+      handlers.onError?.(event.error)
     }
   }
 
   rec.onend = () => {
-    if (listening && recognition === rec) {
-      try {
-        rec.start()
-      } catch {
-        stopVoiceSession()
-      }
+    if (recognition !== rec) return
+    if (!listening || polyfilled) {
+      // Draining after finishVoiceSession(), or the polyfill's STT socket
+      // disconnected. Don't restart: on the polyfill start/stop share one
+      // toggle, so a "restart" could stop a live mic instead.
+      stopVoiceSession()
+      return
+    }
+    // Chrome ends sessions on silence — restart while the mic is held open.
+    try {
+      rec.start()
+    } catch {
+      stopVoiceSession()
     }
   }
 
   recognition = rec
+  recognitionIsPolyfill = polyfilled
   listening = true
+  if (polyfilled) polyfillStartPending = true
   handlers.onListeningChange?.(true)
   handlers.onInterim?.('')
   try {
     rec.start()
   } catch {
+    polyfillStartPending = false
     stopVoiceSession()
   }
 }
@@ -154,6 +297,6 @@ export function toggleVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
 ): void {
-  if (listening) stopVoiceSession()
+  if (listening) finishVoiceSession()
   else startVoiceSession(next, opts)
 }

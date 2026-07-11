@@ -182,6 +182,15 @@ If you see `XRWebGLBinding … is not of type 'XRSession'`, Chrome 147+ native W
 
 v1 does **not** send headset telemetry to the server (local pose only) — avoids MOVE_CAMERA feedback loops.
 
+**Voice on Quest (SEPIA STT):** Quest Browser has no native Web Speech API, so hold-A push-to-talk shows *mic unavailable* out of the box. Voice falls back to the [SEPIA SpeechRecognition polyfill](https://github.com/msub2/sepia-speechrecognition-polyfill), which streams mic audio to a self-hosted [SEPIA STT server](https://github.com/SEPIA-Framework/sepia-stt-server):
+
+1. Run the server on your dev machine: `docker run --rm -p 20741:20741 sepia/stt-server:latest`
+2. On an **http** page the app defaults to `http://<page-hostname>:20741`; set `VITE_SEPIA_STT_URL` (and `VITE_SEPIA_STT_TOKEN` for a non-default server token) in `.env.local` to override. On an **https** page the URL must be set explicitly and must be https too (mixed content is blocked).
+3. Secure-context rule: the mic only opens on HTTPS or localhost. Easiest on-device setup is USB + adb: `adb reverse tcp:3000 tcp:3000 && adb reverse tcp:20741 tcp:20741`, then open `http://localhost:3000` on the Quest — localhost counts as secure and both the app and STT server tunnel over USB. Alternatively put the dev server *and* the STT server behind one HTTPS tunnel/reverse proxy.
+4. The polyfill loads its audio-worklet/worker files from `/lib/` at runtime; `npm run dev`/`build` copy them from the npm package into `public/lib/` automatically (`sync-sepia-lib`).
+
+Desktop Chrome keeps using the native (Google-backed) recognizer; the polyfill only kicks in where the native API is missing (Quest Browser, Firefox).
+
 **Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.
 
 A full WebGPU migration checklist (with XR gating criteria) lives at the top of `src/Scene.tsx`.

@@ -22,6 +22,7 @@ import { markFirstPacket, formatLatencySummary } from './latency'
 import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
 import {
+  finishVoiceSession,
   isSpeechAvailable,
   isVoiceListening,
   startVoiceSession,
@@ -348,17 +349,20 @@ export function DirectorPod() {
   const voiceHandlers = useCallback(() => ({
     onInterim: setInterim,
     onListeningChange: setListening,
+    onError: (error: string) => pushLog('DIRECTOR', `voice error: ${error}`, 'error'),
     onFinal: (transcript: string, opts: { forceVision: boolean }) => {
       void submit(transcript, { forceVision: opts.forceVision })
     },
-  }), [submit])
+  }), [submit, pushLog])
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
     startVoiceSession(voiceHandlers(), opts)
   }, [voiceHandlers])
 
+  // Toggle-off finishes gracefully (waits for the trailing final transcript);
+  // Escape/unmount use stopMic for a hard teardown.
   const toggleMic = (forceVision = false) =>
-    isVoiceListening() ? stopMic() : startMic({ forceVision })
+    isVoiceListening() ? finishVoiceSession() : startMic({ forceVision })
 
   return (
     <div className="director-pod-anchor">
