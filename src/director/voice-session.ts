@@ -57,12 +57,16 @@ export function isSpeechAvailable(): boolean {
  * grant carries over once XR starts.
  */
 export async function requestMicPermission(): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    console.warn('[mic] getUserMedia unavailable (insecure context or unsupported browser)')
+    return false
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     for (const track of stream.getTracks()) track.stop()
     return true
-  } catch {
+  } catch (err) {
+    console.warn('[mic] permission request failed:', err)
     return false
   }
 }
