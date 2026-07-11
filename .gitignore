@@ -2,6 +2,8 @@ node_modules/
 build/
 dist/
 coverage/
+# SEPIA speech-polyfill worker assets, copied from node_modules by sync-sepia-lib
+public/lib/
 .DS_Store
 *.log
 .env*

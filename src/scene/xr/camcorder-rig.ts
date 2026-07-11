@@ -8,6 +8,7 @@ import { applyLiveCameraPose } from '../../director/camera-pose'
 import { submitDirectorCommand } from '../../director/director-command'
 import { getDirectorSocket } from '../../director/socket'
 import {
+  finishVoiceSession,
   isSpeechAvailable,
   isVoiceListening,
   startVoiceSession,
@@ -150,6 +151,7 @@ export function createCamcorderRig(
     startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
+      onError: (error) => directorSlate.setLastSent(`voice error: ${error}`),
       onFinal: (transcript) => {
         const commandId = crypto.randomUUID()
         void submitDirectorCommand(transcript, {
@@ -171,7 +173,9 @@ export function createCamcorderRig(
   }
 
   function endTalk(): void {
-    if (isVoiceListening()) stopVoiceSession()
+    // Graceful finish: the final transcript lands *after* release (both on
+    // Chrome and the SEPIA polyfill), so keep handlers alive while it drains.
+    if (isVoiceListening()) finishVoiceSession()
     directorSlate.setListening(false)
     directorSlate.setInterim('')
   }
@@ -270,7 +274,7 @@ export function createCamcorderRig(
       suppressRec = fn
     },
     dispose: () => {
-      endTalk()
+      stopVoiceSession()
       directorSlate.dispose()
       group.removeFromParent()
       scene.remove(xrInput.xrOrigin)
