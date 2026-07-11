@@ -239,6 +239,18 @@ class PlaybackPayload(BaseModel):
     time: float | None = None
 
 
+class CallStoreActionPayload(BaseModel):
+    """Generic client store dispatch — args are validated client-side only.
+
+    Deliberately unconstrained: the SceneAgent uses this to reach editor
+    actions that have no dedicated packet (overlays, takes, camera-op mode…).
+    Signatures are documented in store_actions.py / src/store.ts.
+    """
+
+    action: str = Field(min_length=1)
+    args: list = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Command packets (PRD shape, discriminated on `command`)
 # ---------------------------------------------------------------------------
@@ -312,6 +324,12 @@ class PlaybackPacket(_PacketBase):
     payload: PlaybackPayload
 
 
+class CallStoreActionPacket(_PacketBase):
+    command: Literal["CALL_STORE_ACTION"] = "CALL_STORE_ACTION"
+    target_agent: AgentName = "Producer"
+    payload: CallStoreActionPayload
+
+
 CommandPacket = Annotated[
     Union[
         SpawnObjectPacket,
@@ -324,6 +342,7 @@ CommandPacket = Annotated[
         UpdateFxPacket,
         SetKeyframesPacket,
         PlaybackPacket,
+        CallStoreActionPacket,
     ],
     Field(discriminator="command"),
 ]
@@ -492,8 +511,30 @@ class Telemetry(BaseModel):
     pose: TelemetryPose
 
 
+class AgentToolResult(BaseModel):
+    """Client's reply to one agent_tool_use round trip (SceneAgent loop)."""
+
+    type: Literal["agent_tool_result"] = "agent_tool_result"
+    timestamp: float = Field(default_factory=now)
+    commandId: str
+    requestId: str
+    ok: bool = True
+    results: list[str] = Field(default_factory=list)
+    scene: SceneState | None = None
+    frame: SceneFrame | None = None
+
+
+class AgentAbort(BaseModel):
+    """User stopped an in-flight SceneAgent session (e.g. said "cut")."""
+
+    type: Literal["agent_abort"] = "agent_abort"
+    timestamp: float = Field(default_factory=now)
+    commandId: str
+
+
 ClientMessage = Annotated[
-    Union[UserCommand, SceneState, Telemetry], Field(discriminator="type")
+    Union[UserCommand, SceneState, Telemetry, AgentToolResult, AgentAbort],
+    Field(discriminator="type"),
 ]
 client_message_adapter: TypeAdapter = TypeAdapter(ClientMessage)
 
@@ -505,6 +546,24 @@ client_message_adapter: TypeAdapter = TypeAdapter(ClientMessage)
 
 def agent_command_message(packet) -> dict:
     return {"type": "agent_command", "timestamp": now(), "packet": packet.model_dump()}
+
+
+AgentToolName = Literal["run_commands", "call_store_action", "get_scene", "capture_frame"]
+
+
+def agent_tool_use_message(
+    command_id: str, request_id: str, tool: AgentToolName, payload: dict
+) -> dict:
+    """One SceneAgent tool invocation for the client to execute. Sent to the
+    owning websocket only — never broadcast (a second client would double-run it)."""
+    return {
+        "type": "agent_tool_use",
+        "timestamp": now(),
+        "commandId": command_id,
+        "requestId": request_id,
+        "tool": tool,
+        "payload": payload,
+    }
 
 
 def agent_status_message(

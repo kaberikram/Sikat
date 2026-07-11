@@ -16,6 +16,7 @@ import {
   releaseCommandPresence,
   setRuntimeLogger,
 } from './agent-runtime'
+import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { submitDirectorCommand } from './director-command'
 import { markFirstPacket, formatLatencySummary } from './latency'
 import { presenceStore } from './presence'
@@ -116,6 +117,7 @@ export function DirectorPod() {
 
   const stopMicRef = useRef<() => void>(() => {})
 
+  const socketConfigured = getDirectorSocket().isConfigured
   const speechAvailable = isSpeechAvailable()
   const hasContext = selectedId !== null
 
@@ -192,8 +194,10 @@ export function DirectorPod() {
         suggestionExpiryRef.current.delete(msg.suggestionId)
       }, 25_000))
     })
+    const offToolUse = startAgentToolExecutor(socket)
     const offPlanUpdate = socket.onPlanUpdate((msg) => {
       if (msg.status === 'done') {
+        clearAgentSession(msg.commandId)
         setPlanProgress(null)
         return
       }
@@ -290,6 +294,7 @@ export function DirectorPod() {
       offCancel()
       offQuestion()
       offSuggestion()
+      offToolUse()
       offPlanUpdate()
       offAgentStatus()
       offLog()
@@ -438,9 +443,34 @@ export function DirectorPod() {
           <span className="opacity-60 uppercase">{status}</span>
         </div>
 
+        {!socketConfigured && (
+          <div className="px-2 py-1.5 border-t-2 border-black bg-red-100 text-[9px] font-mono font-bold text-red-700">
+            SERVER NOT CONFIGURED — set VITE_DIRECTOR_WS_URL (wss://…/ws) and redeploy
+          </div>
+        )}
+
         {planProgress && (
           <div className="px-2 py-1.5 border-t-2 border-black bg-[var(--jsr-blue)]/15 text-[9px] font-mono">
-            <div className="font-bold">{planProgress.say ?? 'planning the take…'}</div>
+            <div className="flex items-center gap-1.5">
+              {activeAgentSessionId() === planProgress.commandId && (
+                <span className="px-1 bg-black text-white font-bold">AGENT</span>
+              )}
+              <span className="font-bold flex-1">{planProgress.say ?? 'planning the take…'}</span>
+              {activeAgentSessionId() === planProgress.commandId && (
+                <button
+                  type="button"
+                  className="px-1.5 border-2 border-black bg-white font-bold hover:bg-black hover:text-white"
+                  onClick={() => {
+                    getDirectorSocket().sendAgentAbort(planProgress.commandId)
+                    clearAgentSession(planProgress.commandId)
+                    setPlanProgress(null)
+                    pushLog('DIRECTOR', 'agent stopped', 'info')
+                  }}
+                >
+                  STOP
+                </button>
+              )}
+            </div>
             <div className="opacity-70 uppercase">
               {planProgress.stepIndex ?? 0}/{planProgress.stepsTotal ?? '…'} · {planProgress.stepLabel ?? planProgress.status}
             </div>

@@ -214,6 +214,8 @@ export interface MotionObject {
   materialOverride?: MaterialOverride
 }
 
+// Actions on this interface are callable by the SceneAgent via
+// CALL_STORE_ACTION — keep server/app/store_actions.py's docs in sync.
 interface EditorState {
   objects: MotionObject[];
   virtualCamera: VirtualCamera;
