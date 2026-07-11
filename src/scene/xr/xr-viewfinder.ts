@@ -27,7 +27,9 @@ export function createXrViewfinder(viewfinder: ViewfinderComposer): XrViewfinder
   const target = new THREE.WebGLRenderTarget(1, 1, {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
-    samples: 4,
+    // No MSAA: WebXR sessions often can't resolve multisampled offscreen
+    // targets, which silently produces a black texture.
+    depthBuffer: true,
   })
 
   let screenMaterial: THREE.MeshBasicMaterial | null = null

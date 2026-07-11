@@ -1,14 +1,15 @@
 /**
- * Shared Web Speech session — used by DirectorPod mic and XR push-to-talk.
+ * Shared voice session — used by DirectorPod mic and XR push-to-talk.
  * No React; callers pass callbacks.
  *
- * Falls back to the SEPIA SpeechRecognition polyfill (self-hosted STT server)
- * on browsers without a native implementation, e.g. Meta Quest Browser.
+ * Chrome/Edge get the native (Google-backed) SpeechRecognition API.
+ * On browsers without it (Meta Quest Browser, Firefox), falls back to
+ * Deepgram Nova-2 over a direct WebSocket — no self-hosted STT server needed.
+ *
+ * Chrome's native SpeechRecognition needs a cooldown between stop() and
+ * start() — rapid toggles can trigger spurious "language-not-supported".
+ * When the native path is cooling down, we fall through to Deepgram.
  */
-import {
-  sepiaSpeechRecognitionInit,
-  SepiaSpeechRecognitionConfig,
-} from 'sepia-speechrecognition-polyfill'
 
 interface SpeechResultEvent {
   resultIndex: number
@@ -42,26 +43,31 @@ export interface VoiceSessionHandlers {
   onError?: (error: string) => void
 }
 
-/**
- * How long to keep a stopped session's handlers alive waiting for the last
- * final transcript. The SEPIA polyfill's own final-result fallback timer is
- * 4s, so wait slightly longer than that.
- */
-const FINISH_GRACE_MS = 5000
+// ---- state ----
 
 let recognition: SpeechRecognitionLike | null = null
-let recognitionIsPolyfill = false
+let deepgramWs: WebSocket | null = null
+let deepgramAudioCtx: AudioContext | null = null
+let deepgramProcessor: ScriptProcessorNode | null = null
+let deepgramStream: MediaStream | null = null
 let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
 let finishTimer: ReturnType<typeof setTimeout> | null = null
-// Polyfill capture state, tracked via its audiostart/audioend events. Needed
-// because polyfill start/stop share one toggle: calling stop() on an idle
-// recorder would *open* the mic, so only toggle while it's opening or open.
-let polyfillStartPending = false
-let polyfillMicOpen = false
 
-const noop = (): void => {}
+/**
+ * After a native session stops, we block new native starts for this many ms.
+ * Chrome's SpeechRecognition throws "language-not-supported" if you call
+ * start() too soon after stop().
+ */
+const NATIVE_COOLDOWN_MS = 500
+
+/** Timestamp (ms) when the last native session ended. 0 = no cooldown active. */
+let nativeCooldownUntil = 0
+
+const FINISH_GRACE_MS = 5000
+
+// ---- native path ----
 
 function getNativeSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
   if (typeof window === 'undefined') return null
@@ -71,64 +77,161 @@ function getNativeSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | n
     | null
 }
 
+function nativeIsReady(): boolean {
+  return getNativeSpeechRecognitionCtor() !== null && Date.now() >= nativeCooldownUntil
+}
+
+// ---- Deepgram path ----
+
+const DG_WS_URL = 'wss://api.deepgram.com/v1/listen'
+const DG_SAMPLE_RATE = 16000
+
+function getDeepgramApiKey(): string | null {
+  return (import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined) ?? null
+}
+
+function isDeepgramAvailable(): boolean {
+  return getDeepgramApiKey() !== null
+}
+
 /**
- * Where the SEPIA STT server lives. Same insecure-content rule as the
- * director socket: an HTTPS page may not talk to a plain-http STT server,
- * so in that case require an explicit VITE_SEPIA_STT_URL.
+ * Convert Float32 audio samples to 16-bit PCM little-endian bytes.
  */
-function sepiaServerUrl(): string | null {
-  const configured = import.meta.env.VITE_SEPIA_STT_URL as string | undefined
-  if (configured) {
-    // The polyfill uses this to construct a WebSocket URL, so it must have a
-    // protocol. If the user set just a hostname, prepend https://.
-    if (/^https?:\/\//.test(configured)) return configured.replace(/\/+$/, '')
-    console.warn(
-      '[voice] VITE_SEPIA_STT_URL missing protocol — prepending https://'
-    )
-    return `https://${configured.replace(/^\/+|\/+$/g, '')}`
+function float32ToPcm16(buffer: Float32Array): ArrayBuffer {
+  const out = new ArrayBuffer(buffer.length * 2)
+  const view = new DataView(out)
+  for (let i = 0; i < buffer.length; i++) {
+    const s = Math.max(-1, Math.min(1, buffer[i]))
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true)
   }
-  if (typeof location === 'undefined') return null
-  if (location.protocol === 'https:') return null
-  return `http://${location.hostname}:20741`
+  return out
 }
 
-let sepiaCtor: (new () => SpeechRecognitionLike) | null | undefined
+function deepgramStop(): void {
+  const ws = deepgramWs
+  const ctx = deepgramAudioCtx
+  const proc = deepgramProcessor
+  const stream = deepgramStream
+  deepgramWs = null
+  deepgramAudioCtx = null
+  deepgramProcessor = null
+  deepgramStream = null
 
-function getSepiaSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
-  if (sepiaCtor !== undefined) return sepiaCtor
-  const serverUrl = sepiaServerUrl()
-  if (!serverUrl) {
-    console.log('[voice] SEPIA STT server URL not configured — polyfill unavailable')
-    sepiaCtor = null
-    return null
+  try { proc?.disconnect() } catch { /* ignore */ }
+  try { ctx?.close() } catch { /* ignore */ }
+  for (const track of stream?.getTracks() ?? []) track.stop()
+
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    try { ws.send(JSON.stringify({ type: 'CloseStream' })) } catch { /* ignore */ }
+    ws.close()
   }
-  console.log('[voice] initialising SEPIA polyfill — server:', serverUrl)
-  const config = new SepiaSpeechRecognitionConfig()
-  config.serverUrl = serverUrl
-  const accessToken = import.meta.env.VITE_SEPIA_STT_TOKEN as string | undefined
-  if (accessToken) {
-    config.accessToken = accessToken
-    console.log('[voice] SEPIA auth token set')
-  }
-  sepiaCtor = sepiaSpeechRecognitionInit(config) as new () => SpeechRecognitionLike
-  console.log('[voice] SEPIA polyfill initialised')
-  return sepiaCtor
 }
+
+function deepgramStart(): void {
+  const apiKey = getDeepgramApiKey()
+  if (!apiKey) return
+
+  const ws = new WebSocket(DG_WS_URL, ['token', apiKey])
+  deepgramWs = ws
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'Configure',
+      features: {
+        model: 'nova-2',
+        encoding: 'linear16',
+        sample_rate: DG_SAMPLE_RATE,
+        channels: 1,
+        interim_results: true,
+        utterance_end_ms: 1000,
+        smart_format: true,
+        punctuate: true,
+      },
+    }))
+
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      deepgramStream = stream
+      const ctx = new AudioContext({ sampleRate: DG_SAMPLE_RATE })
+      deepgramAudioCtx = ctx
+
+      const source = ctx.createMediaStreamSource(stream)
+      // ScriptProcessorNode is deprecated but works everywhere including
+      // Quest Browser, where AudioWorklet has spotty support.
+      const proc = ctx.createScriptProcessor(4096, 1, 1)
+      deepgramProcessor = proc
+
+      proc.onaudioprocess = (e) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(float32ToPcm16(e.inputBuffer.getChannelData(0)))
+        }
+      }
+
+      source.connect(proc)
+      proc.connect(ctx.destination)
+      handlers.onListeningChange?.(true)
+    }).catch((err) => {
+      console.warn('[voice] getUserMedia failed:', err)
+      handlers.onError?.('not-allowed')
+      deepgramStop()
+    })
+  }
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data as string)
+      if (msg.type === 'Results') {
+        const channel = msg.channel
+        const alt = channel?.alternatives?.[0]
+        if (!alt || alt.transcript === undefined) return
+        const transcript = (alt.transcript as string).trim()
+        if (!transcript) return
+        if (msg.is_final) handlers.onFinal?.(transcript, { forceVision })
+        else handlers.onInterim?.(transcript)
+      }
+      if (msg.type === 'Error') {
+        console.warn('[voice] Deepgram error:', msg.description)
+        handlers.onError?.('network')
+        deepgramStop()
+      }
+    } catch { /* ignore unparseable messages */ }
+  }
+
+  ws.onerror = () => {
+    handlers.onError?.('network')
+    deepgramStop()
+  }
+
+  ws.onclose = () => {
+    if (ws === deepgramWs) deepgramStop()
+  }
+}
+
+// ---- cleanup helpers ----
+
+function clearFinishTimer(): void {
+  if (finishTimer) {
+    clearTimeout(finishTimer)
+    finishTimer = null
+  }
+}
+
+function detachNativeRecognition(): void {
+  if (!recognition) return
+  const rec = recognition
+  recognition = null
+  rec.onresult = null
+  rec.onend = null
+  rec.onerror = null
+  try { rec.stop() } catch { /* already stopped */ }
+  nativeCooldownUntil = Date.now() + NATIVE_COOLDOWN_MS
+}
+
+// ---- public API ----
 
 export function isSpeechAvailable(): boolean {
-  return (
-    getNativeSpeechRecognitionCtor() !== null ||
-    getSepiaSpeechRecognitionCtor() !== null
-  )
+  return getNativeSpeechRecognitionCtor() !== null || isDeepgramAvailable()
 }
 
-/**
- * Explicitly prompt for mic access via getUserMedia. SpeechRecognition alone
- * doesn't surface a permission dialog inside an immersive WebXR session (no
- * dom-overlay to render it in, e.g. Meta Quest Browser), so callers should
- * request this up front while still in the regular 2D page — the resulting
- * grant carries over once XR starts.
- */
 export async function requestMicPermission(): Promise<boolean> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     console.warn('[mic] getUserMedia unavailable (insecure context or unsupported browser)')
@@ -148,169 +251,127 @@ export function isVoiceListening(): boolean {
   return listening
 }
 
-function clearFinishTimer(): void {
-  if (finishTimer) {
-    clearTimeout(finishTimer)
-    finishTimer = null
-  }
-}
-
-function detachRecognition(opts: { stop: boolean }): void {
-  clearFinishTimer()
-  const rec = recognition
-  recognition = null
-  recognitionIsPolyfill = false
-  polyfillStartPending = false
-  if (!rec) return
-  // No-op handlers, not null: the SEPIA polyfill dispatches events
-  // unconditionally, so a null handler would throw.
-  rec.onresult = noop
-  rec.onend = noop
-  rec.onerror = noop
-  if (opts.stop) {
-    try {
-      rec.stop()
-    } catch {
-      /* already stopped */
-    }
-  }
-}
-
 export function stopVoiceSession(): void {
-  const stillCapturing = recognitionIsPolyfill
-    ? polyfillStartPending || polyfillMicOpen
-    : listening
   listening = false
   forceVision = false
+  clearFinishTimer()
+
+  if (deepgramWs) deepgramStop()
+  detachNativeRecognition()
+
   handlers.onListeningChange?.(false)
   handlers.onInterim?.('')
-  detachRecognition({ stop: stillCapturing })
 }
 
-/**
- * Stop capturing but keep result handlers alive for a grace period: both
- * Chrome and the SEPIA polyfill deliver the last final transcript *after*
- * stop(), so tearing down immediately on push-to-talk release would drop
- * any utterance that hadn't finalized yet.
- */
 export function finishVoiceSession(): void {
-  const rec = recognition
-  if (!rec || !listening) return
+  if (!listening) return
   listening = false
   handlers.onListeningChange?.(false)
   handlers.onInterim?.('')
-  try {
-    rec.stop()
-  } catch {
-    stopVoiceSession()
+
+  if (deepgramWs) {
+    const ws = deepgramWs
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify({ type: 'CloseStream' })) } catch { /* ignore */ }
+    }
+    clearFinishTimer()
+    finishTimer = setTimeout(() => {
+      if (deepgramWs === ws) stopVoiceSession()
+    }, FINISH_GRACE_MS)
     return
   }
-  polyfillStartPending = false
-  clearFinishTimer()
-  finishTimer = setTimeout(() => {
-    if (recognition === rec) stopVoiceSession()
-  }, FINISH_GRACE_MS)
+
+  if (recognition) {
+    const rec = recognition
+    detachNativeRecognition()
+    clearFinishTimer()
+    finishTimer = setTimeout(() => {
+      if (recognition === rec) return // already replaced by a new session
+      // Grace period expired — full teardown.
+      listening = false
+      handlers.onListeningChange?.(false)
+      handlers.onInterim?.('')
+    }, FINISH_GRACE_MS)
+  }
 }
 
 export function startVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
 ): void {
-  const NativeCtor = getNativeSpeechRecognitionCtor()
-  const Recognition = NativeCtor ?? getSepiaSpeechRecognitionCtor()
-  if (!Recognition) {
-    console.log('[voice] no speech recognition available')
-    return
-  }
-  const polyfilled = !NativeCtor
-  console.log('[voice] using', polyfilled ? 'SEPIA polyfill' : 'native SpeechRecognition')
-  // Take over any live or draining session (desktop mic ↔ XR hold-A).
-  if (recognition) stopVoiceSession()
+  // Tear down any live or draining session.
+  if (recognition || deepgramWs) stopVoiceSession()
 
   handlers = next
   if (opts?.forceVision) forceVision = true
+  listening = true
 
-  const rec = new Recognition()
-  rec.lang = 'en-US'
-  rec.continuous = true
-  rec.interimResults = true
-  rec.maxAlternatives = 1
+  if (nativeIsReady()) {
+    const rec = new (getNativeSpeechRecognitionCtor()!)()
+    rec.lang = 'en-US'
+    rec.continuous = true
+    rec.interimResults = true
+    rec.maxAlternatives = 1
 
-  if (polyfilled) {
-    const recEvents = rec as unknown as {
-      addEventListener?: (type: string, cb: () => void) => void
-    }
-    recEvents.addEventListener?.('audiostart', () => {
-      console.log('[voice] polyfill audiostart — mic open')
-      if (recognition === rec) {
-        polyfillStartPending = false
-        polyfillMicOpen = true
+    rec.onresult = (event) => {
+      let ghost = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        const transcript = result[0]?.transcript ?? ''
+        if (result.isFinal) handlers.onFinal?.(transcript, { forceVision })
+        else ghost += transcript
       }
-    })
-    recEvents.addEventListener?.('audioend', () => {
-      console.log('[voice] polyfill audioend — mic closed')
-      polyfillMicOpen = false
-    })
-  }
-
-  rec.onresult = (event) => {
-    let ghost = ''
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i]
-      const transcript = result[0]?.transcript ?? ''
-      if (result.isFinal) handlers.onFinal?.(transcript, { forceVision })
-      else ghost += transcript
+      handlers.onInterim?.(ghost)
     }
-    handlers.onInterim?.(ghost)
-  }
 
-  rec.onerror = (event) => {
-    console.log('[voice] error:', event.error)
-    if (
-      event.error === 'not-allowed' ||
-      event.error === 'service-not-allowed' ||
-      event.error === 'language-not-supported'
-    ) {
-      // The polyfill's recorder never opened the mic on these (init/auth
-      // failures) — clear capture flags so we don't toggle it back on.
-      polyfillStartPending = false
-      polyfillMicOpen = false
-      stopVoiceSession()
-      handlers.onError?.(event.error)
-    } else if (event.error === 'network') {
-      stopVoiceSession()
-      handlers.onError?.(event.error)
+    rec.onerror = (event) => {
+      if (
+        event.error === 'not-allowed' ||
+        event.error === 'service-not-allowed'
+      ) {
+        stopVoiceSession()
+        handlers.onError?.(event.error)
+      } else if (event.error === 'network') {
+        stopVoiceSession()
+        handlers.onError?.(event.error)
+      } else if (event.error === 'language-not-supported') {
+        // Chrome throws this on rapid stop/start. Give it a longer cooldown,
+        // then retry via Deepgram if available.
+        detachNativeRecognition()
+        nativeCooldownUntil = Date.now() + NATIVE_COOLDOWN_MS
+        if (isDeepgramAvailable()) {
+          deepgramStart()
+          return
+        }
+        stopVoiceSession()
+        handlers.onError?.(event.error)
+      }
     }
-  }
 
-  rec.onend = () => {
-    if (recognition !== rec) return
-    if (!listening || polyfilled) {
-      // Draining after finishVoiceSession(), or the polyfill's STT socket
-      // disconnected. Don't restart: on the polyfill start/stop share one
-      // toggle, so a "restart" could stop a live mic instead.
-      stopVoiceSession()
-      return
+    rec.onend = () => {
+      if (recognition !== rec) return
+      if (!listening) {
+        stopVoiceSession()
+        return
+      }
+      // Chrome auto-ends on silence — restart while the mic is held open.
+      try { rec.start() } catch { stopVoiceSession() }
     }
-    // Chrome ends sessions on silence — restart while the mic is held open.
+
+    recognition = rec
+    handlers.onListeningChange?.(true)
+    handlers.onInterim?.('')
     try {
       rec.start()
     } catch {
       stopVoiceSession()
     }
-  }
-
-  recognition = rec
-  recognitionIsPolyfill = polyfilled
-  listening = true
-  if (polyfilled) polyfillStartPending = true
-  handlers.onListeningChange?.(true)
-  handlers.onInterim?.('')
-  try {
-    rec.start()
-  } catch {
-    polyfillStartPending = false
-    stopVoiceSession()
+  } else if (isDeepgramAvailable()) {
+    deepgramStart()
+  } else {
+    // Native is cooling down and Deepgram isn't configured.
+    listening = false
+    handlers.onError?.('voice unavailable — native API cooling down, try again')
   }
 }
 

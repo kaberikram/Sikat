@@ -8,10 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
-    "sync-sepia-lib": "rm -rf public/lib && cp -r node_modules/sepia-speechrecognition-polyfill/lib public/lib",
-    "predev": "npm run sync-sepia-lib",
-    "prebuild": "npm run sync-sepia-lib"
+    "lint": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
@@ -27,7 +24,6 @@
     "mp4-muxer": "^5.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sepia-speechrecognition-polyfill": "^1.0.1",
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",
     "vite": "^6.2.0",

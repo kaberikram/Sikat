@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { renderViewfinderFrame } from '../pip-composer'
+import { renderViewfinderFrame, updateViewfinderComposerFromStack, viewfinderShouldUseComposer } from '../pip-composer'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime } from '../timeline-apply'
 import {
   applyViewfinderMeshEffects,
@@ -42,6 +42,41 @@ interface ViewfinderTargetContext {
 }
 
 const scratchRenderSize = new THREE.Vector2()
+
+// ---- fullscreen blit (composer output → render target) ----
+
+/** Cached geometry for a fullscreen quad covering NDC [-1,1]. */
+const blitQuad = new THREE.PlaneGeometry(2, 2)
+const blitScene = new THREE.Scene()
+const blitCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+let blitMaterial: THREE.MeshBasicMaterial | null = null
+let blitMesh: THREE.Mesh | null = null
+
+/**
+ * The EffectComposer always renders to its own internal buffers.  When we need
+ * the result inside a caller-supplied `WebGLRenderTarget`, we blit the
+ * composer's output texture into `target` using a trivial fullscreen quad.
+ */
+function blitTextureToTarget(
+  renderer: THREE.WebGLRenderer,
+  source: THREE.Texture,
+  target: THREE.WebGLRenderTarget
+): void {
+  if (!blitMaterial) {
+    blitMaterial = new THREE.MeshBasicMaterial({
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    })
+    blitMesh = new THREE.Mesh(blitQuad, blitMaterial)
+    blitScene.add(blitMesh)
+  }
+  blitMaterial.map = source
+  blitMaterial.needsUpdate = true
+
+  renderer.setRenderTarget(target)
+  renderer.render(blitScene, blitCamera)
+}
 
 function restoreObjectTransforms(
   objects: MotionObject[],
@@ -117,7 +152,19 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   renderer.setRenderTarget(target)
   renderer.setClearColor(studioBg, 1)
   viewfinder.composer.setSize(width, height)
-  renderViewfinderFrame(stack, renderer, scene, virtCamera, viewfinder, delta, scratchRenderSize)
+
+  const shouldCompose = viewfinderShouldUseComposer(stack)
+  if (shouldCompose) {
+    // Sync composer pass params from the stack, then render (composer writes
+    // to its internal buffers — it ignores renderer.setRenderTarget).
+    updateViewfinderComposerFromStack(stack, renderer, viewfinder, scratchRenderSize)
+    viewfinder.composer.render(delta)
+    // Blit composer output into our target.
+    const sourceTex = viewfinder.composer.readBuffer.texture
+    if (sourceTex) blitTextureToTarget(renderer, sourceTex, target)
+  } else {
+    renderer.render(scene, virtCamera)
+  }
   renderer.setRenderTarget(prevTarget)
   renderer.setClearColor(prevClearColor, prevClearAlpha)
   renderer.autoClear = prevAutoClear
