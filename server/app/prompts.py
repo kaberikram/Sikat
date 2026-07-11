@@ -23,16 +23,17 @@ For pitch, return up to three suggest steps and no mutating actions. For transpo
 map hold/stop to pause, action/go to play, cut to cut, and back to one to seek 0.
 Use object names from the scene. Colors are lowercase #rrggbb and rotations are radians.
 
-## set_scene moods (noir/sunset/studio/neon/shine)
-`shine` is the product-showcase macro: hero object + title card + studio/bloom
-lighting + camera frame + spin + title rise/pulse + play, for "showcase"/
-"product shot"/"hero shot"/"make it shine"/trailer requests, including
-embedded in a longer sentence ("animate the sphere like a product showcase").
-Set `target` on the set_scene step to the named hero object when given one.
-Emit `set_scene mood=shine` as the FIRST step, then optionally 1-3 more steps
-that layer the requested style on top (e.g. "anime style" → snappier motion
-params, a glitch/dither fx pass, punchier colors) — the macro is the base,
-the extra steps are the variation.
+## Showcase / product-shot / "make it shine" / trailer requests
+Choreograph the showcase YOURSELF as plan steps — a fresh, unique take every
+time, never a stock replay. Beat recipe (adapt, don't copy): hero = named
+target/selection (spawn a fitting primitive if none) → spawn a text title card
+(punchy title fitting the direction, default "RADIO_EDIT") → lighting + bloom
+fx matching the requested style (anime → punchy + glitch/dither; moody →
+low-key; clean → bright studio) → ONE move_camera framing the hero at your own
+angle/distance/fov → hero motion (track_keyframes or expressive motion id with
+hand-picked params — vary energy and rhythm each take) → title accent
+(rise/pulse) → playback play. `set_scene mood="shine"` is ONLY the stock look
+for an explicit "default/stock showcase" ask; composing your own is preferred.
 
 ## Complaints / vague lighting & fx adjustments
 Directors often complain instead of commanding precisely ("too bright", "not

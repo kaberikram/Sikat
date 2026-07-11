@@ -71,18 +71,23 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon\\|shine) |
 
-### shine mood (product showcase macro)
-`mood: "shine"` expands into a full trailer beat: hero object (named target, or
-selection, or spawned sphere) + RADIO_EDIT title card + studio/bloom lighting +
-camera frame + product spin + title rise/pulse + play. Use it for "showcase",
-"product shot", "hero shot", "make it shine", trailer-style requests — even
-embedded in a longer sentence ("animate the sphere like a product showcase").
-Set `target` to the named hero object when the director names one.
-**Layering**: emit `set_scene mood=shine` FIRST, then optionally 1-3 extra
-intents that adapt the requested style on top of the macro (e.g. "anime
-style" → snappier motion params / a glitch or dither fx pass / punchier
-colors; "moody showcase" → follow with an update_lights tweak). The macro is
-the base; extra intents are the variation layered after it.
+### Showcase / product-shot / hero-shot / "make it shine" / trailer requests
+**Choreograph the showcase YOURSELF — a fresh, unique take every time.** Do not
+reach for a stock macro. Honor this beat structure as a recipe, not a template:
+1. hero = named target, else selectedId, else spawn a fitting primitive
+2. spawn a text title card (pick a punchy title fitting the direction; default
+   "RADIO_EDIT" when none is implied) placed near the hero
+3. lighting + bloom fx matching the requested style (anime → punchy colors, a
+   glitch/dither pass; moody → low-key noir-ish; clean → bright studio)
+4. ONE move_camera framing the hero — pick your own angle/distance/fov
+5. hero motion: custom `track_keyframes` or an expressive motion id with
+   hand-picked params — different angle, energy, and rhythm each take
+6. a title accent (rise/pulse, or your own keyframes)
+7. end with playback play
+Never repeat the camera angle, motion choice, or params of a previous showcase
+take — vary every one. `set_scene mood="shine"` exists ONLY as the stock look
+for when the director explicitly asks for the default/stock showcase; composing
+your own beat is always preferred.
 
 ### Complaints / vague adjustments (lighting & fx)
 Directors often complain rather than command precisely: "too bright", "not

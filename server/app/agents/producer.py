@@ -166,7 +166,10 @@ class Producer:
         }
 
     def _build_own(
-        self, intent: Intent, scene: SceneState | None = None
+        self,
+        intent: Intent,
+        scene: SceneState | None = None,
+        command_id: str | None = None,
     ) -> list[CommandPacket]:
         if intent.action == "playback" and intent.playback_action:
             packets = [
@@ -180,7 +183,7 @@ class Producer:
                 packets.append(PlaybackPacket(payload=PlaybackPayload(action="pause")))
             return packets
         if intent.action == "set_scene" and intent.mood == "shine":
-            return shine_packets(scene, target=intent.target)
+            return shine_packets(scene, target=intent.target, command_id=command_id)
         if intent.action == "set_scene" and intent.mood:
             packets = mood_packets(intent.mood)
             if not packets:
@@ -220,7 +223,7 @@ class Producer:
             return []
 
         if intent.action in ("playback", "set_scene"):
-            built = self._build_own(intent, scene)
+            built = self._build_own(intent, scene, command_id)
             if intent.action == "set_scene" and intent.mood and not built:
                 await emit(self.name, f"unknown mood '{intent.mood}'", "warn")
             elif intent.action == "set_scene" and built:
@@ -1067,7 +1070,16 @@ class Producer:
             and all(intent is not None and _grammar_has_complete_intent(intent) for intent in parsed)
             and not _CREATIVE_LANGUAGE.search(text)
         )
-        if is_complete_grammar:
+        # Shine/showcase is creative direction: with an LLM configured it gets
+        # choreographed fresh each take instead of replaying the canned macro.
+        wants_showcase = any(
+            intent is not None
+            and intent.action == "set_scene"
+            and intent.mood == "shine"
+            for intent in parsed
+        )
+        llm_ready = llm.select_tier(frame, escalated=False) is not None
+        if is_complete_grammar and not (llm_ready and wants_showcase):
             intents = [intent for intent in parsed if intent is not None]
             packets = await self._stream_intents(
                 intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
@@ -1077,7 +1089,7 @@ class Producer:
             log.debug("instant via grammar: %d intent(s)", len(intents))
             return packets, not packets
 
-        if llm.select_tier(frame, escalated=False) is None:
+        if not llm_ready:
             intents = fallback_parser.parse(text, scene)
             if intents:
                 clarify = next((intent for intent in intents if intent.action == "clarify"), None)
@@ -1109,5 +1121,7 @@ class Producer:
         return await PlanRunner(self).run(
             text, scene, command_id, emit_log, emit_packet, emit_status, frame, emit_cancel,
             emit_suggest, emit_question, emit_plan_update,
-            prefer_strong=has_animation_request or bool(_CREATIVE_LANGUAGE.search(text)),
+            prefer_strong=has_animation_request
+            or wants_showcase
+            or bool(_CREATIVE_LANGUAGE.search(text)),
         )

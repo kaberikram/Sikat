@@ -1,9 +1,13 @@
-"""Shine v1 macro tests (fallback/grammar path only — no API key needed)."""
+"""Shine macro tests: offline fallback, seeded variation, and LLM-first routing."""
 from __future__ import annotations
 
 import pytest
 
+from app import llm
+from app.creative_parse import defer_clause_to_llm
+from app.schema import Intent, PlanStep
 from app.session_context import SessionContext, bind_session, reset_session
+from app.shine_presets import shine_packets
 from tests.helpers import animated_sphere_scene, scene_with
 
 
@@ -96,3 +100,88 @@ async def test_dark_corner_phrase_does_not_fire_noir(producer, scene):
     from app.clause_handlers import _parse_mood
 
     assert _parse_mood("a dark corner of the box", scene, None) is None
+
+
+def _dumps(packets):
+    return [p.model_dump(exclude={"timestamp"}) for p in packets]
+
+
+def test_shine_macro_varies_per_take(scene):
+    """Different command ids → different camera/motion; the macro never replays verbatim."""
+    base = _dumps(shine_packets(scene, command_id="take-1"))
+    others = [
+        _dumps(shine_packets(scene, command_id=cid)) for cid in ("take-2", "take-3", "take-4")
+    ]
+    assert any(other != base for other in others)
+
+
+def test_shine_macro_repeatable_for_same_command(scene):
+    a = _dumps(shine_packets(scene, command_id="same-take"))
+    b = _dumps(shine_packets(scene, command_id="same-take"))
+    assert a == b
+
+
+def test_shine_variation_keeps_showcase_shape(scene):
+    packets = shine_packets(scene, command_id="shape-check")
+    commands = [p.command for p in packets]
+    assert commands.count("ANIMATE_OBJECT") == 3
+    assert commands[-1] == "PLAYBACK"
+    camera = next(p for p in packets if p.command == "MOVE_CAMERA")
+    assert camera.payload.lookAtTarget is not None
+    spawns = [p for p in packets if p.command == "SPAWN_OBJECT"]
+    assert spawns[-1].payload.text == "RADIO_EDIT"
+
+
+def test_shine_defers_to_llm_when_available():
+    intent = Intent(action="set_scene", mood="shine")
+    assert defer_clause_to_llm("product showcase", intent, llm_available=True) is True
+    assert defer_clause_to_llm("product showcase", intent, llm_available=False) is False
+
+
+async def test_showcase_routes_to_plan_loop_when_llm_ready(monkeypatch, producer, scene):
+    """With an LLM configured, "product showcase" is choreographed by the plan
+    loop instead of instantly replaying the canned grammar macro."""
+    plan_calls: list[str] = []
+
+    async def scripted_plan(text, scene_arg, frame=None, *, tier="fast", extra_context=None, adjustment=False):
+        plan_calls.append(text)
+        if adjustment:
+            return
+        yield llm.Say("fresh showcase, take one")
+        yield llm.Meta(mode="execute", needs_deeper_creativity=False)
+        yield llm.Step(
+            PlanStep.model_validate(
+                {"action": "spawn", "primitive": "cone", "name": "LLM_HERO", "say": "hero in"}
+            )
+        )
+        yield llm.Step(PlanStep.model_validate({"action": "playback", "playback_action": "play"}))
+
+    monkeypatch.setattr(llm, "select_tier", lambda frame, *, escalated: ("deepseek", "test-model"))
+    monkeypatch.setattr(llm, "stream_plan", scripted_plan)
+
+    packets: list = []
+
+    async def emit_packet(packet):
+        packets.append(packet)
+
+    await producer.direct("product showcase", scene, "cmd-showcase", emit_packet=emit_packet)
+
+    assert plan_calls, "plan loop was not consulted — grammar macro took over"
+    assert any(
+        p.command == "SPAWN_OBJECT" and p.payload.name == "LLM_HERO" for p in packets
+    )
+    # The canned macro's title card must NOT have fired.
+    assert not any(
+        p.command == "SPAWN_OBJECT" and p.payload.name == "SHINE_TITLE" for p in packets
+    )
+
+
+async def test_showcase_keyless_still_fires_macro(producer, scene):
+    """No LLM configured → deterministic macro fallback still delivers the beat."""
+    packets, _ = await producer.direct("product showcase", scene, "cmd-offline")
+    commands = [p.command for p in packets]
+    assert "MOVE_CAMERA" in commands
+    assert commands[-1] == "PLAYBACK"
+    assert any(
+        p.command == "SPAWN_OBJECT" and p.payload.name == "SHINE_TITLE" for p in packets
+    )
