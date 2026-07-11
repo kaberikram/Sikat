@@ -49,6 +49,24 @@ export function isSpeechAvailable(): boolean {
   return getSpeechRecognitionCtor() !== null
 }
 
+/**
+ * Explicitly prompt for mic access via getUserMedia. SpeechRecognition alone
+ * doesn't surface a permission dialog inside an immersive WebXR session (no
+ * dom-overlay to render it in, e.g. Meta Quest Browser), so callers should
+ * request this up front while still in the regular 2D page — the resulting
+ * grant carries over once XR starts.
+ */
+export async function requestMicPermission(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    for (const track of stream.getTracks()) track.stop()
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function isVoiceListening(): boolean {
   return listening
 }
