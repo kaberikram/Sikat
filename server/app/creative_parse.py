@@ -62,6 +62,10 @@ def defer_clause_to_llm(
             return False
     if intent.action == "animate":
         return True
+    # Shine/showcase is a creative beat: the LLM choreographs a unique take
+    # when configured; the deterministic macro is the keyless fallback only.
+    if intent.action == "set_scene" and intent.mood == "shine":
+        return True
     if _CREATIVE_LANGUAGE.search(clause.lower()):
         return True
     if not _grammar_has_complete_intent(intent):

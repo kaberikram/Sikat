@@ -8,8 +8,12 @@ def variation_seed(command_id: str | None) -> float:
     return float(abs(hash("sikat")) % 100_000)
 
 
-def _unit(seed: float, salt: int) -> float:
+def unit_variation(seed: float, salt: int) -> float:
+    """Deterministic pseudo-random float in [0, 1) derived from seed + salt."""
     return ((int(seed) + salt * 7919) % 1000) / 1000.0
+
+
+_unit = unit_variation
 
 
 def enrich_motion_params(
