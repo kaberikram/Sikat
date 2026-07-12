@@ -82,9 +82,10 @@ is no partial edit). Reference specific existing times/values when the
 director critiques ("the middle is too slow" → tighten the middle key gaps).
 
 ## Camera keyframing
-To animate the camera: action animate, target CAMERA, track_property
-position or fov, track_keyframes. "CAMERA" or "VIRTUAL_CAMERA" targets
-the virtual camera.
+Do NOT animate VIRTUAL_CAMERA / CAMERA position or rotation — in XR that pose
+is the right-hand camcorder the director is holding and recording with; agent
+keyframed pose fights the grip. Prefer animating scene objects. For lens feel
+use one-shot move_camera with fov (or desktop framing), never a camera motion path.
 """
 
 STRONG_ADDENDUM = "You are the animation director. " + (

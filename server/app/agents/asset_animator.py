@@ -86,11 +86,15 @@ class AssetAnimator:
             motion = intent.motion or intent.preset
             if not intent.target:
                 return []
+            target_name = intent.target
+            is_camera = target_name.upper() in ("CAMERA", "VIRTUAL_CAMERA")
             if intent.track_keyframes:
                 prop = intent.track_property or "position"
-                target_name = intent.target
+                # XR camcorder owns virt-cam pose — never keyframe position/rotation.
+                if is_camera and prop in ("position", "rotation"):
+                    return []
                 payload_target: Target | None = Target(name=target_name)
-                if target_name.upper() in ("CAMERA", "VIRTUAL_CAMERA"):
+                if is_camera:
                     payload_target = None
                 packets: list[CommandPacket] = [
                     SetKeyframesPacket(
@@ -104,6 +108,9 @@ class AssetAnimator:
                 packets.append(PlaybackPacket(payload=PlaybackPayload(action="play")))
                 return packets
             if not motion:
+                return []
+            # Parametric motion on the virt-cam would also fight the grip pose.
+            if is_camera:
                 return []
             return [
                 AnimateObjectPacket(

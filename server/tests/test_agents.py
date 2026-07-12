@@ -116,7 +116,8 @@ def test_track_property_defaults_to_position():
     assert packets[0].payload.property == "position"
 
 
-def test_camera_target_produces_null_target_keyframes():
+def test_camera_position_keyframes_blocked():
+    """Virt-cam pose is XR grip-owned — agents must not keyframe position."""
     from app.agents.asset_animator import AssetAnimator
     from app.schema import Intent, Keyframe
 
@@ -129,28 +130,28 @@ def test_camera_target_produces_null_target_keyframes():
             Keyframe(time=1, value=(5.0, 1.5, 3.0)),
         ],
     )
-    animator = AssetAnimator()
-    packets = animator.build(intent)
-    assert len(packets) >= 2
-    assert packets[0].command == "SET_KEYFRAMES"
-    assert packets[0].payload.target is None
+    assert AssetAnimator().build(intent) == []
 
 
-def test_virtual_camera_target_produces_null_target():
+def test_virtual_camera_rotation_keyframes_blocked():
     from app.agents.asset_animator import AssetAnimator
     from app.schema import Intent, Keyframe
 
     intent = Intent(
         action="animate",
         target="VIRTUAL_CAMERA",
-        track_property="position",
+        track_property="rotation",
         track_keyframes=[
-            Keyframe(time=0, value=(0.0, 1.0, 0.0)),
-            Keyframe(time=1, value=(5.0, 1.5, 3.0)),
+            Keyframe(time=0, value=(0.0, 0.0, 0.0)),
+            Keyframe(time=1, value=(0.0, 1.0, 0.0)),
         ],
     )
-    animator = AssetAnimator()
-    packets = animator.build(intent)
-    assert len(packets) >= 2
-    assert packets[0].command == "SET_KEYFRAMES"
-    assert packets[0].payload.target is None
+    assert AssetAnimator().build(intent) == []
+
+
+def test_camera_parametric_motion_blocked():
+    from app.agents.asset_animator import AssetAnimator
+    from app.schema import Intent
+
+    intent = Intent(action="animate", target="CAMERA", motion="orbit")
+    assert AssetAnimator().build(intent) == []
