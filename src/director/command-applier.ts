@@ -139,7 +139,7 @@ export function presetKeyframes(
   obj: MotionObject,
   preset: 'turnaround' | 'orbit' | 'bounce',
   durationSec: number,
-  stage: { center: Vec3; radius: number } = { center: [0, 0, 0], radius: 25 }
+  stage: { center: Vec3; radius: number } = { center: [0, 0, 0], radius: 1 }
 ): { property: 'position' | 'rotation' | 'scale'; keyframes: ReturnType<typeof motionKeyframes>['keyframes'] } {
   const track = motionKeyframes(
     obj.position,

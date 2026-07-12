@@ -37,7 +37,7 @@ export interface StageContext {
   radius: number
 }
 
-const DEFAULT_STAGE_RADIUS = 25
+const DEFAULT_STAGE_RADIUS = 1
 
 function hashVec3(v: Vec3): number {
   return Math.abs(v[0] * 12.9898 + v[1] * 78.233 + v[2] * 37.719)
@@ -583,7 +583,7 @@ export function motionKeyframes(
         keyframes: buildBouncePositionKeyframes(
           basePosition,
           durationSec,
-          p.height ?? 1.5,
+          p.height ?? Math.max(0.25, stage.radius * 0.45),
           p.hops ?? 2,
           p.decay ?? DEFAULT_BOUNCE_DECAY,
           p.seed ?? 0

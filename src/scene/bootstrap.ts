@@ -124,7 +124,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
 
   if (useEditorStore.getState().objects.length === 0) {
     const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(0.7, 32, 32),
+      new THREE.SphereGeometry(0.15, 32, 32),
       new THREE.MeshToonMaterial({ color: 0x0076ff })
     )
     useEditorStore.getState().addObject({ name: 'CORE_SPHERE', type: 'mesh', mesh: sphere })

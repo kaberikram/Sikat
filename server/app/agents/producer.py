@@ -243,7 +243,7 @@ class Producer:
             motion = working.motion or working.preset
             if motion:
                 normalized = normalize_motion(motion)
-                stage_r = scene.stage.radius if scene else 25.0
+                stage_r = scene.stage.radius if scene else 1.0
                 params = enrich_motion_params(
                     working.motion_params, normalized, command_id, stage_r
                 )

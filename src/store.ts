@@ -152,8 +152,9 @@ export interface VirtualCamera {
  *  frame from the default eye height (camera on +Z looking toward -Z). */
 const DEFAULT_VIRTUAL_CAM_ROTATION: [number, number, number] = [-0.2, 0, 0]
 
-/** Default performance floor radius (m). Cameras and lights scale from this. */
-export const STAGE_RADIUS = 25
+/** Default performance floor radius (m). Queen-bed footprint in XR (~2m diameter);
+ *  cameras, lights, and stage-aware motion scale from this. */
+export const STAGE_RADIUS = 1
 
 /** Close enough that a unit-scale hero object reads clearly, far enough that
  *  most of the stage ring stays in frame at fov 75. */

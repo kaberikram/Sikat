@@ -17,7 +17,7 @@ def test_bounce_high():
     scene = scene_with("CORE_SPHERE")
     (i,) = parse("high bounce on the sphere", scene)
     assert i.motion == "bounce"
-    assert i.motion_params["height"] >= 2.5
+    assert i.motion_params["height"] >= scene.stage.radius * 0.8
 
 
 def test_drop_motion():
@@ -38,7 +38,7 @@ def test_three_hops_parsed():
     (i,) = parse("high bounce on the sphere — three hops", scene)
     assert i.motion == "bounce"
     assert i.motion_params["hops"] == 3
-    assert i.motion_params["height"] >= 2.5
+    assert i.motion_params["height"] >= scene.stage.radius * 0.8
 
 
 def test_drop_metres_spelling():

@@ -20,7 +20,7 @@ def enrich_motion_params(
     params: dict[str, float] | None,
     motion: str,
     command_id: str | None,
-    stage_radius: float = 25.0,
+    stage_radius: float = 1.0,
 ) -> dict[str, float]:
     """Fill unset params from a command seed so each cue feels slightly different."""
     out = dict(params or {})
@@ -30,7 +30,7 @@ def enrich_motion_params(
 
     if motion == "bounce":
         out.setdefault("hops", 2.0 + int(r0 * 2.99))
-        out.setdefault("height", 0.9 + r1 * (1.6 + stage_radius * 0.04))
+        out.setdefault("height", stage_radius * (0.35 + r1 * 0.5))
         out.setdefault("decay", 0.4 + r2 * 0.38)
     elif motion == "drop":
         out.setdefault("height", stage_radius * (0.08 + r0 * 0.14))

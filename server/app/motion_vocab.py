@@ -198,7 +198,7 @@ def normalize_motion(raw: str | None) -> str:
     return "float"
 
 
-def extract_motion_params(clause: str, motion: str, stage_radius: float = 25.0) -> dict[str, float]:
+def extract_motion_params(clause: str, motion: str, stage_radius: float = 1.0) -> dict[str, float]:
     """Heuristic params from ad-lib director language."""
     params: dict[str, float] = {}
     lower = clause.lower()
@@ -217,15 +217,18 @@ def extract_motion_params(clause: str, motion: str, stage_radius: float = 25.0) 
         params["hops"] = _WORD_NUM[token] if token in _WORD_NUM else float(token)
 
     if re.search(r"\b(high|tall|big bounce|athletic)\b", lower):
-        params["height"] = max(params.get("height", 0), 2.8)
+        params["height"] = max(params.get("height", 0), stage_radius * 0.85)
         params.setdefault("hops", 3)
     elif re.search(r"\b(low|small|subtle|soft|gentle|gently)\b", lower):
         if motion == "drop":
             params["decay"] = 0.25
-        params["height"] = min(params.get("height", 999), 0.8) if motion == "bounce" else params.get("height", 0.8)
-        params.setdefault("amplitude", 0.2)
+        soft_h = stage_radius * 0.25
+        params["height"] = (
+            min(params.get("height", 999), soft_h) if motion == "bounce" else params.get("height", soft_h)
+        )
+        params.setdefault("amplitude", stage_radius * 0.08)
     elif re.search(r"\b(aggressive|heavy|hard)\b", lower):
-        params["height"] = max(params.get("height", 0), 2.5)
+        params["height"] = max(params.get("height", 0), stage_radius * 0.7)
         params["decay"] = 0.65
 
     if re.search(r"\b(fast|quick|snappy)\b", lower):

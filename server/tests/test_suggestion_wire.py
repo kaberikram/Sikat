@@ -20,7 +20,7 @@ def _heartbeat(objects: list[ObjectSnapshot]) -> dict:
     return _scene_payload(
         mode="heartbeat",
         objects=objects,
-        stage={"position": [0, 0, 0], "radius": 25.0},
+        stage={"position": [0, 0, 0], "radius": 1.0},
     )
 
 

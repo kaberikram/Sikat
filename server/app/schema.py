@@ -411,7 +411,7 @@ class FxSummary(BaseModel):
     ditherLevels: int | None = None
 
 
-STAGE_RADIUS = 25.0
+STAGE_RADIUS = 1.0
 
 
 def _default_virtual_camera_position() -> tuple[float, float, float]:

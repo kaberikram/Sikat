@@ -517,7 +517,7 @@ def _parse_animate(
     target = resolved
     if not target:
         return None
-    params = extract_motion_params(clause, motion, scene.stage.radius if scene else 25.0)
+    params = extract_motion_params(clause, motion, scene.stage.radius if scene else 1.0)
     repeat = bool(re.search(r"\b(loop|repeat|on repeat)\b", clause))
     preset = motion if motion in ("turnaround", "orbit", "bounce") else None
     return Intent(
