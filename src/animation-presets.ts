@@ -57,6 +57,9 @@ export interface BounceHop {
   height: number
 }
 
+/** Shared default so position + squash tracks stay phase-locked. */
+export const DEFAULT_BOUNCE_DECAY = 0.5
+
 /**
  * Hop schedule under gravity: duration ∝ √height so small hops are snappier.
  * Times are normalized to [0, duration].
@@ -88,7 +91,7 @@ export function buildBouncePositionKeyframes(
   duration: number,
   height = 1.5,
   hops = 2,
-  decay = 0.55,
+  decay = DEFAULT_BOUNCE_DECAY,
   seed = 0
 ): PresetKeyframes {
   const [x, y, z] = basePosition
@@ -97,6 +100,7 @@ export function buildBouncePositionKeyframes(
   const samplesPerHop = 16
   const angle = ((seed % 1000) / 1000) * Math.PI * 2
   const driftScale = Math.max(0.06, height * 0.18)
+  const APEX_AT = 0.55
 
   let fromX = x
   let fromZ = z
@@ -106,9 +110,21 @@ export function buildBouncePositionKeyframes(
       driftScale * (0.25 + (((seed + h * 17) % 1000) / 1000) * 0.55) * Math.pow(decay, h * 0.5)
     const toX = x + Math.cos(angle + h * 0.7) * hopDrift * (h + 1)
     const toZ = z + Math.sin(angle + h * 0.7) * hopDrift * (h + 1)
+    // Explicit ground contact — pins Catmull-Rom through a sharp V
+    out.push({ time: hop.start, value: [fromX, y, fromZ] })
+    const sampleLocals = new Set<number>()
     for (let i = 1; i <= samplesPerHop; i++) {
-      const local = i / samplesPerHop
-      const arc = 4 * local * (1 - local)
+      const u = i / samplesPerHop
+      // Smoothstep clusters samples near contacts so the spline keeps the V
+      sampleLocals.add(u * u * (3 - 2 * u))
+    }
+    sampleLocals.add(APEX_AT)
+    for (const local of [...sampleLocals].sort((a, b) => a - b)) {
+      const w =
+        local <= APEX_AT
+          ? 0.5 * (local / APEX_AT)
+          : 0.5 + 0.5 * ((local - APEX_AT) / (1 - APEX_AT))
+      const arc = 4 * w * (1 - w)
       out.push({
         time: hop.start + local * (hop.end - hop.start),
         value: [
@@ -134,7 +150,7 @@ export function buildBounceScaleKeyframes(
   baseScale: [number, number, number],
   duration: number,
   hops = 2,
-  decay = 0.55,
+  decay = DEFAULT_BOUNCE_DECAY,
   flat = 0.55
 ): PresetKeyframes {
   const [sx, sy, sz] = baseScale
@@ -159,7 +175,7 @@ export function buildBounceScaleKeyframes(
     })
     // Impact squash
     out.push({
-      time: hop.end - span * 0.04,
+      time: hop.end - span * 0.03,
       value: [sx * impactStretch, sy * impactFlat, sz * impactStretch],
     })
     // Recover

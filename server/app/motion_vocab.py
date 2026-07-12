@@ -1,10 +1,83 @@
 """Motion vocabulary + param extraction for the instant grammar path."""
 from __future__ import annotations
 
+import difflib
 import re
 
 _NUM = r"(-?\d+(?:\.\d+)?)"
 _WORD_NUM: dict[str, float] = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+CANONICAL_MOTIONS: frozenset[str] = frozenset(
+    {
+        "bounce",
+        "float",
+        "drop",
+        "rise",
+        "pulse",
+        "sway",
+        "spin",
+        "orbit",
+        "turnaround",
+        "wobble",
+        "drift",
+        "arc",
+        "pop",
+        "shake",
+        "figure8",
+        "zigzag",
+        "spiral",
+        "launch",
+        "swing",
+        "wander",
+        "squash",
+    }
+)
+
+# Mirrors src/motion-synth.ts MOTION_ALIASES (plus a few grammar-only synonyms).
+MOTION_ALIASES: dict[str, str] = {
+    "bounce": "bounce",
+    "bouncing": "bounce",
+    "hop": "bounce",
+    "float": "float",
+    "floating": "float",
+    "hover": "float",
+    "drift": "drift",
+    "drop": "drop",
+    "fall": "drop",
+    "rise": "rise",
+    "lift": "rise",
+    "pulse": "pulse",
+    "breathe": "pulse",
+    "sway": "sway",
+    "wiggle": "sway",
+    "spin": "spin",
+    "spinning": "spin",
+    "turnaround": "turnaround",
+    "orbit": "orbit",
+    "circle": "orbit",
+    "wobble": "wobble",
+    "arc": "arc",
+    "throw": "arc",
+    "pop": "pop",
+    "reveal": "pop",
+    "shake": "shake",
+    "vibrate": "shake",
+    "figure8": "figure8",
+    "zigzag": "zigzag",
+    "spiral": "spiral",
+    "launch": "launch",
+    "swing": "swing",
+    "swoop": "arc",
+    "wander": "wander",
+    "roam": "wander",
+    "explore": "wander",
+    "free": "wander",
+    "squashed": "squash",
+    "squish": "squash",
+    "flatten": "squash",
+    "pancake": "squash",
+    "squash": "squash",
+}
 
 # Longest / most specific phrases first.
 MOTION_PHRASES: list[tuple[str, str]] = [
@@ -103,6 +176,26 @@ def extract_motion(clause: str) -> str | None:
         if re.search(rf"\b{re.escape(phrase)}\b", lower):
             return motion_id
     return None
+
+
+def normalize_motion(raw: str | None) -> str:
+    """Map LLM/grammar motion strings to a canonical client motion id."""
+    if not raw:
+        return "float"
+    key = raw.strip().lower()
+    if key in CANONICAL_MOTIONS:
+        return key
+    if key in MOTION_ALIASES:
+        return MOTION_ALIASES[key]
+    if key in ("turn around", "360"):
+        return "turnaround"
+    extracted = extract_motion(key)
+    if extracted:
+        return extracted
+    close = difflib.get_close_matches(key, sorted(CANONICAL_MOTIONS), n=1, cutoff=0.75)
+    if close:
+        return close[0]
+    return "float"
 
 
 def extract_motion_params(clause: str, motion: str, stage_radius: float = 25.0) -> dict[str, float]:

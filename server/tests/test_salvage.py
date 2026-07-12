@@ -107,3 +107,23 @@ def test_salvage_mixed_valid_and_invalid_keyframes():
     assert result is not None
     # Only one repair survived → dropped
     assert result.track_keyframes is None
+
+
+def test_salvage_motion_verb_action_becomes_animate():
+    raw = '{"action": "wiggle", "target": "BALL"}'
+    result = salvage_step(raw)
+    assert result is not None
+    assert result.action == "animate"
+    assert result.motion == "sway"
+    assert result.target == "BALL"
+
+
+def test_salvage_unknown_action_returns_none_no_raise():
+    result = salvage_step('{"action": "explode", "target": "BALL"}')
+    assert result is None
+
+
+def test_validate_intent_slice_unknown_action_no_raise():
+    from app.llm import _validate_intent_slice
+
+    assert _validate_intent_slice('{"action": "explode"}') is None

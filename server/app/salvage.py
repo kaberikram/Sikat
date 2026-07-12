@@ -4,13 +4,16 @@ Handles common LLM JSON errors in streaming plan/intent extraction:
 - Keyframe values that are not exactly 3 floats (pad/truncate to 3).
 - Less than 2 valid keyframes removed entirely.
 - Unknown fields stripped by model_validate.
+- Unknown action strings that are motion verbs remapped to animate.
 """
 from __future__ import annotations
 
 import json
 import logging
+from typing import get_args
 
-from .schema import Intent
+from . import motion_vocab
+from .schema import Intent, IntentAction
 
 log = logging.getLogger("director.salvage")
 
@@ -20,6 +23,8 @@ def salvage_step(raw: str) -> Intent | None:
     try:
         obj = json.loads(raw)
     except Exception:
+        return None
+    if not isinstance(obj, dict):
         return None
     tks = obj.get("track_keyframes")
     if isinstance(tks, list):
@@ -41,4 +46,14 @@ def salvage_step(raw: str) -> Intent | None:
             obj["track_keyframes"] = repaired
         else:
             obj.pop("track_keyframes", None)
-    return Intent.model_validate(obj)
+    action = obj.get("action")
+    if isinstance(action, str) and action not in get_args(IntentAction):
+        motion = motion_vocab.extract_motion(action)
+        if motion:
+            obj["action"] = "animate"
+            obj.setdefault("motion", motion)
+    try:
+        return Intent.model_validate(obj)
+    except Exception:
+        log.warning("salvage failed validation: %s", raw[:160])
+        return None

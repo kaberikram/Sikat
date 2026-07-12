@@ -58,6 +58,9 @@ Literal bounce/spin/orbit/drop/float/rise/sway → motion id. These are professi
 synths on the client (ballistic bounce + squash/stretch, dense orbit, etc.) — not dumb
 macros. Prefer `motion: bounce` over hand-authored hop math.
 Use `wander` only when they say wander/roam/explore/freely.
+Also available motion ids: wobble (amplitude, frequency), zigzag (span),
+spiral (radius, height), launch (height, span), swing (span, amplitude),
+squash (flat 0–1).
 Craft defaults: entrances/reveals ease out; on-screen A→B moves ease in-out; loops linear.
 "fade in/out" → set_material opacity with a transition; "pop/scale in" → motion pop.
 Ambient/idle motion stays subtle (amplitude 0.1–0.3, animate_repeat); "stagger" → offset start times 0.1–0.3s per object.

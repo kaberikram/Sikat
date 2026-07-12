@@ -91,6 +91,25 @@ def rank_targets(clause: str, scene: SceneState | None) -> list[tuple[str, float
     return scored
 
 
+_LLM_TARGET_MIN_SCORE = 0.5
+
+
+def resolve_llm_target(name: str, scene: SceneState | None) -> tuple[str | None, str]:
+    """Resolve an LLM-emitted target name against the live scene.
+
+    Returns (resolved_name_or_None, reason) where reason is exact|fuzzy|none.
+    """
+    if not name or scene is None or not scene.objects:
+        return None, "none"
+    for obj in scene.objects:
+        if obj.name == name:
+            return obj.name, "exact"
+    ranked = rank_targets(name, scene)
+    if ranked and ranked[0][1] >= _LLM_TARGET_MIN_SCORE:
+        return ranked[0][0], "fuzzy"
+    return None, "none"
+
+
 def is_ambiguous(candidates: list[tuple[str, float]]) -> bool:
     if len(candidates) < 2:
         return False

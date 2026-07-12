@@ -219,6 +219,12 @@ Only use track_keyframes when the path is scenic/emotional; bounce can stay moti
 | pop | snappy reveal | height |
 | shake | impact wobble | amplitude, frequency |
 | figure8 | lemniscate path | radius / amplitude |
+| wobble | rotational jitter | amplitude, frequency |
+| zigzag | sharp lateral path | span |
+| spiral | rising helix | radius, height |
+| launch | toss off stage | height, span |
+| swing | pendulum arc | span, amplitude |
+| squash | flatten then recover | flat (0-1) |
 
 Drop vs bounce (critical — they must look different):
 - drop: object starts ABOVE rest position, falls ONCE with gravity, lands and STOPS. No repeated hops.
@@ -431,8 +437,9 @@ def get_async_deepseek_client():
 
 
 def _history_section() -> str:
+    session = session_context.get_session()
     hist = session_context.history()
-    recent = list(session_context.get_session().recent_notes)
+    recent = list(session.recent_notes)
     parts: list[str] = []
     if hist:
         lines = "\n".join(
@@ -440,6 +447,16 @@ def _history_section() -> str:
             for ex in hist
         )
         parts.append(f"Recent direction (oldest first):\n{lines}")
+    latest = session.latest_plan()
+    if latest is not None:
+        steps = ", ".join(
+            (f"{step.action}:{step.target}" if step.target else step.action)
+            for step in latest.steps
+        ) or "(no steps)"
+        parts.append(
+            f'Last take journal: "{latest.text}" '
+            f"(mode={latest.mode}, say={latest.say or '—'}) → {steps}"
+        )
     if recent:
         parts.append(
             "Recent crew radio lines (do NOT repeat phrasing):\n"
@@ -454,6 +471,7 @@ Follow-up rules:
   recently mentioned object above.
 - Small corrections like "go back a bit" or "a little more" are RELATIVE
   transforms on that same object (mode "relative"), not new absolute moves.
+- Build on the last take journal — do not forget what you just staged.
 """
 
 
@@ -862,7 +880,7 @@ async def stream_plan(
         )
         async with client.messages.stream(
             model=model,
-            max_tokens=4096 if tier == "strong" else 1200,
+            max_tokens=4096 if tier == "strong" else 3000,
             system=system,
             messages=[{"role": "user", "content": _build_user_content(text, frame)}],
         ) as stream:
@@ -891,6 +909,12 @@ async def stream_plan(
                             yield Step(PlanStep.model_validate(salvaged.model_dump()))
                         else:
                             log.warning("skipping invalid streamed plan step: %s", raw[:160])
+            try:
+                final = await stream.get_final_message()
+                if getattr(final, "stop_reason", None) == "max_tokens":
+                    log.warning("plan stream truncated at max_tokens")
+            except Exception:
+                pass
         try:
             yield Done(DirectorPlan.model_validate_json(buffer))
         except Exception:

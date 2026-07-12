@@ -14,8 +14,9 @@ from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
-from ..shine_presets import shine_packets
+from ..shine_presets import resolve_hero, shine_packets
 from ..motion_variation import enrich_motion_params
+from ..motion_vocab import normalize_motion
 from ..heuristics import Observation
 from ..verify import check_apply, verify_enabled
 from ..schema import (
@@ -29,7 +30,7 @@ from ..schema import (
     intent_preview_message,
 )
 from ..session_context import CLARIFY_TIMEOUT_SEC, PendingClarify
-from ..target_resolution import resolve_option_answer
+from ..target_resolution import resolve_llm_target, resolve_option_answer
 from .asset_animator import AssetAnimator, default_spawn_name
 from .base import (
     EmitCancel,
@@ -241,15 +242,24 @@ class Producer:
         if working.action == "animate" and not working.track_keyframes:
             motion = working.motion or working.preset
             if motion:
+                normalized = normalize_motion(motion)
                 stage_r = scene.stage.radius if scene else 25.0
                 params = enrich_motion_params(
-                    working.motion_params, motion, command_id, stage_r
+                    working.motion_params, normalized, command_id, stage_r
                 )
-                working = working.model_copy(update={"motion_params": params})
+                updates: dict = {"motion_params": params}
+                if working.motion:
+                    updates["motion"] = normalized
+                elif working.preset:
+                    updates["preset"] = normalized
+                working = working.model_copy(update=updates)
         if intent.addressee and not working.target:
             assignment = performers.get(intent.addressee)
             if assignment:
                 working = working.model_copy(update={"target": assignment.target})
+        working = await self._resolve_working_target(working, scene, emit)
+        if working is None:
+            return []
         built = specialist.build(working, scene) if specialist else []
         if built and specialist:
             await emit(
@@ -265,6 +275,75 @@ class Producer:
         if not built:
             await emit(self.name, f"dropped unactionable intent: {intent.action}", "warn")
         return built
+
+    async def _resolve_working_target(
+        self,
+        working: Intent,
+        scene: SceneState | None,
+        emit: EmitLog,
+    ) -> Intent | None:
+        """Fuzzy-resolve LLM targets; hero-fallback for animate only.
+
+        Returns None when the intent should be left unbuilt (e.g. unmatched remove).
+        """
+        if working.action not in ("animate", "transform", "set_material", "remove"):
+            return working
+        camera_sentinels = {"CAMERA", "VIRTUAL_CAMERA"}
+        if working.target and working.target.upper() in camera_sentinels:
+            return working
+        if working.target:
+            if working.target.endswith("_SPAWN"):
+                return working
+            if working.target == session_context.last_target():
+                return working
+        if not scene or not scene.objects:
+            if working.action == "animate" and not working.target:
+                _, hero_name = resolve_hero(scene, None)
+                await emit(
+                    self.name,
+                    f"no target — animating hero '{hero_name}'",
+                    "warn",
+                )
+                return working.model_copy(update={"target": hero_name})
+            return working
+
+        if not working.target:
+            if working.action == "animate":
+                _, hero_name = resolve_hero(scene, None)
+                await emit(
+                    self.name,
+                    f"no target — animating hero '{hero_name}'",
+                    "warn",
+                )
+                return working.model_copy(update={"target": hero_name})
+            return working
+
+        resolved, _reason = resolve_llm_target(working.target, scene)
+        if resolved and resolved != working.target:
+            await emit(
+                self.name,
+                f"reading '{working.target}' as '{resolved}'",
+                "info",
+            )
+            return working.model_copy(update={"target": resolved})
+        if resolved:
+            return working
+
+        if working.action == "animate":
+            _, hero_name = resolve_hero(scene, None)
+            await emit(
+                self.name,
+                f"no match for '{working.target}' — animating hero '{hero_name}'",
+                "warn",
+            )
+            return working.model_copy(update={"target": hero_name})
+
+        await emit(
+            self.name,
+            f"no match for '{working.target}' — skipping {working.action}",
+            "warn",
+        )
+        return None
 
     async def _build_packets_for_intents(
         self,

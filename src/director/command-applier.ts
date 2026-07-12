@@ -17,7 +17,7 @@ import {
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
 import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
-import { buildBounceScaleKeyframes } from '../animation-presets'
+import { buildBounceScaleKeyframes, DEFAULT_BOUNCE_DECAY } from '../animation-presets'
 import {
   canCompositeOntoPath,
   compositeMotionOntoPath,
@@ -354,7 +354,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
             obj.scale,
             duration,
             params.hops ?? 2,
-            params.decay ?? 0.55,
+            params.decay ?? DEFAULT_BOUNCE_DECAY,
             params.flat ?? 0.55
           )
           st.mergeObjectPropertyKeyframes(obj.id, 'scale', scaleKeys, fromTime)
@@ -367,7 +367,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
             obj.scale,
             duration,
             params.hops ?? 2,
-            params.decay ?? 0.55,
+            params.decay ?? DEFAULT_BOUNCE_DECAY,
             params.flat ?? 0.55
           )
           st.setObjectPropertyKeyframes(obj.id, 'scale', scaleKeys)

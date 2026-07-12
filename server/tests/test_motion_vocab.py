@@ -127,3 +127,38 @@ def test_asset_animator_passes_motion():
     p = packets[0].payload
     assert p.motion == "float"
     assert p.params == {"amplitude": 0.4, "frequency": 1.2}
+
+
+def test_normalize_motion_aliases_and_typos():
+    from app.motion_vocab import normalize_motion
+
+    assert normalize_motion("wiggle") == "sway"
+    assert normalize_motion("hover") == "float"
+    assert normalize_motion("bouncee") == "bounce"
+    assert normalize_motion("explode") == "float"
+    assert normalize_motion("zigzag") == "zigzag"
+
+
+def test_plan_prompt_lists_six_extra_motions():
+    from app.prompts import build_plan_prompt
+
+    prompt = build_plan_prompt(None, "", tier="strong")
+    for motion_id in ("wobble", "zigzag", "spiral", "launch", "swing", "squash"):
+        assert motion_id in prompt
+
+
+async def test_producer_normalizes_wiggle_to_sway(producer, scene):
+    from app.schema import Intent
+    from app.session_context import SessionContext, bind_session, reset_session
+
+    ctx = SessionContext()
+    ctx.latest_scene = scene
+    token = bind_session(ctx)
+    packets = await producer._build_packets_for_intent(
+        Intent(action="animate", target="CORE_SPHERE", motion="wiggle"),
+        command_id="wiggle-1",
+        scene=scene,
+    )
+    reset_session(token)
+    animate = next(p for p in packets if p.command == "ANIMATE_OBJECT")
+    assert animate.payload.motion == "sway"

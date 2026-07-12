@@ -5,6 +5,7 @@ import {
   buildBouncePositionKeyframes,
   buildOrbitPositionKeyframes,
   buildTurnaroundRotationKeyframes,
+  DEFAULT_BOUNCE_DECAY,
   type PresetKeyframes,
 } from './animation-presets'
 import { ease } from './easing'
@@ -584,7 +585,7 @@ export function motionKeyframes(
           durationSec,
           p.height ?? 1.5,
           p.hops ?? 2,
-          p.decay ?? 0.5,
+          p.decay ?? DEFAULT_BOUNCE_DECAY,
           p.seed ?? 0
         ),
       }

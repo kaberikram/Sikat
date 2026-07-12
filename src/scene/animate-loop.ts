@@ -146,8 +146,12 @@ export function createAnimateLoop(ctx: {
       syncXrStereoLayers(ctx.mainRenderer)
 
       // Hide virt-cam axes in XR (they sit at the lens and look like a stray gizmo).
-      for (const child of ctx.virtCamera.children) child.visible = false
-
+      // Keep the studio backdrop mesh visible — WebXR alpha-blend sessions force
+      // offscreen clears to transparent black, so scene.background / setClearColor
+      // alone can't paint the LCD; the backdrop sphere is the opaque #f2f2f2 stand-in.
+      for (const child of ctx.virtCamera.children) {
+        child.visible = child === ctx.virtCamBackdrop
+      }
       // IWSDK updates grip/ray spaces; camcorder pose + REC read from gripSpaces.right.
       ctx.camcorderRig.update(delta, now / 1000, ctx.mainRenderer.xr)
 

@@ -45,6 +45,7 @@ class PlanRunner:
         plan_mode = "execute"
         describe_only = True
         escalated = prefer_strong
+        scene_now = scene
 
         for round_index in range(MAX_ROUNDS):
             if time.monotonic() - started >= WALL_CLOCK_SEC:
@@ -194,6 +195,7 @@ class PlanRunner:
         if not all_packets and plan_mode != "pitch":
             if plan_say or action_seeking:
                 await emit_status("Producer", "active", command_id, "rethinking that…")
+                recovery_steps = 0
                 async for event in llm.stream_plan(
                     text,
                     scene_now,
@@ -212,9 +214,9 @@ class PlanRunner:
                     elif isinstance(event, llm.Meta):
                         pass
                     elif isinstance(event, llm.Step):
-                        cap = min(4, MAX_STEPS - len(all_steps))
-                        if len(all_steps) >= cap:
+                        if recovery_steps >= 4:
                             continue
+                        recovery_steps += 1
                         step = event.step
                         all_steps.append(step)
                         if step.action in ("describe", "suggest", "clarify", "pitch"):
@@ -229,7 +231,8 @@ class PlanRunner:
                 await emit_log("Producer", "plan didn't land — improvising a take", "warn")
                 floor = motion_floor.motion_floor_packets(text, command_id)
                 for pkt in floor:
-                    await emit_packet(pkt, command_id)
+                    pkt.commandId = command_id
+                    await emit_packet(pkt)
                 all_packets.extend(floor)
                 describe_only = False
             if plan_say and not all_packets:

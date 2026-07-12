@@ -24,8 +24,12 @@ async def test_plan_loop_emits_first_packet_before_second_llm_call(monkeypatch, 
             yield Intent(action="update_fx", section="bloom", fx_enabled=True, say="bloom on")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DIRECTOR_LLM_PROVIDER", "deepseek")
     monkeypatch.setattr(llm, "stream_intents", scripted_stream)
     monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+    monkeypatch.setattr(
+        llm, "select_tier", lambda frame=None, *, escalated=False: ("deepseek", "test-model")
+    )
 
     ctx = SessionContext()
     token = bind_session(ctx)
@@ -67,8 +71,12 @@ async def test_plan_survives_command_started_cancel(monkeypatch, scene):
         )
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DIRECTOR_LLM_PROVIDER", "deepseek")
     monkeypatch.setattr(llm, "stream_intents", scripted_stream)
     monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+    monkeypatch.setattr(
+        llm, "select_tier", lambda frame=None, *, escalated=False: ("deepseek", "test-model")
+    )
 
     ctx = SessionContext()
     token = bind_session(ctx)

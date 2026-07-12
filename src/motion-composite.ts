@@ -3,7 +3,7 @@
  * replacing it — e.g. "bounce while moving along the path you set".
  */
 import { interpolateKeyframes } from './keyframe-interpolation'
-import { buildBounceHopSchedule, type PresetKeyframes } from './animation-presets'
+import { buildBounceHopSchedule, DEFAULT_BOUNCE_DECAY, type PresetKeyframes } from './animation-presets'
 import { resolveMotionId, type MotionId, type MotionParams } from './motion-synth'
 
 export type Vec3 = [number, number, number]
@@ -41,7 +41,7 @@ function compositeBounce(path: PresetKeyframes, params: MotionParams): PresetKey
 
   const height = params.height ?? 1.5
   const hops = Math.max(1, Math.round(params.hops ?? Math.max(2, duration / 0.45)))
-  const decay = params.decay ?? 0.55
+  const decay = params.decay ?? DEFAULT_BOUNCE_DECAY
   const schedule = buildBounceHopSchedule(duration, height, hops, decay)
   const fallback = sorted[0].value
   const out: PresetKeyframes = []
