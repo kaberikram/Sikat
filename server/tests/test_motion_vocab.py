@@ -80,6 +80,37 @@ def test_orbit_stage_pivot():
     assert i.motion_params.get("pivot") == 1.0
 
 
+def test_hovering_gerund_is_float():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("keep the sphere hovering", scene)
+    assert i.action == "animate"
+    assert i.motion == "float"
+
+
+def test_idle_animation_is_float():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("idle animation on the sphere", scene)
+    assert i.motion == "float"
+
+
+def test_jittery_is_shake():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("make the sphere jittery", scene)
+    assert i.motion == "shake"
+
+
+def test_breathing_gerund_is_pulse():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("keep the sphere breathing", scene)
+    assert i.motion == "pulse"
+
+
+def test_springy_is_bounce():
+    scene = scene_with("CORE_SPHERE")
+    (i,) = parse("springy hops on the sphere", scene)
+    assert i.motion == "bounce"
+
+
 def test_asset_animator_passes_motion():
     from app.agents.asset_animator import AssetAnimator
     from app.schema import Intent
