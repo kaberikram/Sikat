@@ -31,6 +31,7 @@ export function createAnimateLoop(ctx: {
   camcorderRig: CamcorderRig
   xrViewfinder: XrViewfinder
   reviewScreen: ReviewScreen
+  virtCamBackdrop: THREE.Mesh
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
@@ -85,6 +86,7 @@ export function createAnimateLoop(ctx: {
     ctx.directionalLight.color.set(lighting.key.color)
     ctx.directionalLight.intensity = lighting.key.intensity
     ctx.directionalLight.position.set(...lighting.key.position)
+    ;(ctx.virtCamBackdrop.material as THREE.MeshBasicMaterial).color.set(lighting.background)
     if (!xrActive) {
       if (!(ctx.scene.background instanceof THREE.Color)) {
         ctx.scene.background = new THREE.Color()
