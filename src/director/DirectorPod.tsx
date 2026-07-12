@@ -390,9 +390,24 @@ export function DirectorPod() {
 
       <motion.div
         layout
-        className="director-pod z-30 rounded-[var(--radius-panel)] overflow-hidden ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)] flex flex-col"
+        className="director-pod relative z-30 rounded-[var(--radius-panel)] ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)]"
         transition={{ type: 'spring', stiffness: 420, damping: 36 }}
       >
+        {menuOpen && (
+          <div className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1">
+            {OVERLAY_COMMANDS.map((cmd) => (
+              <button
+                key={cmd.key}
+                type="button"
+                className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
+                onClick={() => { setOverlay(cmd.key); setMenuOpen(false) }}
+              >
+                {cmd.label} ({cmd.hotkey.toUpperCase()})
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col">
         <AnimatePresence initial={false}>
           {hasContext && (
             <motion.div
@@ -550,30 +565,15 @@ export function DirectorPod() {
             submit(input)
           }}
         >
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((o) => !o)}
-              title="Summon panels"
-              className="px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep transition-colors h-full"
-            >
-              <Plus size={12} />
-            </button>
-            {menuOpen && (
-              <div className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1">
-                {OVERLAY_COMMANDS.map((cmd) => (
-                  <button
-                    key={cmd.key}
-                    type="button"
-                    className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
-                    onClick={() => { setOverlay(cmd.key); setMenuOpen(false) }}
-                  >
-                    {cmd.label} ({cmd.hotkey.toUpperCase()})
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            title="Summon panels"
+            aria-expanded={menuOpen}
+            className="shrink-0 px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep transition-colors"
+          >
+            <Plus size={12} />
+          </button>
           <input
             type="text"
             value={input}
@@ -606,6 +606,7 @@ export function DirectorPod() {
             SEND
           </button>
         </form>
+        </div>
       </motion.div>
     </div>
   )
