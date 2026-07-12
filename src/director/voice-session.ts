@@ -6,6 +6,9 @@
  * On browsers without it (Meta Quest Browser, Firefox), falls back to
  * Deepgram Nova-3 via the official @deepgram/sdk — no self-hosted STT needed.
  *
+ * While XR is active we prefer Deepgram (Quest mic + accuracy); native Web
+ * Speech is skipped when a Deepgram key is present.
+ *
  * Chrome's native SpeechRecognition needs a cooldown between stop() and
  * start() — rapid toggles can trigger spurious "language-not-supported".
  * When the native path is cooling down, we fall through to Deepgram.
@@ -15,6 +18,7 @@
  */
 
 import { DeepgramClient } from '@deepgram/sdk'
+import { useEditorStore } from '../store'
 
 interface SpeechResultEvent {
   resultIndex: number
@@ -60,6 +64,8 @@ let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
 let finishTimer: ReturnType<typeof setTimeout> | null = null
+/** Bumped on every start — stale grace timers / late finals no-op when gen mismatches. */
+let sessionGen = 0
 
 /** Minimal interface for the Deepgram SDK connection object. */
 interface DeepgramConnection {
@@ -97,8 +103,13 @@ function isWebSpeechDisabled(): boolean {
   return import.meta.env.VITE_DISABLE_WEBSREECH === 'true'
 }
 
+function preferDeepgramInXr(): boolean {
+  return useEditorStore.getState().xrActive && isDeepgramAvailable()
+}
+
 function nativeIsReady(): boolean {
   if (isWebSpeechDisabled()) return false
+  if (preferDeepgramInXr()) return false
   return getNativeSpeechRecognitionCtor() !== null && Date.now() >= nativeCooldownUntil
 }
 
@@ -154,7 +165,18 @@ function deepgramStop(): void {
   }
 }
 
-async function deepgramStart(): Promise<void> {
+function failVoiceSession(error: string): void {
+  listening = false
+  forceVision = false
+  clearFinishTimer()
+  if (deepgramConnection) deepgramStop()
+  detachNativeRecognition()
+  handlers.onListeningChange?.(false)
+  handlers.onInterim?.('')
+  handlers.onError?.(error)
+}
+
+async function deepgramStart(gen: number): Promise<void> {
   const client = getOrCreateDeepgramClient()
   if (!client) return
 
@@ -167,11 +189,16 @@ async function deepgramStart(): Promise<void> {
       interim_results: 'true',
       smart_format: 'true',
       punctuate: 'true',
-      utterance_end_ms: '1000',
+      utterance_end_ms: '1500',
     }) as unknown as DeepgramConnection
+    if (gen !== sessionGen) {
+      try { connection.close() } catch { /* ignore */ }
+      return
+    }
     deepgramConnection = connection
 
     connection.on('message', (message) => {
+      if (gen !== sessionGen) return
       if (message.type === 'Results') {
         const alt = message.channel?.alternatives?.[0]
         if (!alt || alt.transcript === undefined) return
@@ -182,18 +209,18 @@ async function deepgramStart(): Promise<void> {
       }
       if (message.type === 'Error') {
         console.warn('[voice] Deepgram error:', message.description)
-        handlers.onError?.('network')
-        deepgramStop()
+        failVoiceSession('network')
       }
     })
 
     connection.on('error', () => {
+      if (gen !== sessionGen) return
       console.warn('[voice] Deepgram connection error')
-      handlers.onError?.('network')
-      deepgramStop()
+      failVoiceSession('network')
     })
 
     connection.on('close', () => {
+      if (gen !== sessionGen) return
       if (connection === deepgramConnection) deepgramStop()
     })
 
@@ -201,7 +228,7 @@ async function deepgramStart(): Promise<void> {
     await connection.waitForOpen()
 
     // Bail if the session was stopped while we were connecting.
-    if (connection !== deepgramConnection) {
+    if (gen !== sessionGen || connection !== deepgramConnection) {
       try { connection.close() } catch { /* ignore */ }
       return
     }
@@ -210,7 +237,7 @@ async function deepgramStart(): Promise<void> {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       // Bail if the session was stopped while requesting permission.
-      if (connection !== deepgramConnection) {
+      if (gen !== sessionGen || connection !== deepgramConnection) {
         for (const track of stream.getTracks()) track.stop()
         return
       }
@@ -226,7 +253,7 @@ async function deepgramStart(): Promise<void> {
       deepgramProcessor = proc
 
       proc.onaudioprocess = (e) => {
-        if (connection === deepgramConnection) {
+        if (gen === sessionGen && connection === deepgramConnection) {
           connection.sendMedia(float32ToPcm16(e.inputBuffer.getChannelData(0)))
         }
       }
@@ -236,13 +263,11 @@ async function deepgramStart(): Promise<void> {
       handlers.onListeningChange?.(true)
     } catch (err) {
       console.warn('[voice] getUserMedia failed:', err)
-      handlers.onError?.('not-allowed')
-      deepgramStop()
+      failVoiceSession('not-allowed')
     }
   } catch (err) {
     console.warn('[voice] Deepgram connection failed:', err)
-    handlers.onError?.('network')
-    deepgramStop()
+    failVoiceSession('network')
   }
 }
 
@@ -272,6 +297,10 @@ export function isSpeechAvailable(): boolean {
   return getNativeSpeechRecognitionCtor() !== null || isDeepgramAvailable()
 }
 
+export function isDeepgramConfigured(): boolean {
+  return isDeepgramAvailable()
+}
+
 export async function requestMicPermission(): Promise<boolean> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     console.warn('[mic] getUserMedia unavailable (insecure context or unsupported browser)')
@@ -295,6 +324,7 @@ export function stopVoiceSession(): void {
   listening = false
   forceVision = false
   clearFinishTimer()
+  sessionGen += 1
 
   if (deepgramConnection) deepgramStop()
   detachNativeRecognition()
@@ -305,6 +335,7 @@ export function stopVoiceSession(): void {
 
 export function finishVoiceSession(): void {
   if (!listening) return
+  const gen = sessionGen
   listening = false
   handlers.onListeningChange?.(false)
   handlers.onInterim?.('')
@@ -314,6 +345,7 @@ export function finishVoiceSession(): void {
     try { conn.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
     clearFinishTimer()
     finishTimer = setTimeout(() => {
+      if (gen !== sessionGen) return
       if (deepgramConnection === conn) stopVoiceSession()
     }, FINISH_GRACE_MS)
     return
@@ -324,8 +356,8 @@ export function finishVoiceSession(): void {
     detachNativeRecognition()
     clearFinishTimer()
     finishTimer = setTimeout(() => {
+      if (gen !== sessionGen) return
       if (recognition === rec) return // already replaced by a new session
-      // Grace period expired — full teardown.
       listening = false
       handlers.onListeningChange?.(false)
       handlers.onInterim?.('')
@@ -337,12 +369,22 @@ export async function startVoiceSession(
   next: VoiceSessionHandlers,
   opts?: { forceVision?: boolean }
 ): Promise<void> {
+  clearFinishTimer()
   // Tear down any live or draining session.
   if (recognition || deepgramConnection) stopVoiceSession()
 
+  sessionGen += 1
+  const gen = sessionGen
   handlers = next
   if (opts?.forceVision) forceVision = true
   listening = true
+
+  const xrActive = useEditorStore.getState().xrActive
+  if (xrActive && !isDeepgramAvailable() && getNativeSpeechRecognitionCtor() === null) {
+    listening = false
+    handlers.onError?.('voice needs Deepgram key')
+    return
+  }
 
   if (nativeIsReady()) {
     const rec = new (getNativeSpeechRecognitionCtor()!)()
@@ -352,6 +394,7 @@ export async function startVoiceSession(
     rec.maxAlternatives = 1
 
     rec.onresult = (event) => {
+      if (gen !== sessionGen) return
       let ghost = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
@@ -363,37 +406,35 @@ export async function startVoiceSession(
     }
 
     rec.onerror = (event) => {
+      if (gen !== sessionGen) return
       if (
         event.error === 'not-allowed' ||
         event.error === 'service-not-allowed'
       ) {
-        stopVoiceSession()
-        handlers.onError?.(event.error)
+        failVoiceSession(event.error)
       } else if (event.error === 'network') {
-        stopVoiceSession()
-        handlers.onError?.(event.error)
+        failVoiceSession(event.error)
       } else if (event.error === 'language-not-supported') {
         // Chrome throws this on rapid stop/start. Give it a longer cooldown,
         // then retry via Deepgram if available.
         detachNativeRecognition()
         nativeCooldownUntil = Date.now() + NATIVE_COOLDOWN_MS
         if (isDeepgramAvailable()) {
-          deepgramStart()
+          deepgramStart(gen)
           return
         }
-        stopVoiceSession()
-        handlers.onError?.(event.error)
+        failVoiceSession(event.error)
       }
     }
 
     rec.onend = () => {
-      if (recognition !== rec) return
+      if (gen !== sessionGen || recognition !== rec) return
       if (!listening) {
         stopVoiceSession()
         return
       }
       // Chrome auto-ends on silence — restart while the mic is held open.
-      try { rec.start() } catch { stopVoiceSession() }
+      try { rec.start() } catch { failVoiceSession('network') }
     }
 
     recognition = rec
@@ -402,10 +443,13 @@ export async function startVoiceSession(
     try {
       rec.start()
     } catch {
-      stopVoiceSession()
+      failVoiceSession('network')
     }
   } else if (isDeepgramAvailable()) {
-    deepgramStart()
+    deepgramStart(gen)
+  } else if (xrActive) {
+    listening = false
+    handlers.onError?.('voice needs Deepgram key')
   } else {
     // Native is cooling down and Deepgram isn't configured.
     listening = false

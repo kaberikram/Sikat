@@ -9,6 +9,7 @@ import { submitDirectorCommand } from '../../director/director-command'
 import { getDirectorSocket } from '../../director/socket'
 import {
   finishVoiceSession,
+  isDeepgramConfigured,
   isSpeechAvailable,
   isVoiceListening,
   startVoiceSession,
@@ -144,14 +145,20 @@ export function createCamcorderRig(
 
   function beginTalk(): void {
     if (!isSpeechAvailable()) {
-      directorSlate.setLastSent('mic unavailable')
+      directorSlate.setLastSent(
+        useEditorStore.getState().xrActive && !isDeepgramConfigured()
+          ? 'voice needs Deepgram key'
+          : 'mic unavailable'
+      )
       return
     }
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
     startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
-      onError: (error) => directorSlate.setLastSent(`voice error: ${error}`),
+      onError: (error) => directorSlate.setLastSent(
+        error === 'voice needs Deepgram key' ? error : `voice error: ${error}`
+      ),
       onFinal: (transcript) => {
         const commandId = crypto.randomUUID()
         void submitDirectorCommand(transcript, {
@@ -173,8 +180,8 @@ export function createCamcorderRig(
   }
 
   function endTalk(): void {
-    // Graceful finish: the final transcript lands *after* release (both on
-    // Chrome and the SEPIA polyfill), so keep handlers alive while it drains.
+    // Graceful finish: the final transcript lands *after* release, so keep
+    // handlers alive while it drains.
     if (isVoiceListening()) finishVoiceSession()
     directorSlate.setListening(false)
     directorSlate.setInterim('')

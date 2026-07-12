@@ -63,7 +63,8 @@ export async function captureViewfinderFrame(
 
   const passes = createViewfinderComposer(scene, vcam, exportRenderer, 1)
 
-  store.setExporting(true)
+  // Do not set isExporting — that flag pauses the entire animate loop (including
+  // XR). Video export in exporter.ts owns isExporting; JPEG capture must not.
   try {
     renderViewfinderExportFrame(objects, stack, exportRenderer, scene, vcam, passes, t, vcData)
     const base64 = canvasToJpegBase64(exportRenderer.domElement, width, height, quality)
@@ -79,7 +80,6 @@ export async function captureViewfinderFrame(
     vcam.aspect = prevAspect
     vcam.updateProjectionMatrix()
     remeasurePip()
-    store.setExporting(false)
     passes.pixelatedPass.dispose()
     passes.bloomPass.dispose()
     passes.ditherPass.dispose()

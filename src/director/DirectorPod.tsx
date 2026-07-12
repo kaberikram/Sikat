@@ -271,7 +271,9 @@ export function DirectorPod() {
       if (e.key === 'Escape') {
         setSelected(null)
         setMenuOpen(false)
-        stopMicRef.current() // drop the live mic on Escape
+        // While immersive, XR A-button / session end owns the mic singleton —
+        // Escape must not hard-stop PTT mid-hold.
+        if (!useEditorStore.getState().xrActive) stopMicRef.current()
         return
       }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return

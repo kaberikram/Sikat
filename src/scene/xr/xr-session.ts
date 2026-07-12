@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
+import { stopVoiceSession } from '../../director/voice-session'
 import { EDITOR_LAYER } from '../infrastructure'
 import { registerXrSessionEntry, registerXrSessionExit } from './xr-bridge'
 import type { CamcorderRig } from './camcorder-rig'
@@ -74,6 +75,7 @@ export function initXrSession(
 
     session.addEventListener('end', () => {
       activeSession = null
+      stopVoiceSession()
       useEditorStore.getState().setXrActive(false)
       useEditorStore.getState().setCameraOpMode(priorCameraOpMode)
     })
