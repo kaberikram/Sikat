@@ -390,7 +390,7 @@ export function DirectorPod() {
 
       <motion.div
         layout
-        className="director-pod z-30 border-4 border-black bg-white brutalist-shadow flex flex-col"
+        className="director-pod z-30 rounded-[var(--radius-panel)] overflow-hidden ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)] flex flex-col"
         transition={{ type: 'spring', stiffness: 420, damping: 36 }}
       >
         <AnimatePresence initial={false}>
@@ -400,16 +400,16 @@ export function DirectorPod() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.22 }}
-              className="overflow-hidden border-b-2 border-black/20"
+              transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+              className="overflow-hidden border-b border-line"
             >
-              <div className="px-3 py-2 bg-[var(--jsr-pink)]/20">
+              <div className="px-3 py-2 bg-candy-pink/30">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[9px] font-mono font-bold uppercase opacity-60">Context</span>
+                  <span className="text-[10px] font-semibold text-ink-soft">Context</span>
                   <button
                     type="button"
                     onClick={() => setSelected(null)}
-                    className="p-0.5 hover:bg-black/10"
+                    className="p-0.5 rounded-full hover:bg-[rgba(59,58,72,0.08)] transition-colors"
                     title="Deselect (Esc)"
                   >
                     <X size={12} />
@@ -422,7 +422,7 @@ export function DirectorPod() {
         </AnimatePresence>
 
         <div
-          className={`max-h-24 overflow-y-auto px-2 py-1 text-[9px] font-mono leading-tight bg-white director-log-panel${logHovered ? ' director-log-panel--paused' : ''}`}
+          className={`max-h-24 overflow-y-auto px-3 py-1.5 text-[10px] font-mono leading-tight director-log-panel${logHovered ? ' director-log-panel--paused' : ''}`}
             onMouseEnter={() => setLogHovered(true)}
             onMouseLeave={() => setLogHovered(false)}
           >
@@ -437,7 +437,7 @@ export function DirectorPod() {
             )}
           </div>
 
-        <div className="flex items-center gap-2 px-2 py-1 bg-black text-white text-[9px] font-mono select-none">
+        <div className="flex items-center gap-2 px-3 py-1 bg-ink text-white text-[10px] font-mono select-none">
           <span
             className="inline-block w-2 h-2 rounded-full shrink-0"
             style={{ background: STATUS_COLORS[status] }}
@@ -448,22 +448,22 @@ export function DirectorPod() {
         </div>
 
         {!socketConfigured && (
-          <div className="px-2 py-1.5 border-t-2 border-black bg-red-100 text-[9px] font-mono font-bold text-red-700">
+          <div className="px-3 py-1.5 border-t border-line bg-rec/15 text-[10px] font-mono font-bold text-rec">
             SERVER NOT CONFIGURED — set VITE_DIRECTOR_WS_URL (wss://…/ws) and redeploy
           </div>
         )}
 
         {planProgress && (
-          <div className="px-2 py-1.5 border-t-2 border-black bg-[var(--jsr-blue)]/15 text-[9px] font-mono">
+          <div className="px-3 py-1.5 border-t border-line bg-candy-blue/30 text-[10px] font-mono">
             <div className="flex items-center gap-1.5">
               {activeAgentSessionId() === planProgress.commandId && (
-                <span className="px-1 bg-black text-white font-bold">AGENT</span>
+                <span className="px-1.5 rounded-full bg-ink text-white font-bold">AGENT</span>
               )}
               <span className="font-bold flex-1">{planProgress.say ?? 'planning the take…'}</span>
               {activeAgentSessionId() === planProgress.commandId && (
                 <button
                   type="button"
-                  className="px-1.5 border-2 border-black bg-white font-bold hover:bg-black hover:text-white"
+                  className="px-2 rounded-full bg-white/80 font-bold shadow-[var(--shadow-chip)] hover:bg-rec hover:text-white transition-colors"
                   onClick={() => {
                     getDirectorSocket().sendAgentAbort(planProgress.commandId)
                     clearAgentSession(planProgress.commandId)
@@ -482,15 +482,15 @@ export function DirectorPod() {
         )}
 
         {pendingSuggestions.map((pendingSuggestion) => (
-          <div key={pendingSuggestion.suggestionId} className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/40">
-            <p className="text-[9px] font-bold mb-1.5">
+          <div key={pendingSuggestion.suggestionId} className="px-3 py-2 border-t border-line bg-candy-sun/40">
+            <p className="text-[11px] font-semibold mb-1.5">
               [{pendingSuggestion.agent}] {pendingSuggestion.text}
             </p>
             <div className="flex flex-wrap gap-1">
               {pendingSuggestion.suggestedCommand && (
                 <button
                   type="button"
-                  className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                  className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
                   onClick={() => {
                     const cmd = pendingSuggestion.suggestedCommand
                     setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
@@ -505,7 +505,7 @@ export function DirectorPod() {
               )}
               <button
                 type="button"
-                className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
                 onClick={() => {
                   setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
                   const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
@@ -520,8 +520,8 @@ export function DirectorPod() {
         ))}
 
         {pendingQuestion && (
-          <div className="px-2 py-2 border-t border-black/20 bg-[var(--jsr-yellow)]/30">
-            <p className="text-[9px] font-bold mb-1.5">
+          <div className="px-3 py-2 border-t border-line bg-candy-sun/30">
+            <p className="text-[11px] font-semibold mb-1.5">
               [{pendingQuestion.agent}] {pendingQuestion.question}
             </p>
             <div className="flex flex-wrap gap-1">
@@ -529,7 +529,7 @@ export function DirectorPod() {
                 <button
                   key={opt}
                   type="button"
-                  className="px-2 py-0.5 text-[9px] font-bold border-2 border-black bg-white hover:bg-black hover:text-white"
+                  className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
                   onClick={() => {
                     setPendingQuestion(null)
                     void submit(opt, { commandId: pendingQuestion.commandId })
@@ -543,7 +543,7 @@ export function DirectorPod() {
         )}
 
         <form
-          className="flex border-t-2 border-black"
+          className="flex items-stretch border-t border-line"
           aria-busy={isProcessingCommand}
           onSubmit={(e) => {
             e.preventDefault()
@@ -555,17 +555,17 @@ export function DirectorPod() {
               type="button"
               onClick={() => setMenuOpen((o) => !o)}
               title="Summon panels"
-              className="px-2 py-1 border-r-2 border-black bg-[var(--jsr-yellow)] hover:bg-black hover:text-[var(--jsr-yellow)] h-full"
+              className="px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep transition-colors h-full"
             >
               <Plus size={12} />
             </button>
             {menuOpen && (
-              <div className="absolute bottom-full left-0 mb-1 bg-white border-2 border-black brutalist-shadow min-w-[140px] z-40">
+              <div className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1">
                 {OVERLAY_COMMANDS.map((cmd) => (
                   <button
                     key={cmd.key}
                     type="button"
-                    className="block w-full text-left px-2 py-1 text-[9px] font-bold hover:bg-[var(--jsr-yellow)]"
+                    className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
                     onClick={() => { setOverlay(cmd.key); setMenuOpen(false) }}
                   >
                     {cmd.label} ({cmd.hotkey.toUpperCase()})
@@ -586,7 +586,7 @@ export function DirectorPod() {
                   ? 'crew is working…'
                   : PLACEHOLDERS[placeholderIdx])
             }
-            className="flex-1 px-2 py-1.5 text-[10px] font-mono outline-none min-w-0"
+            className="flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0"
           />
           {speechAvailable && (
             <button
@@ -594,14 +594,14 @@ export function DirectorPod() {
               onClick={(e) => toggleMic(e.shiftKey)}
               title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
               aria-pressed={listening}
-              className={`px-2 border-l-2 border-black ${listening ? 'bg-jsr-orange text-white animate-pulse' : 'bg-white hover:bg-black/5'}`}
+              className={`px-2.5 border-l border-line transition-colors ${listening ? 'bg-rec text-white animate-pulse' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
             >
               <Mic size={12} />
             </button>
           )}
           <button
             type="submit"
-            className="px-3 py-1 bg-black text-white text-[9px] font-bold hover:bg-jsr-orange border-l-2 border-black"
+            className="px-4 py-1 bg-ink text-white text-[11px] font-semibold hover:bg-candy-sun-deep hover:text-ink border-l border-line transition-colors"
           >
             SEND
           </button>

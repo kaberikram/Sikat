@@ -17,6 +17,7 @@ import {
   makeReviewCardTexture,
   makeScaleHandleTexture,
   makeScrubTrackTexture,
+  makeTitleTexture,
   XR_UI,
 } from './xr-ui-chrome'
 
@@ -104,39 +105,18 @@ export function createReviewScreen(
     depthBuffer: true,
   })
 
-  // Hard shadow plate (brutalist-shadow)
-  const shadowPlate = new THREE.Mesh(
-    new THREE.PlaneGeometry(CARD_W, CARD_H),
-    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
-  )
-  shadowPlate.position.set(0.035, -0.035, -0.012)
-  group.add(shadowPlate)
-
+  // Glass card — soft shadow + rounded screen bezel are baked into the texture.
   const cardTex = makeReviewCardTexture()
-  const card = texturedPlane(CARD_W, CARD_H, cardTex, { transparent: false })
+  const card = texturedPlane(CARD_W, CARD_H, cardTex)
   card.position.z = 0
   card.userData.hitKind = 'frame' satisfies HitKind
   group.add(card)
 
   // Title chip only here (not baked into cardTex — that caused double text).
-  const titleTex = makeButtonTexture('TAKE REVIEW', {
-    bg: XR_UI.ink,
-    fg: XR_UI.paper,
-    w: 840,
-    h: 144,
-  })
-  const titleChip = texturedPlane(0.42, 0.072, titleTex, { transparent: false })
+  const titleTex = makeTitleTexture('TAKE REVIEW')
+  const titleChip = texturedPlane(0.42, 0.072, titleTex)
   titleChip.position.set(-0.36, CARD_H / 2 - 0.09, 0.008)
-  titleChip.rotation.z = (-2 * Math.PI) / 180
   group.add(titleChip)
-
-  // Film bezel + RT screen
-  const bezel = new THREE.Mesh(
-    new THREE.PlaneGeometry(FILM_W + 0.04, FILM_H + 0.04),
-    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
-  )
-  bezel.position.set(0, FILM_Y, 0.004)
-  group.add(bezel)
 
   const screenMat = new THREE.MeshBasicMaterial({
     map: target.texture,
@@ -148,10 +128,10 @@ export function createReviewScreen(
   group.add(screenMesh)
 
   // Transport dock controls
-  const playTex = makeButtonTexture('PLAY', { bg: XR_UI.ink, fg: XR_UI.paper })
-  const pauseTex = makeButtonTexture('PAUSE', { bg: XR_UI.ink, fg: XR_UI.yellow })
-  const playHoverTex = makeButtonTexture('PLAY', { bg: XR_UI.ink, fg: XR_UI.paper, hover: true })
-  const pauseHoverTex = makeButtonTexture('PAUSE', { bg: XR_UI.ink, fg: XR_UI.yellow, hover: true })
+  const playTex = makeButtonTexture('PLAY', { bg: XR_UI.sun, fg: XR_UI.ink })
+  const pauseTex = makeButtonTexture('PAUSE', { bg: XR_UI.mint, fg: XR_UI.ink })
+  const playHoverTex = makeButtonTexture('PLAY', { bg: XR_UI.sun, fg: XR_UI.ink, hover: true })
+  const pauseHoverTex = makeButtonTexture('PAUSE', { bg: XR_UI.mint, fg: XR_UI.ink, hover: true })
   const playMat = new THREE.MeshBasicMaterial({
     map: playTex,
     transparent: true,
@@ -170,7 +150,7 @@ export function createReviewScreen(
   group.add(scrubTrack)
 
   const playheadTex = makePlayheadTexture()
-  const scrubThumb = texturedPlane(0.028, 0.06, playheadTex)
+  const scrubThumb = texturedPlane(0.055, 0.055, playheadTex)
   scrubThumb.position.set(0.08 - SCRUB_W / 2, DOCK_Y, 0.03)
   group.add(scrubThumb)
 
@@ -267,6 +247,24 @@ export function createReviewScreen(
     syncPlayLabel()
   }
 
+  // Springy hover pop — damp each control's scale toward 1.08 while pointed at.
+  const hoverScaleTargets: [THREE.Mesh, HitKind][] = [
+    [playBtn, 'play'],
+    [dismissBtn, 'dismiss'],
+    [scaleHandle, 'scale'],
+  ]
+  let lastHoverT = performance.now()
+  function syncHoverScale(): void {
+    const now = performance.now()
+    const dt = Math.min((now - lastHoverT) / 1000, 0.1)
+    lastHoverT = now
+    for (const [mesh, kind] of hoverScaleTargets) {
+      const target = hoverKind === kind ? 1.08 : 1
+      const next = THREE.MathUtils.damp(mesh.scale.x, target, 14, dt)
+      mesh.scale.setScalar(next)
+    }
+  }
+
   function hitTest(xrInput: XRInputManager): { kind: HitKind; point: THREE.Vector3 } | null {
     const ray = xrInput.xrOrigin.raySpaces.right
     ray.updateWorldMatrix(true, false)
@@ -305,6 +303,7 @@ export function createReviewScreen(
     const hit = hitTest(xrInput)
     hoverKind = hit?.kind ?? null
     syncHoverChrome()
+    syncHoverScale()
 
     if (triggerDown && hit) {
       if (hit.kind === 'play') {
@@ -398,10 +397,8 @@ export function createReviewScreen(
     hide()
     scene.remove(group)
     target.dispose()
-    disposeMesh(shadowPlate)
     disposeMesh(card)
     disposeMesh(titleChip)
-    disposeMesh(bezel)
     screenMesh.geometry.dispose()
     screenMat.dispose()
     playMat.map = null

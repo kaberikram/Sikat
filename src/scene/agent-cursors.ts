@@ -24,7 +24,7 @@ import { sampleObjectAtTime } from '../director/scene-state-sync'
 import { useEditorStore } from '../store'
 import { getEaseFn } from '../easing'
 import { tagSceneInfrastructure, setEditorLayer } from './infrastructure'
-import { drawBrutalCard, makeCanvasTexture, XR_UI } from './xr/xr-ui-chrome'
+import { drawGlassCard, drawPill, makeCanvasTexture, XR_UI } from './xr/xr-ui-chrome'
 import { getCursorStatusVisibility } from './agent-cursor-status'
 import { dampToward } from './opacity-damp'
 
@@ -86,16 +86,17 @@ function makeLabel(name: string, color: string): {
 } {
   const label = name.toUpperCase()
   const texture = makeCanvasTexture(768, 160, (ctx, w, h) => {
-    drawBrutalCard(ctx, w, h, { fill: color, shadowPx: 14, borderPx: 10 })
+    ctx.clearRect(0, 0, w, h)
+    drawPill(ctx, 16, 16, w - 32, h - 32, color, { pad: 16 })
     ctx.fillStyle = XR_UI.ink
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     let fontPx = 64
     do {
-      ctx.font = `bold ${fontPx}px "JetBrains Mono", ui-monospace, monospace`
+      ctx.font = `700 ${fontPx}px "Baloo 2", ui-rounded, system-ui, sans-serif`
       fontPx -= 2
-    } while (fontPx > 24 && ctx.measureText(label).width > w - 72)
-    ctx.fillText(label, w / 2, h / 2 - 5)
+    } while (fontPx > 24 && ctx.measureText(label).width > w - 96)
+    ctx.fillText(label, w / 2, h / 2 - 2)
   })
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false })
   const sprite = new THREE.Sprite(material)
@@ -106,15 +107,15 @@ function makeLabel(name: string, color: string): {
 /** Thick open arc — rotated each frame to read as a spinner. Drawn once. */
 function makeArcTexture(color: string): THREE.CanvasTexture {
   return makeCanvasTexture(160, 160, (ctx) => {
-    ctx.lineCap = 'square'
+    ctx.lineCap = 'round'
     ctx.beginPath()
-    ctx.strokeStyle = XR_UI.ink
-    ctx.lineWidth = 30
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
+    ctx.lineWidth = 28
     ctx.arc(80, 80, 54, Math.PI * 0.3, Math.PI * 1.8)
     ctx.stroke()
     ctx.beginPath()
     ctx.strokeStyle = color
-    ctx.lineWidth = 18
+    ctx.lineWidth = 16
     ctx.arc(80, 80, 54, Math.PI * 0.3, Math.PI * 1.8)
     ctx.stroke()
   })
@@ -123,15 +124,24 @@ function makeArcTexture(color: string): THREE.CanvasTexture {
 /** Check mark — swapped in on settle so completion reads instantly. */
 function makeCheckTexture(color: string): THREE.CanvasTexture {
   return makeCanvasTexture(160, 160, (ctx, w, h) => {
-    drawBrutalCard(ctx, w, h, { fill: color, shadowPx: 10, borderPx: 10 })
-    ctx.strokeStyle = XR_UI.ink
-    ctx.lineWidth = 16
-    ctx.lineJoin = 'miter'
-    ctx.lineCap = 'square'
+    ctx.clearRect(0, 0, w, h)
+    ctx.save()
+    ctx.shadowColor = XR_UI.shadow
+    ctx.shadowBlur = 14
+    ctx.shadowOffsetY = 5
+    ctx.fillStyle = color
     ctx.beginPath()
-    ctx.moveTo(38, 82)
-    ctx.lineTo(68, 112)
-    ctx.lineTo(124, 48)
+    ctx.arc(w / 2, h / 2, w / 2 - 16, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 16
+    ctx.lineJoin = 'round'
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(44, 84)
+    ctx.lineTo(70, 110)
+    ctx.lineTo(118, 54)
     ctx.stroke()
   })
 }
@@ -240,7 +250,7 @@ function drawNote(cursor: Cursor, text: string): void {
     return
   }
 
-  const font = 'bold 44px "JetBrains Mono", ui-monospace, monospace'
+  const font = '600 44px "Baloo 2", ui-rounded, system-ui, sans-serif'
   const measureCanvas = document.createElement('canvas')
   const measureCtx = measureCanvas.getContext('2d')!
   measureCtx.font = font
@@ -252,7 +262,7 @@ function drawNote(cursor: Cursor, text: string): void {
     Math.max(420, Math.ceil(Math.max(...lines.map((line) => measureCtx.measureText(line).width)) + 72))
   )
   const texture = makeCanvasTexture(cardW, cardH, (ctx, w, h) => {
-    drawBrutalCard(ctx, w, h, { fill: XR_UI.paper, shadowPx: 14, borderPx: 10 })
+    drawGlassCard(ctx, w, h, { pad: 16, radius: 44 })
     ctx.fillStyle = XR_UI.ink
     ctx.font = font
     ctx.textAlign = 'center'

@@ -41,7 +41,7 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 
 Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is headset eyes only.
 
-**UI chrome:** XR panels use the same desktop brutalist tokens (`#FFE600` / `#FF6B00` / `#0094FF`, thick black borders, hard offset shadow) via canvas textures in [`xr-ui-chrome.ts`](./xr-ui-chrome.ts) — Three.js meshes can't use CSS.
+**UI chrome:** XR panels use the same desktop pastel-glass tokens (ink `#3B3A48`, candy accents `#FFC43D` / `#57CFA0` / `#5EAEF2` / `#F27BAC`, translucent white cards) via canvas textures in [`xr-ui-chrome.ts`](./xr-ui-chrome.ts) — Three.js meshes can't use CSS. Cards are visionOS-style faux frost drawn by `drawGlassCard`: rounded translucent fill + painted soft shadow, so every texture reserves a transparent `pad` margin for shadow bleed and its material must stay `transparent: true`. Buttons are pastel pills whose hover is a soft glow + lighten (never inversion); labels render in "Baloo 2", preloaded via `preloadXrUiFonts()` at app boot so canvases don't rasterize the fallback font.
 
 ## Exit XR (emulator)
 

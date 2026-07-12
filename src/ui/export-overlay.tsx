@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useEditorStore } from '../store'
 import { exportMp4 } from '../exporter'
+import { Button } from './button'
 import { OverlayPanel } from './overlay-panel'
 
 function ExportMp4Modal({
@@ -23,22 +24,22 @@ function ExportMp4Modal({
   if (!open) return null
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white border-4 border-black brutalist-shadow max-w-md w-full p-4"
+        className="bg-card rounded-[var(--radius-panel)] shadow-[var(--shadow-lift)] ring-1 ring-line max-w-md w-full p-5"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-sm font-black uppercase tracking-tight mb-3">Export MP4</h2>
-        <div className="grid grid-cols-2 gap-2 text-[10px]">
+        <h2 className="text-sm font-bold mb-3">Export MP4</h2>
+        <div className="grid grid-cols-2 gap-2 text-[11px]">
           <label className="col-span-1">
             <span className="block font-bold mb-0.5">Width</span>
             <input
               type="number"
               value={w}
               onChange={(e) => setW(parseInt(e.target.value, 10) || 1)}
-              className="w-full border-2 border-black p-1"
+              className="w-full rounded-[10px] bg-white/70 border border-line p-1.5 font-mono outline-none focus:ring-2 focus:ring-candy-blue"
             />
           </label>
           <label>
@@ -47,7 +48,7 @@ function ExportMp4Modal({
               type="number"
               value={h}
               onChange={(e) => setH(parseInt(e.target.value, 10) || 1)}
-              className="w-full border-2 border-black p-1"
+              className="w-full rounded-[10px] bg-white/70 border border-line p-1.5 font-mono outline-none focus:ring-2 focus:ring-candy-blue"
             />
           </label>
           <label>
@@ -56,7 +57,7 @@ function ExportMp4Modal({
               type="number"
               value={fps}
               onChange={(e) => setFps(parseInt(e.target.value, 10) || 1)}
-              className="w-full border-2 border-black p-1"
+              className="w-full rounded-[10px] bg-white/70 border border-line p-1.5 font-mono outline-none focus:ring-2 focus:ring-candy-blue"
             />
           </label>
           <label>
@@ -65,25 +66,23 @@ function ExportMp4Modal({
               type="number"
               value={dur}
               onChange={(e) => setDur(parseFloat(e.target.value) || 0.1)}
-              className="w-full border-2 border-black p-1"
+              className="w-full rounded-[10px] bg-white/70 border border-line p-1.5 font-mono outline-none focus:ring-2 focus:ring-candy-blue"
             />
           </label>
         </div>
-        {error ? <p className="text-red-600 text-[10px] mt-2">{error}</p> : null}
-        <div className="mt-3 h-3 border-2 border-black bg-black/10">
+        {error ? <p className="text-rec text-[11px] mt-2">{error}</p> : null}
+        <div className="mt-3 h-2 rounded-full bg-line overflow-hidden">
           <div
-            className="h-full bg-jsr-orange transition-[width] duration-150"
+            className="h-full rounded-full bg-candy-mint-deep transition-[width] duration-150"
             style={{ width: `${progress * 100}%` }}
           />
         </div>
         <div className="mt-3 flex gap-2 justify-end">
-          <button type="button" className="nav-btn" onClick={onClose} disabled={running}>
+          <Button variant="ghost" onClick={onClose} disabled={running}>
             CANCEL
-          </button>
-          <button
-            type="button"
-            className="nav-btn"
-            style={{ background: 'var(--jsr-pink)', color: 'white' }}
+          </Button>
+          <Button
+            variant="pink"
             disabled={running}
             onClick={async () => {
               setError(null)
@@ -111,7 +110,7 @@ function ExportMp4Modal({
             }}
           >
             {running ? 'ENCODING...' : 'START'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -159,22 +158,12 @@ export function ExportOverlay() {
       {open && (
         <OverlayPanel overlayKey="export" title="EXPORT" className="overlay-export">
           <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={handleExportJson}
-              className="nav-btn brutalist-shadow w-full"
-              style={{ background: 'var(--jsr-pink)', color: 'white' }}
-            >
+            <Button variant="pink" onClick={handleExportJson} className="w-full">
               EXPORT_JSON
-            </button>
-            <button
-              type="button"
-              onClick={() => setMp4Open(true)}
-              className="nav-btn brutalist-shadow w-full"
-              style={{ background: 'var(--jsr-pink)', color: 'white' }}
-            >
+            </Button>
+            <Button variant="pink" onClick={() => setMp4Open(true)} className="w-full">
               EXPORT_MP4
-            </button>
+            </Button>
           </div>
         </OverlayPanel>
       )}

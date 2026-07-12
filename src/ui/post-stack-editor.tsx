@@ -59,7 +59,7 @@ const POST_STACK_SECTIONS: {
 function PostFxCheckbox({ checked }: { checked: boolean }) {
   return (
     <span className={cn('fx-toggle pointer-events-none', checked && 'fx-toggle--on')} aria-hidden>
-      {checked ? <Check size={13} strokeWidth={3} className="text-[var(--jsr-yellow)]" /> : null}
+      {checked ? <Check size={13} strokeWidth={3} className="text-white" /> : null}
     </span>
   )
 }
@@ -92,11 +92,11 @@ export function PostStackEditor({
                 type="button"
                 aria-expanded={expanded}
                 onClick={() => setOpenSections((s) => ({ ...s, [section.id]: !s[section.id] }))}
-                className="p-0.5 border-2 border-black bg-white hover:bg-black/5 shrink-0"
+                className="p-0.5 rounded-lg bg-white/80 hover:bg-candy-sun/60 transition-colors shrink-0"
               >
                 {expanded ? <ChevronDown size={14} strokeWidth={2.5} /> : <ChevronRight size={14} strokeWidth={2.5} />}
               </button>
-              <span className="text-[11px] font-bold flex-1 truncate">{section.label}</span>
+              <span className="text-[12px] font-semibold flex-1 truncate">{section.label}</span>
               <button
                 type="button"
                 aria-pressed={cfg.enabled}
@@ -113,15 +113,15 @@ export function PostStackEditor({
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.18 }}
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                   className="overflow-hidden"
                 >
-                  <div className="mt-2 pt-2 border-t-2 border-black/15 space-y-3">
+                  <div className="mt-2 pt-2 border-t border-line space-y-3">
                     {section.sliders.map((sl) => {
                       const value = numericCfg[sl.key] as number
                       return (
                         <label key={sl.key} className="block">
-                          <div className="flex justify-between text-[9px] font-mono font-bold mb-0.5">
+                          <div className="flex justify-between text-[10px] font-mono font-bold mb-0.5">
                             <span>{sl.label}</span>
                             <span className="opacity-60">{value.toFixed(sl.step < 1 ? 2 : 0)}</span>
                           </div>
@@ -132,7 +132,7 @@ export function PostStackEditor({
                             step={sl.step}
                             value={value}
                             onChange={(e) => updateSectionSlider(section.id, sl.key, parseFloat(e.target.value))}
-                            className="w-full accent-black h-2"
+                            className="w-full accent-[var(--color-candy-blue-deep)] h-2"
                           />
                         </label>
                       )
@@ -146,7 +146,7 @@ export function PostStackEditor({
                           onClick={() => updateSectionToggle(section.id, tg.key)}
                           className="flex w-full items-center justify-between gap-2 cursor-pointer border-0 bg-transparent p-0 text-left"
                         >
-                          <span className="text-[9px] font-mono font-bold">{tg.label}</span>
+                          <span className="text-[10px] font-mono font-bold">{tg.label}</span>
                           <PostFxCheckbox checked={on} />
                         </button>
                       )
