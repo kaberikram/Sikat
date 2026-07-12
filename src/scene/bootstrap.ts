@@ -3,7 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { defaultUserCameraPosition, useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { createViewfinderComposer } from '../pip-composer'
 import { registerSceneForExport } from '../scene-export-registry'
-import { EDITOR_LAYER, tagSceneInfrastructure } from './infrastructure'
+import {
+  createViewfinderBackdropMesh,
+  EDITOR_LAYER,
+  tagSceneInfrastructure,
+  VIEWFINDER_BACKDROP_LAYER,
+} from './infrastructure'
 import { ensureShadowsOnObjectMeshes } from './shadows'
 import { setupGizmo } from './setup-gizmo'
 import { setupPicking } from './setup-picking'
@@ -34,6 +39,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
 
   const virtCamera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, cameraFar)
   virtCamera.layers.set(0)
+  virtCamera.layers.enable(VIEWFINDER_BACKDROP_LAYER)
   virtCamera.userData.id = VIRTUAL_CAMERA_ID
   const vc0 = useEditorStore.getState().virtualCamera
   virtCamera.position.set(...vc0.position)
@@ -45,6 +51,12 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   const camAxes = new THREE.AxesHelper(Math.max(0.75, stage.radius * 0.03))
   camAxes.layers.set(EDITOR_LAYER)
   virtCamera.add(camAxes)
+
+  // Physical stand-in for scene.background — WebXR passthrough sessions force
+  // every clear (including offscreen viewfinder RTs) to transparent black, so
+  // a flat clear color alone can't give the virt-cam feed an opaque backdrop.
+  const virtCamBackdrop = createViewfinderBackdropMesh(cameraFar * 0.9)
+  virtCamera.add(virtCamBackdrop)
 
   const mainRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   mainRenderer.setClearColor(0x000000, 0)
@@ -172,6 +184,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     camcorderRig,
     xrViewfinder,
     reviewScreen,
+    virtCamBackdrop,
   })
 
   const handleMainResize = () => {
@@ -219,6 +232,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     viewfinder.ditherPass.dispose()
     viewfinder.outputPass.dispose()
     viewfinder.composer.dispose()
+    virtCamBackdrop.geometry.dispose()
+    ;(virtCamBackdrop.material as THREE.Material).dispose()
     mainRenderer.dispose()
     pipRenderer.dispose()
     if (mainRenderer.domElement.parentNode) mainRenderer.domElement.remove()

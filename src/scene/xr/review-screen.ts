@@ -3,7 +3,12 @@ import { InputComponent, type XRInputManager } from '@iwsdk/xr-input'
 import { createViewfinderComposer } from '../../pip-composer'
 import { useEditorStore, type MotionObject, type PostProcessingStack } from '../../store'
 import { applyVirtualCameraAtTime } from '../../timeline-apply'
-import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import {
+  createViewfinderBackdropMesh,
+  setEditorLayer,
+  tagSceneInfrastructure,
+  VIEWFINDER_BACKDROP_LAYER,
+} from '../infrastructure'
 import { renderViewfinderToTarget } from '../viewfinder-pass'
 import {
   makeButtonTexture,
@@ -80,6 +85,11 @@ export function createReviewScreen(
 
   const playbackCam = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, cameraFar)
   playbackCam.layers.set(0)
+  playbackCam.layers.enable(VIEWFINDER_BACKDROP_LAYER)
+
+  // Same physical backdrop as the grip LCD — see createViewfinderBackdropMesh.
+  const playbackBackdrop = createViewfinderBackdropMesh(cameraFar * 0.9)
+  playbackCam.add(playbackBackdrop)
 
   const viewfinder = createViewfinderComposer(
     scene,
@@ -359,6 +369,7 @@ export function createReviewScreen(
     if (!open) return
     const vc = useEditorStore.getState().virtualCamera
     applyVirtualCameraAtTime(ctx.t, vc, playbackCam)
+    ;(playbackBackdrop.material as THREE.MeshBasicMaterial).color.set(ctx.clearColor)
     renderViewfinderToTarget({
       objects: ctx.objects,
       stack: ctx.stack,
@@ -406,6 +417,8 @@ export function createReviewScreen(
     dismissTex.dispose()
     dismissHoverTex.dispose()
     disposeMesh(scaleHandle)
+    playbackBackdrop.geometry.dispose()
+    ;(playbackBackdrop.material as THREE.Material).dispose()
     viewfinder.pixelatedPass.dispose()
     viewfinder.bloomPass.dispose()
     viewfinder.ditherPass.dispose()
