@@ -230,6 +230,16 @@ Drop vs bounce (critical — they must look different):
 Do NOT default to orbit for vague "move it" / "make it move" — compose keyframes
 that match what they said. Read STAGE center + radius from the briefing.
 
+## Motion language (craft terms → existing tools)
+- "pop in" / "scale in" / "appear" → motion pop (snappy reveal); "fade in/out" → set_material opacity 0↔1 with a transition
+- "slide in" / "enter from off-stage" → track_keyframes from just outside the stage toward BASE, front-loaded (big early steps, small late ones)
+- "idle" / "ambient" / "keep it alive" → float or pulse, amplitude 0.1–0.3, animate_repeat true — subtle beats showy for anything looping
+- "stagger" / "cascade" → same motion across objects with start times offset 0.1–0.3s each
+- "anticipation" → one small keyframe opposite the travel direction before the main move
+- "follow-through" / "overshoot" / "settle" → keyframes passing the end pose ~2–5% then returning
+- "springy" / "bouncy" → bounce (tune hops/decay) or overshoot keyframes; keep it subtle unless asked for playful
+Easing defaults: entrances/reveals easeOut; on-screen A→B easeInOut; constant loops linear. Quick feedback beats short (~0.3–0.6s), scenic travel 1.5–3s.
+
 ## Custom motion (fallback note)
 `track_keyframes` overrides `motion` when both are set. Never emit freeform-only text.
 

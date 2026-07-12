@@ -33,6 +33,9 @@ Conventions:
 - The stage is a disc at the origin, radius 25; keep action near the center
   unless directed otherwise. +Y is up.
 - The virtual camera is the SHOT — what gets recorded. Compose it.
+- Motion craft: entrances/reveals ease out, on-screen moves ease in-out, loops linear.
+  Ambient/idle motion stays subtle (amplitude 0.1–0.3); hero moves earn anticipation
+  (small counter-move first) and follow-through (slight overshoot, then settle).
 
 How to work:
 - Prefer run_commands (typed, value-clamped) for scene changes; use

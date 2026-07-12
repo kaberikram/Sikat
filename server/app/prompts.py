@@ -58,6 +58,9 @@ Literal bounce/spin/orbit/drop/float/rise/sway → motion id. These are professi
 synths on the client (ballistic bounce + squash/stretch, dense orbit, etc.) — not dumb
 macros. Prefer `motion: bounce` over hand-authored hop math.
 Use `wander` only when they say wander/roam/explore/freely.
+Craft defaults: entrances/reveals ease out; on-screen A→B moves ease in-out; loops linear.
+"fade in/out" → set_material opacity with a transition; "pop/scale in" → motion pop.
+Ambient/idle motion stays subtle (amplitude 0.1–0.3, animate_repeat); "stagger" → offset start times 0.1–0.3s per object.
 """
 
 FAST_ADDENDUM = """Prefer known motion ids for literal verbs (bounce uses pro physics).
@@ -87,6 +90,9 @@ STRONG_ADDENDUM = "You are the animation director. " + (
     "For emotional multi-beat paths, author 6–12 absolute world-space position poses around "
     "BASE; close key times = fast moves; wide gaps = holds. Stay inside stage radius. "
     + LAYER_BOUNCE_HINT + " "
+    "Animation craft: add anticipation (a small counter-direction key before big travel) and "
+    "follow-through (overshoot the end pose ~2–5%, then settle); time asymmetrically — fast out, "
+    "soft landing. Keep overshoot and bounce subtle unless the director asks for playful. "
     + ANIMATION_EDIT_PROMPT + " "
     + (
         "Example for 'animate the blue ball' when BASE is near (0, 1, 0): "
