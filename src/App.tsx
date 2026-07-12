@@ -8,7 +8,7 @@ import { Editor } from './Editor';
 
 export default function App() {
   return (
-    <div className="w-full h-screen bg-black select-none">
+    <div className="w-full h-screen bg-cream select-none">
       <Editor />
     </div>
   );

@@ -1,5 +1,6 @@
 import React from 'react'
 import { useEditorStore } from '../store'
+import { Button } from './button'
 import { OverlayPanel } from './overlay-panel'
 
 function TimelineTrackRow({
@@ -19,7 +20,7 @@ function TimelineTrackRow({
 }) {
   return (
     <div className="track relative group min-h-8">
-      <span className="text-[9px] w-24 px-4 bg-black text-white mr-4 truncate flex items-center h-full min-h-8">
+      <span className="text-[11px] font-semibold w-24 px-3 rounded-full bg-white/70 text-ink mr-4 my-1 truncate flex items-center self-center h-6">
         {name}
       </span>
       <div
@@ -69,13 +70,9 @@ export function TimelineOverlay() {
     <OverlayPanel overlayKey="timeline" title="TIMELINE" className="overlay-timeline">
       <div className="timeline-controls">
         <div className="flex gap-4 items-center">
-          <button
-            type="button"
-            onClick={togglePlay}
-            className="bg-black text-white px-4 py-1 text-xs hover:bg-jsr-orange transition-colors"
-          >
+          <Button variant="dark" size="sm" onClick={togglePlay}>
             {isPlaying ? 'PAUSE' : 'PLAY'}
-          </button>
+          </Button>
           <span className="text-xs font-mono font-bold">{currentTime.toFixed(2)}s</span>
         </div>
       </div>

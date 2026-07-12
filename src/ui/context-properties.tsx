@@ -8,6 +8,7 @@ import {
 } from '../store'
 import { buildTurnaroundRotationKeyframes } from '../animation-presets'
 import { patchCameraPostSection, type PostSectionId } from '../post-processing'
+import { Button } from './button'
 import { PostStackEditor } from './post-stack-editor'
 
 function collectDescendantMeshes(root: THREE.Object3D): THREE.Mesh[] {
@@ -47,7 +48,7 @@ function VectorFields({
 }) {
   return (
     <div>
-      <div className="text-[9px] opacity-60 mb-1">{label}</div>
+      <div className="text-[10px] font-semibold text-ink-soft mb-1">{label}</div>
       <div className="grid grid-cols-3 gap-1">
         {[0, 1, 2].map((i) => (
           <input
@@ -61,7 +62,7 @@ function VectorFields({
               next[i] = v
               onChange(next)
             }}
-            className="w-full bg-white border-2 border-black p-1 text-[9px] font-bold"
+            className="w-full rounded-[10px] bg-white/70 border border-line p-1 text-[10px] font-mono font-bold outline-none focus:ring-2 focus:ring-candy-blue"
           />
         ))}
       </div>
@@ -127,7 +128,7 @@ export function ContextProperties() {
   if (cameraMode) {
     return (
       <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
-        <div className="text-[9px] font-bold uppercase tracking-wider opacity-60">Viewfinder / Lens</div>
+        <div className="text-[11px] font-bold text-ink-soft">Viewfinder / Lens</div>
         <VectorFields
           label="POSITION"
           values={virtualCamera.position}
@@ -138,7 +139,7 @@ export function ContextProperties() {
           values={virtualCamera.rotation}
           onChange={(v) => commitCameraVector('rotation', v)}
         />
-        <label className="text-[9px] opacity-60 block">
+        <label className="text-[10px] font-semibold text-ink-soft block">
           FOV
           <input
             type="number"
@@ -147,17 +148,13 @@ export function ContextProperties() {
               const v = parseFloat(e.target.value)
               if (!Number.isNaN(v)) commitCameraFov(v)
             }}
-            className="w-full bg-white border-2 border-black p-1 text-[9px] font-bold mt-0.5"
+            className="w-full rounded-[10px] bg-white/70 border border-line p-1 text-[10px] font-mono font-bold text-ink outline-none focus:ring-2 focus:ring-candy-blue mt-0.5"
           />
         </label>
-        <button
-          type="button"
-          onClick={() => snapshotCameraKeyframes(currentTime)}
-          className="w-full bg-black text-white text-[9px] py-1 font-bold hover:bg-jsr-orange"
-        >
+        <Button variant="dark" size="sm" onClick={() => snapshotCameraKeyframes(currentTime)} className="w-full">
           ADD_KEYFRAME
-        </button>
-        <span className="text-[10px] font-mono font-bold">POST_STACK</span>
+        </Button>
+        <span className="text-[11px] font-mono font-bold">POST_STACK</span>
         <PostStackEditor
           openSections={openSections}
           setOpenSections={setOpenSections}
@@ -179,7 +176,7 @@ export function ContextProperties() {
 
   return (
     <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
-      <div className="text-[9px] font-bold uppercase tracking-wider truncate">{selected.name}</div>
+      <div className="text-[11px] font-bold truncate">{selected.name}</div>
       <VectorFields
         label="POSITION"
         values={selected.position}
@@ -195,29 +192,31 @@ export function ContextProperties() {
         values={selected.scale}
         onChange={(v) => commitObjectVector(selected, 'scale', v)}
       />
-      <button
-        type="button"
+      <Button
+        variant="dark"
+        size="sm"
         onClick={() => snapshotObjectKeyframes(selected.id, currentTime)}
-        className="w-full bg-black text-white text-[9px] py-1 font-bold hover:bg-jsr-orange"
+        className="w-full"
       >
         ADD_KEYFRAME
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="pink"
+        size="sm"
         onClick={() => {
           const kfs = buildTurnaroundRotationKeyframes(selected.rotation, duration)
           setObjectPropertyKeyframes(selected.id, 'rotation', kfs)
           setTime(0)
         }}
-        className="w-full bg-[var(--jsr-pink)] text-white text-[9px] py-1 font-bold hover:bg-black"
+        className="w-full"
       >
         360_TURNAROUND
-      </button>
+      </Button>
       {subMeshes.length > 0 && (
-        <div className="fx-row border-t-2 border-black/20 pt-2">
-          <div className="text-[11px] block mb-2">
+        <div className="fx-row pt-2">
+          <div className="text-[11px] font-semibold block mb-2">
             MESHES
-            <div className="text-[8px] font-mono font-bold opacity-60 mt-0.5 flex justify-end gap-3">
+            <div className="text-[9px] font-mono font-bold opacity-60 mt-0.5 flex justify-end gap-3">
               <span>α</span>
               <span>SHD</span>
             </div>
@@ -225,13 +224,13 @@ export function ContextProperties() {
           <ul className="flex flex-col gap-1.5 max-h-24 overflow-y-auto pr-0.5">
             {subMeshes.map((m, i) => (
               <li key={m.uuid} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 min-h-[22px]">
-                <span className="text-[9px] font-mono font-bold truncate min-w-0" title={m.name || `Mesh ${i + 1}`}>
+                <span className="text-[10px] font-mono font-bold truncate min-w-0" title={m.name || `Mesh ${i + 1}`}>
                   {m.name || `MESH_${i + 1}`}
                 </span>
                 <label className="flex items-center justify-center text-[8px] cursor-pointer" title="Transparent">
                   <input
                     type="checkbox"
-                    className="h-3.5 w-3.5 border-2 border-black accent-black"
+                    className="h-3.5 w-3.5 rounded accent-[var(--color-candy-mint-deep)]"
                     checked={getEffectiveMeshTransparent(m, selected.subMeshTransparent)}
                     onChange={(e) => setSubMeshTransparent(selected.id, m.uuid, e.target.checked)}
                   />
@@ -239,7 +238,7 @@ export function ContextProperties() {
                 <label className="flex items-center justify-center text-[8px] cursor-pointer" title="Cast and receive shadows">
                   <input
                     type="checkbox"
-                    className="h-3.5 w-3.5 border-2 border-black accent-black"
+                    className="h-3.5 w-3.5 rounded accent-[var(--color-candy-mint-deep)]"
                     checked={getEffectiveMeshShadow(m, selected.subMeshShadow)}
                     onChange={(e) => setSubMeshShadow(selected.id, m.uuid, e.target.checked)}
                   />

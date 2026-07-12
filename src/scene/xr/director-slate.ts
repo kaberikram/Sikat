@@ -3,7 +3,7 @@
  */
 import * as THREE from 'three'
 import { setEditorLayer } from '../infrastructure'
-import { makeCanvasTexture, XR_UI } from './xr-ui-chrome'
+import { drawGlassCard, makeCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 const SLATE_W = 0.14
 const SLATE_H = 0.048
@@ -26,32 +26,34 @@ function paintSlate(opts: {
   offline: boolean
 }): THREE.CanvasTexture {
   return makeCanvasTexture(TEX_W, TEX_H, (ctx, w, h) => {
-    // Card body
-    ctx.fillStyle = XR_UI.ink
-    ctx.fillRect(8, 8, w - 8, h - 8)
-    ctx.fillStyle = XR_UI.paper
-    ctx.fillRect(0, 0, w - 8, h - 8)
-    ctx.strokeStyle = XR_UI.ink
-    ctx.lineWidth = 10
-    ctx.strokeRect(5, 5, w - 18, h - 18)
+    // Glass card body
+    drawGlassCard(ctx, w, h, { pad: 18, radius: 44 })
 
-    // Status strip
-    const stripH = 72
-    ctx.fillStyle = XR_UI.ink
-    ctx.fillRect(10, 10, w - 28, stripH)
-
-    const statusColor = opts.offline
-      ? '#ff3b30'
+    // Status pill — pastel-coded by state, ink label.
+    const stripH = 68
+    const stripY = 34
+    const stripColor = opts.offline
+      ? XR_UI.rec
       : opts.listening
-        ? XR_UI.orange
-        : '#30d158'
-    ctx.fillStyle = statusColor
+        ? XR_UI.sun
+        : XR_UI.mint
+    ctx.fillStyle = stripColor
     ctx.beginPath()
-    ctx.arc(48, 10 + stripH / 2, 14, 0, Math.PI * 2)
+    ctx.roundRect(34, stripY, w - 68, stripH, stripH / 2)
     ctx.fill()
 
-    ctx.fillStyle = XR_UI.paper
-    ctx.font = 'bold 36px "JetBrains Mono", monospace'
+    const dotColor = opts.offline
+      ? '#ffffff'
+      : opts.listening
+        ? XR_UI.sunDeep
+        : XR_UI.mintDeep
+    ctx.fillStyle = dotColor
+    ctx.beginPath()
+    ctx.arc(70, stripY + stripH / 2, 13, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.fillStyle = opts.offline ? '#ffffff' : XR_UI.ink
+    ctx.font = '700 36px "Baloo 2", ui-rounded, system-ui, sans-serif'
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     const label = opts.offline
@@ -59,34 +61,33 @@ function paintSlate(opts: {
       : opts.listening
         ? 'LISTENING'
         : 'DIRECTOR'
-    ctx.fillText(label, 78, 10 + stripH / 2 + 2)
+    ctx.fillText(label, 98, stripY + stripH / 2 + 3)
 
-    ctx.fillStyle = '#888888'
-    ctx.font = 'bold 28px "JetBrains Mono", monospace'
+    ctx.fillStyle = opts.offline ? 'rgba(255,255,255,0.8)' : XR_UI.inkSoft
+    ctx.font = '600 28px "Baloo 2", ui-rounded, system-ui, sans-serif'
     ctx.textAlign = 'right'
-    ctx.fillText(opts.listening ? 'HOLD A' : 'HOLD A · TALK', w - 36, 10 + stripH / 2 + 2)
+    ctx.fillText(opts.listening ? 'HOLD A' : 'HOLD A · TALK', w - 56, stripY + stripH / 2 + 3)
 
-    // Transcript box
-    const boxY = stripH + 22
-    const boxH = h - boxY - 24
-    ctx.fillStyle = XR_UI.paper
-    ctx.fillRect(18, boxY, w - 44, boxH)
-    ctx.strokeStyle = XR_UI.ink
-    ctx.lineWidth = 6
-    ctx.strokeRect(21, boxY + 3, w - 50, boxH - 6)
+    // Transcript box — inner soft-white rounded well.
+    const boxY = stripY + stripH + 18
+    const boxH = h - boxY - 40
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
+    ctx.beginPath()
+    ctx.roundRect(34, boxY, w - 68, boxH, 28)
+    ctx.fill()
 
     const line = opts.listening
       ? (opts.interim.trim() || '…')
       : (opts.lastSent.trim() || 'say a direction…')
     const isGhost = opts.listening && !opts.interim.trim()
     const isInterim = opts.listening && Boolean(opts.interim.trim())
-    ctx.fillStyle = isGhost || isInterim ? '#888888' : XR_UI.ink
-    ctx.font = 'bold 32px "JetBrains Mono", monospace'
+    ctx.fillStyle = isGhost || isInterim ? XR_UI.inkSoft : XR_UI.ink
+    ctx.font = '600 32px "Baloo 2", ui-rounded, system-ui, sans-serif'
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
 
     // Simple wrap
-    const maxW = w - 70
+    const maxW = w - 120
     const words = line.split(/\s+/)
     let row = ''
     let y = boxY + boxH / 2 - 18
@@ -104,7 +105,7 @@ function paintSlate(opts: {
     const show = rows.slice(0, 2)
     if (show.length === 1) y = boxY + boxH / 2 + 2
     for (let i = 0; i < show.length; i++) {
-      ctx.fillText(show[i], 34, y + i * 36)
+      ctx.fillText(show[i], 58, y + i * 36)
     }
   })
 }

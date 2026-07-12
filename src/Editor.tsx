@@ -5,6 +5,7 @@ import { DirectorPod } from './director/DirectorPod'
 import { TimelineOverlay } from './ui/timeline-overlay'
 import { ObjectsOverlay } from './ui/objects-overlay'
 import { ExportOverlay } from './ui/export-overlay'
+import { Button } from './ui/button'
 import { useMountEffect } from './hooks/useMountEffect'
 import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
 import { requestMicPermission } from './director/voice-session'
@@ -43,30 +44,30 @@ export const Editor: React.FC = () => {
   }
 
   return (
-    <div className="director-shell bg-[var(--bg-color)]">
+    <div className="director-shell bg-cream">
       <main className="viewport relative overflow-hidden viewport-bg">
         <div className="absolute inset-0">
           <Scene pipMountEl={pipMountEl} />
         </div>
 
         {xrSupported && !xrActive && (
-          <button
-            type="button"
+          <Button
+            variant="dark"
             onClick={() => void handleEnterXr()}
-            className="absolute top-3 left-3 z-30 border-4 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold brutalist-shadow hover:bg-[var(--accent-color)]"
+            className="absolute top-3 left-3 z-30"
           >
             ENTER XR
-          </button>
+          </Button>
         )}
 
         {xrActive && (
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={() => void handleExitXr()}
-            className="absolute top-3 left-3 z-30 border-4 border-black bg-[var(--accent-color)] px-3 py-1.5 font-mono text-xs font-bold brutalist-shadow hover:bg-white"
+            className="absolute top-3 left-3 z-30"
           >
             EXIT XR
-          </button>
+          </Button>
         )}
 
         <div
@@ -76,9 +77,9 @@ export const Editor: React.FC = () => {
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') setSelected(VIRTUAL_CAMERA_ID)
           }}
-          className={`pip-frame z-20 border-4 border-black bg-black brutalist-shadow relative cursor-pointer ${xrActive ? 'sr-only fixed left-[-9999px] w-[320px] h-[180px]' : ''}`}
+          className={`pip-frame z-20 rounded-[var(--radius-card)] overflow-hidden bg-ink shadow-[var(--shadow-soft)] ring-1 ring-line relative cursor-pointer ${xrActive ? 'sr-only fixed left-[-9999px] w-[320px] h-[180px]' : ''}`}
         >
-          <div className="absolute top-0 left-0 z-10 p-1 bg-white border-b-2 border-r-2 border-black text-[8px] font-mono">
+          <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-full bg-white/80 backdrop-blur text-[10px] font-mono text-ink">
             VIRTUAL_CAM
           </div>
           <div ref={setPipMountEl} className="absolute inset-0" />

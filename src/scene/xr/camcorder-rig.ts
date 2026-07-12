@@ -219,10 +219,10 @@ export function createCamcorderRig(
       lastTakeNumber = 0
     }
 
-    // Blink the whole badge opacity so the baked REC dot pulses.
+    // Gentle breathing pulse so the baked REC dot reads as live (no hard blink).
     if (takeLabel && isRolling) {
       ;(takeLabel.material as THREE.MeshBasicMaterial).opacity =
-        Math.sin(performance.now() * 0.012) > 0 ? 1 : 0.55
+        0.75 + 0.25 * Math.sin(performance.now() * 0.006)
     }
   }
 

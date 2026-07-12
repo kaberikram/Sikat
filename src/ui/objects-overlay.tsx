@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { gltfLoader } from '../gltf-loader'
 import { createBoxMesh, createSphereMesh, createTextTagMesh } from '../scene/primitives'
+import { Button, buttonCn } from './button'
 import { cn } from './cn'
 import { OverlayPanel } from './overlay-panel'
 
@@ -41,32 +42,29 @@ export function ObjectsOverlay() {
 
   return (
     <OverlayPanel overlayKey="objects" title="OBJECTS" className="overlay-objects">
-      <div className="flex flex-wrap gap-1 mb-3">
-        <label className="nav-btn brutalist-shadow flex items-center justify-center cursor-pointer text-[9px]">
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        <label className={buttonCn('primary', 'sm', 'cursor-pointer')}>
           IMPORT
           <input type="file" accept=".gltf,.glb" onChange={handleImport} className="hidden" />
         </label>
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={() => addObject({ name: 'BOX_MDL_01', type: 'mesh', mesh: createBoxMesh() })}
-          className="nav-btn brutalist-shadow text-[9px]"
         >
           BOX
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          size="sm"
           onClick={() => addObject({ name: 'SPHERE_MDL_02', type: 'mesh', mesh: createSphereMesh() })}
-          className="nav-btn brutalist-shadow text-[9px]"
         >
           SPHERE
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          size="sm"
           onClick={() => addObject({ name: 'TAG_PLANE_00', type: 'mesh', mesh: createTextTagMesh() })}
-          className="nav-btn brutalist-shadow text-[9px]"
         >
           TAG
-        </button>
+        </Button>
       </div>
 
       <div className="flex flex-col gap-2 overflow-y-auto flex-1 min-h-0">
@@ -74,7 +72,7 @@ export function ObjectsOverlay() {
           onClick={() => setSelected(VIRTUAL_CAMERA_ID)}
           className={cn('layer-item group', selectedId === VIRTUAL_CAMERA_ID && 'active')}
         >
-          <span className="opacity-50 text-[9px]">00.</span>
+          <span className="opacity-50 text-[10px] font-mono">00.</span>
           <span className="truncate flex-1 font-mono">VIRTUAL_CAMERA</span>
         </div>
         {objects.map((obj, i) => (
@@ -83,7 +81,7 @@ export function ObjectsOverlay() {
             onClick={() => setSelected(obj.id)}
             className={cn('layer-item group', selectedId === obj.id && 'active')}
           >
-            <span className="opacity-50 text-[9px]">{String(i + 1).padStart(2, '0')}.</span>
+            <span className="opacity-50 text-[10px] font-mono">{String(i + 1).padStart(2, '0')}.</span>
             <span className="truncate flex-1">{obj.name}</span>
             <button
               type="button"
