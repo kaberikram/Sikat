@@ -92,3 +92,53 @@ messages=[{"role": "user", "content": [
 ```
 
 **DeepSeek:** text-only unless image support confirmed; log warning and skip frame.
+
+## Motion language cheat-sheet (vocabulary enrichment)
+
+> Note: the fenced Phase-A prompt above predates several rounds of tuning in
+> `llm.py` and is stale; `_system_prompt()` remains the source of truth. This
+> section mirrors only the motion-language delta.
+
+Added to `SYSTEM_PROMPT_TEMPLATE` (`server/app/llm.py`), after the
+"Drop vs bounce" rules:
+
+```
+## Motion language (craft terms → existing tools)
+- "pop in" / "scale in" / "appear" → motion pop (snappy reveal); "fade in/out" → set_material opacity 0↔1 with a transition
+- "slide in" / "enter from off-stage" → track_keyframes from just outside the stage toward BASE, front-loaded (big early steps, small late ones)
+- "idle" / "ambient" / "keep it alive" → float or pulse, amplitude 0.1–0.3, animate_repeat true — subtle beats showy for anything looping
+- "stagger" / "cascade" → same motion across objects with start times offset 0.1–0.3s each
+- "anticipation" → one small keyframe opposite the travel direction before the main move
+- "follow-through" / "overshoot" / "settle" → keyframes passing the end pose ~2–5% then returning
+- "springy" / "bouncy" → bounce (tune hops/decay) or overshoot keyframes; keep it subtle unless asked for playful
+Easing defaults: entrances/reveals easeOut; on-screen A→B easeInOut; constant loops linear. Quick feedback beats short (~0.3–0.6s), scenic travel 1.5–3s.
+```
+
+Companion additions (kept compact — these run per request):
+
+- `server/app/prompts.py` → `CORE_PROMPT` "Motion policy" section: three
+  "Craft defaults" lines (easing defaults, fade/pop mappings, subtle
+  ambient + stagger offsets). Applies to both fast and strong tiers.
+- `server/app/prompts.py` → `STRONG_ADDENDUM`: one "Animation craft"
+  sentence (anticipation, follow-through with ~2–5% overshoot, asymmetric
+  timing). Strong tier only; `FAST_ADDENDUM` unchanged.
+- `server/app/agents/scene_agent.py` → `AGENT_SYSTEM` Conventions: a
+  three-line "Motion craft" convention (same principles, prompt-cached).
+
+New `MOTION_PHRASES` entries (`server/app/motion_vocab.py`, instant
+grammar path — glossary terms mapped onto existing motion ids only):
+
+| Phrase | Motion id | Rationale |
+| --- | --- | --- |
+| `idle animation`, `idle` | float | glossary "Idle animation" → ambient hover |
+| `hovering` | float | gerund gap for existing `hover` |
+| `breathing` | pulse | gerund gap for existing `breathe` |
+| `popping` | pop | gerund gap |
+| `circling` | orbit | gerund gap for existing `circle` |
+| `swinging` | swing | gerund gap |
+| `oscillate`, `oscillating` | sway | side-to-side oscillation = sway synth |
+| `jittery`, `jitter` | shake | glossary Shake/Wiggle "quick jitter" |
+| `springy`, `spring` | bounce | glossary Spring/Bounce → closest runtime physics |
+
+The full glossary these terms come from lives at
+`.claude/skills/animation-vocabulary/SKILL.md`.
