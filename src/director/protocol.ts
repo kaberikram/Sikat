@@ -264,6 +264,8 @@ export interface AgentLogMessage {
   level: 'info' | 'warn' | 'error'
   message: string
   forCommandId?: string | null
+  /** Machine-readable class: 'miss' = didn't understand; 'reply' = direct answer. */
+  kind?: 'miss' | 'reply' | null
 }
 
 /**

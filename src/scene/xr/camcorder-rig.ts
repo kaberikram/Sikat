@@ -123,6 +123,36 @@ export function createCamcorderRig(
     | ((takeStart: number, takeEnd: number, head: THREE.Object3D) => void)
     | null = null
   let suppressRec: (() => boolean) | null = null
+  /** The line we're waiting on the crew for — echoed once work starts. */
+  let thinkingLine: string | null = null
+
+  // Route director replies / misses / first-work into the slate so the
+  // in-headset surface answers you, not just echoes you.
+  const socket = getDirectorSocket()
+  const offSlateLog = socket.onLog((msg) => {
+    if (!useEditorStore.getState().xrActive) return
+    if (msg.kind === 'miss') {
+      thinkingLine = null
+      directorSlate.setMisheard()
+      return
+    }
+    if (
+      (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
+      msg.level === 'info' &&
+      msg.forCommandId
+    ) {
+      thinkingLine = null
+      directorSlate.setReply(msg.message)
+    }
+  })
+  const offSlatePacket = socket.onPacket(() => {
+    if (!useEditorStore.getState().xrActive) return
+    // First evidence of crew work — stop "thinking", echo what was heard.
+    if (thinkingLine) {
+      directorSlate.setLastSent(thinkingLine)
+      thinkingLine = null
+    }
+  })
 
   const lensOffset = new THREE.Vector3(0, 0.01, -LENS_FORWARD_M)
   const scratchOffset = new THREE.Vector3()
@@ -170,28 +200,33 @@ export function createCamcorderRig(
         }
         const commandId = newCommandId()
         directorSlate.setThinking(true)
+        thinkingLine = line
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
           onNoResponse: () => {
+            thinkingLine = null
             directorSlate.setThinking(false)
             directorSlate.setLastSent('no response')
           },
         }).then((result) => {
           if (result.offline) {
+            thinkingLine = null
             directorSlate.setOffline(true)
             directorSlate.setThinking(false)
             directorSlate.setLastSent(line || 'offline')
           } else if (result.ok && result.local) {
             // Local commands apply instantly — no crew round-trip to wait on.
+            thinkingLine = null
             directorSlate.setThinking(false)
             directorSlate.setLastSent(line)
           } else if (result.ok) {
             directorSlate.setOffline(false)
-            // Stay in thinking until the first crew packet/reply lands
-            // (cleared via setReply/onFirstResponse wiring in xr-session).
+            // Stay in thinking until the first crew packet or reply lands
+            // (routed via the socket listeners above).
           }
         }).catch(() => {
+          thinkingLine = null
           directorSlate.setThinking(false)
           directorSlate.setLastSent('command failed')
         })
@@ -305,6 +340,8 @@ export function createCamcorderRig(
       suppressRec = fn
     },
     dispose: () => {
+      offSlateLog()
+      offSlatePacket()
       stopVoiceSession()
       directorSlate.dispose()
       group.removeFromParent()

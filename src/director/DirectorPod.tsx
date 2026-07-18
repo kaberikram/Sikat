@@ -126,6 +126,8 @@ export function DirectorPod() {
   const [pendingSuggestions, setPendingSuggestions] = useState<AgentSuggestionMessage[]>([])
   const [planProgress, setPlanProgress] = useState<PlanProgress | null>(null)
   const [isProcessingCommand, setIsProcessingCommand] = useState(false)
+  /** Latest direct director answer (or miss) — legible at a glance, not buried in the log. */
+  const [directorLine, setDirectorLine] = useState<{ text: string; kind: 'reply' | 'miss' } | null>(null)
   const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -273,6 +275,15 @@ export function DirectorPod() {
       }
     })
     const offLog = socket.onLog((msg) => {
+      if (msg.kind === 'miss') {
+        setDirectorLine({ text: 'didn’t catch that — name an object or a move', kind: 'miss' })
+      } else if (
+        (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
+        msg.level === 'info' &&
+        msg.forCommandId
+      ) {
+        setDirectorLine({ text: msg.message, kind: 'reply' })
+      }
       if (isBlockedCrewLog(msg.message)) return
       pushLog(msg.agent, msg.message, msg.level)
     })
@@ -348,6 +359,7 @@ export function DirectorPod() {
     if (!trimmed) return
     const commandId = opts?.commandId ?? newCommandId()
     setInput('')
+    setDirectorLine(null)
     trackCommand(commandId)
     try {
       const result = await submitDirectorCommand(trimmed, {
@@ -569,6 +581,18 @@ export function DirectorPod() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {directorLine && !listening && (
+          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-line text-[11px]">
+            <span
+              className="shrink-0 w-1.5 h-1.5 rounded-full"
+              style={{ background: directorLine.kind === 'miss' ? '#F27BAC' : '#57CFA0' }}
+            />
+            <span className={directorLine.kind === 'miss' ? 'text-ink-soft' : 'font-semibold'}>
+              {directorLine.text}
+            </span>
           </div>
         )}
 
