@@ -89,6 +89,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     virtCamera.updateProjectionMatrix()
     pipRenderer.setSize(w, h, false)
     viewfinder.composer.setSize(w, h)
+    viewfinder.composerWidth = w
+    viewfinder.composerHeight = h
   }
 
   registerSceneForExport({

@@ -6,6 +6,7 @@ import {
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
 import { submitDirectorCommand } from '../../director/director-command'
+import { newCommandId } from '../../director/ids'
 import { getDirectorSocket } from '../../director/socket'
 import {
   finishVoiceSession,
@@ -122,8 +123,39 @@ export function createCamcorderRig(
     | ((takeStart: number, takeEnd: number, head: THREE.Object3D) => void)
     | null = null
   let suppressRec: (() => boolean) | null = null
+  /** The line we're waiting on the crew for — echoed once work starts. */
+  let thinkingLine: string | null = null
+
+  // Route director replies / misses / first-work into the slate so the
+  // in-headset surface answers you, not just echoes you.
+  const socket = getDirectorSocket()
+  const offSlateLog = socket.onLog((msg) => {
+    if (!useEditorStore.getState().xrActive) return
+    if (msg.kind === 'miss') {
+      thinkingLine = null
+      directorSlate.setMisheard()
+      return
+    }
+    if (
+      (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
+      msg.level === 'info' &&
+      msg.forCommandId
+    ) {
+      thinkingLine = null
+      directorSlate.setReply(msg.message)
+    }
+  })
+  const offSlatePacket = socket.onPacket(() => {
+    if (!useEditorStore.getState().xrActive) return
+    // First evidence of crew work — stop "thinking", echo what was heard.
+    if (thinkingLine) {
+      directorSlate.setLastSent(thinkingLine)
+      thinkingLine = null
+    }
+  })
 
   const lensOffset = new THREE.Vector3(0, 0.01, -LENS_FORWARD_M)
+  const scratchOffset = new THREE.Vector3()
   const worldPos = new THREE.Vector3()
   const worldQuat = new THREE.Quaternion()
   const scratchScale = new THREE.Vector3()
@@ -153,29 +185,55 @@ export function createCamcorderRig(
       return
     }
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
-    startVoiceSession({
+    void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
+      onLevel: (level) => directorSlate.setLevel(level),
       onError: (error) => directorSlate.setLastSent(
         error === 'voice needs Deepgram key' ? error : `voice error: ${error}`
       ),
       onFinal: (transcript) => {
-        const commandId = crypto.randomUUID()
+        const line = transcript.trim()
+        if (!line) {
+          directorSlate.setMisheard()
+          return
+        }
+        const commandId = newCommandId()
+        directorSlate.setThinking(true)
+        thinkingLine = line
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
-          onNoResponse: () => directorSlate.setLastSent('no response'),
+          onNoResponse: () => {
+            thinkingLine = null
+            directorSlate.setThinking(false)
+            directorSlate.setLastSent('no response')
+          },
         }).then((result) => {
-          const line = transcript.trim()
           if (result.offline) {
+            thinkingLine = null
             directorSlate.setOffline(true)
+            directorSlate.setThinking(false)
             directorSlate.setLastSent(line || 'offline')
+          } else if (result.ok && result.local) {
+            // Local commands apply instantly — no crew round-trip to wait on.
+            thinkingLine = null
+            directorSlate.setThinking(false)
+            directorSlate.setLastSent(line)
           } else if (result.ok) {
             directorSlate.setOffline(false)
-            directorSlate.setLastSent(line)
+            // Stay in thinking until the first crew packet or reply lands
+            // (routed via the socket listeners above).
           }
+        }).catch(() => {
+          thinkingLine = null
+          directorSlate.setThinking(false)
+          directorSlate.setLastSent('command failed')
         })
       },
+    }).catch((e) => {
+      console.warn('[xr] voice session failed to start:', e)
+      directorSlate.setLastSent('voice error')
     })
   }
 
@@ -250,13 +308,14 @@ export function createCamcorderRig(
     if (pad?.getButtonUp(InputComponent.A_Button)) endTalk()
 
     updateRollingIndicator()
+    directorSlate.update(timeSec * 1000)
 
     const grip = xrInput.xrOrigin.gripSpaces.right
     grip.updateWorldMatrix(true, false)
     grip.matrixWorld.decompose(worldPos, worldQuat, scratchScale)
     // Grip −Z + AIM_UP_DEG pitch (natural hold aims slightly above the barrel).
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
-    worldPos.add(lensOffset.clone().applyQuaternion(aimQuat))
+    worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
     euler.setFromQuaternion(aimQuat, 'XYZ')
     applyLiveCameraPose({
@@ -281,6 +340,8 @@ export function createCamcorderRig(
       suppressRec = fn
     },
     dispose: () => {
+      offSlateLog()
+      offSlatePacket()
       stopVoiceSession()
       directorSlate.dispose()
       group.removeFromParent()

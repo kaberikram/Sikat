@@ -19,6 +19,7 @@ import {
   type SceneSnapshot,
   parseServerMessage,
 } from './protocol'
+import { newCommandId } from './ids'
 import { buildFullSnapshot } from './scene-state-sync'
 import { shouldAttachVision } from './vision-triggers'
 import { captureViewfinderFrame } from './viewfinder-capture'
@@ -158,7 +159,7 @@ export class DirectorSocket {
     text: string,
     opts?: { forceVision?: boolean; commandId?: string }
   ): Promise<string | null> {
-    const commandId = opts?.commandId ?? crypto.randomUUID()
+    const commandId = opts?.commandId ?? newCommandId()
     const attachVision = opts?.forceVision === true || shouldAttachVision(text)
     const frame = attachVision ? await captureViewfinderFrame() : null
     const sent = this.sendRaw({

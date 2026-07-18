@@ -238,6 +238,9 @@ interface EditorState {
   cameraOpMode: boolean;
   xrActive: boolean;
   xrSupported: boolean;
+  /** Set when the render loop has died repeatedly and been halted — UI should offer a reload. */
+  fatalRenderError: boolean
+  setFatalRenderError: (on: boolean) => void
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
   overlayTimeline: boolean
@@ -315,6 +318,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   takeStartTime: 0,
   cameraOpMode: false,
   xrActive: false,
+  fatalRenderError: false,
   xrSupported: false,
   isExporting: false,
   overlayTimeline: false,
@@ -397,6 +401,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   })),
   setCameraOpMode: (on) => set({ cameraOpMode: on }),
   setXrActive: (on) => set({ xrActive: on }),
+  setFatalRenderError: (on) => set({ fatalRenderError: on }),
   setXrSupported: (on) => set({ xrSupported: on }),
   startTake: () => set((state) => {
     if (state.isRolling) return state

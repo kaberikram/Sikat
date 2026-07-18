@@ -588,9 +588,16 @@ def agent_status_message(
 
 
 def agent_log_message(
-    agent: str, message: str, level: str = "info", for_command_id: str | None = None
+    agent: str,
+    message: str,
+    level: str = "info",
+    for_command_id: str | None = None,
+    kind: str | None = None,
 ) -> dict:
-    return {
+    """`kind` marks machine-readable log classes the client renders specially:
+    'reply' = a direct director answer to the user; 'miss' = didn't understand.
+    """
+    msg = {
         "type": "agent_log",
         "timestamp": now(),
         "agent": agent,
@@ -598,6 +605,9 @@ def agent_log_message(
         "message": message,
         "forCommandId": for_command_id,
     }
+    if kind is not None:
+        msg["kind"] = kind
+    return msg
 
 
 def error_message(message: str, for_command_id: str | None = None) -> dict:

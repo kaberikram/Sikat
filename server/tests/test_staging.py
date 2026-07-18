@@ -59,8 +59,9 @@ async def test_direct_no_actionable_command_streams_nothing(producer, scene):
 
 
 def test_agent_staging_timings_are_calm():
-    """Specialists fan out and multi-packet work stays readable on stage."""
+    """Fast but alive: specialists still fan out and packets still stage,
+    but the beats are short enough that commands feel immediate."""
     from app.agents.producer import AGENT_STAGGER, AGENT_STEP_DELAY
 
-    assert AGENT_STAGGER >= 0.3
-    assert AGENT_STEP_DELAY >= 0.35
+    assert 0.05 <= AGENT_STAGGER <= 0.3
+    assert 0.05 <= AGENT_STEP_DELAY <= 0.35

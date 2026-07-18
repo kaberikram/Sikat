@@ -19,6 +19,7 @@
 
 import { DeepgramClient } from '@deepgram/sdk'
 import { useEditorStore } from '../store'
+import { PCM_CAPTURE_PROCESSOR_NAME, ensurePcmCaptureWorklet } from './pcm-capture-worklet'
 
 interface SpeechResultEvent {
   resultIndex: number
@@ -50,6 +51,8 @@ export interface VoiceSessionHandlers {
   onListeningChange?: (listening: boolean) => void
   /** Fatal recognition error ('not-allowed', 'network', …) — session already stopped. */
   onError?: (error: string) => void
+  /** Live mic RMS level 0..~1, every ~50ms while capturing (Deepgram path only). */
+  onLevel?: (level: number) => void
 }
 
 // ---- state ----
@@ -57,9 +60,17 @@ export interface VoiceSessionHandlers {
 let recognition: SpeechRecognitionLike | null = null
 let deepgramClient: DeepgramClient | null = null
 let deepgramConnection: DeepgramConnection | null = null
-let deepgramAudioCtx: AudioContext | null = null
-let deepgramProcessor: ScriptProcessorNode | null = null
+let deepgramCaptureNode: AudioWorkletNode | ScriptProcessorNode | null = null
+let deepgramSource: MediaStreamAudioSourceNode | null = null
+let deepgramSink: GainNode | null = null
 let deepgramStream: MediaStream | null = null
+/**
+ * One AudioContext for the app's lifetime, at the hardware's native sample
+ * rate. Chromium caps live contexts (~6), so a context per push-to-talk press
+ * eventually threw; reuse also skips per-press context startup (~50-150ms) and
+ * avoids the 16kHz-vs-48kHz resample garble seen on Quest.
+ */
+let sharedAudioCtx: AudioContext | null = null
 let listening = false
 let forceVision = false
 let handlers: VoiceSessionHandlers = {}
@@ -115,7 +126,14 @@ function nativeIsReady(): boolean {
 
 // ---- Deepgram path ----
 
-const DG_SAMPLE_RATE = 16000
+/**
+ * Auto-gain off by default: the Quest/headset mic sits at a fixed distance and
+ * AGC pumping hurts recognition. Flip to true if testing shows quiet input.
+ */
+const MIC_AUTO_GAIN = false
+
+/** Deepgram WS handshake timeout — a hung open would otherwise park the session. */
+const DG_OPEN_TIMEOUT_MS = 4000
 
 function getDeepgramApiKey(): string | null {
   return (import.meta.env.VITE_DEEPGRAM_API_KEY as string | undefined) ?? null
@@ -147,16 +165,21 @@ function float32ToPcm16(buffer: Float32Array): ArrayBuffer {
 
 function deepgramStop(): void {
   const conn = deepgramConnection
-  const ctx = deepgramAudioCtx
-  const proc = deepgramProcessor
+  const node = deepgramCaptureNode
+  const source = deepgramSource
+  const sink = deepgramSink
   const stream = deepgramStream
   deepgramConnection = null
-  deepgramAudioCtx = null
-  deepgramProcessor = null
+  deepgramCaptureNode = null
+  deepgramSource = null
+  deepgramSink = null
   deepgramStream = null
 
-  try { proc?.disconnect() } catch { /* ignore */ }
-  try { ctx?.close() } catch { /* ignore */ }
+  // The shared AudioContext stays alive — only the capture graph is torn down.
+  if (node && 'port' in node) node.port.onmessage = null
+  try { source?.disconnect() } catch { /* ignore */ }
+  try { node?.disconnect() } catch { /* ignore */ }
+  try { sink?.disconnect() } catch { /* ignore */ }
   for (const track of stream?.getTracks() ?? []) track.stop()
 
   if (conn) {
@@ -166,6 +189,9 @@ function deepgramStop(): void {
 }
 
 function failVoiceSession(error: string): void {
+  // Invalidate stale callbacks first — a failed session must never fire
+  // late finals/handlers after the error is reported.
+  sessionGen += 1
   listening = false
   forceVision = false
   clearFinishTimer()
@@ -176,26 +202,82 @@ function failVoiceSession(error: string): void {
   handlers.onError?.(error)
 }
 
+function getSharedAudioContext(): AudioContext {
+  if (!sharedAudioCtx) {
+    // Native hardware rate — no resampling; Deepgram is told the real rate.
+    sharedAudioCtx = new AudioContext()
+  }
+  return sharedAudioCtx
+}
+
+async function getMicStream(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: MIC_AUTO_GAIN,
+      },
+    })
+  } catch {
+    // Some devices reject specific constraints — retry unconstrained.
+    return navigator.mediaDevices.getUserMedia({ audio: true })
+  }
+}
+
 async function deepgramStart(gen: number): Promise<void> {
   const client = getOrCreateDeepgramClient()
   if (!client) return
 
+  const ctx = getSharedAudioContext()
+
+  // Track partial results so a failure in one parallel step can release the others.
+  let pendingStream: MediaStream | null = null
+  let pendingConn: DeepgramConnection | null = null
+
   try {
-    const connection = await client.listen.v1.connect({
-      model: 'nova-3',
-      language: 'en',
-      encoding: 'linear16',
-      sample_rate: DG_SAMPLE_RATE,
-      interim_results: 'true',
-      smart_format: 'true',
-      punctuate: 'true',
-      utterance_end_ms: '1500',
-    }) as unknown as DeepgramConnection
+    // Mic, worklet module, and the Deepgram socket all warm up concurrently —
+    // push-to-talk goes live as soon as the slowest of the three is ready.
+    const [stream, workletOk, connection] = await Promise.all([
+      getMicStream().then((s) => {
+        pendingStream = s
+        return s
+      }),
+      ensurePcmCaptureWorklet(ctx),
+      (async () => {
+        const conn = await client.listen.v1.connect({
+          model: 'nova-3',
+          language: 'en',
+          encoding: 'linear16',
+          sample_rate: String(ctx.sampleRate),
+          interim_results: 'true',
+          smart_format: 'true',
+          punctuate: 'true',
+          utterance_end_ms: '1500',
+        }) as unknown as DeepgramConnection
+        pendingConn = conn
+        conn.connect()
+        await Promise.race([
+          conn.waitForOpen(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Deepgram open timeout')), DG_OPEN_TIMEOUT_MS)
+          ),
+        ])
+        return conn
+      })(),
+      ctx.state === 'suspended' ? ctx.resume() : Promise.resolve(),
+    ])
+
+    // Bail if the session was stopped while we were connecting.
     if (gen !== sessionGen) {
+      for (const track of stream.getTracks()) track.stop()
       try { connection.close() } catch { /* ignore */ }
       return
     }
+
     deepgramConnection = connection
+    deepgramStream = stream
 
     connection.on('message', (message) => {
       if (gen !== sessionGen) return
@@ -206,6 +288,11 @@ async function deepgramStart(gen: number): Promise<void> {
         if (!transcript) return
         if (message.is_final) handlers.onFinal?.(transcript, { forceVision })
         else handlers.onInterim?.(transcript)
+      }
+      if (message.type === 'UtteranceEnd') {
+        // Speech ended. If the user already released push-to-talk (grace
+        // drain), close out now instead of waiting the full grace window.
+        if (!listening && finishTimer) stopVoiceSession()
       }
       if (message.type === 'Error') {
         console.warn('[voice] Deepgram error:', message.description)
@@ -224,50 +311,57 @@ async function deepgramStart(gen: number): Promise<void> {
       if (connection === deepgramConnection) deepgramStop()
     })
 
-    connection.connect()
-    await connection.waitForOpen()
+    const source = ctx.createMediaStreamSource(stream)
+    deepgramSource = source
 
-    // Bail if the session was stopped while we were connecting.
-    if (gen !== sessionGen || connection !== deepgramConnection) {
-      try { connection.close() } catch { /* ignore */ }
-      return
-    }
-
-    // Setup mic capture after connection is established.
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Bail if the session was stopped while requesting permission.
-      if (gen !== sessionGen || connection !== deepgramConnection) {
-        for (const track of stream.getTracks()) track.stop()
-        return
+    if (workletOk) {
+      const node = new AudioWorkletNode(ctx, PCM_CAPTURE_PROCESSOR_NAME, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+      })
+      deepgramCaptureNode = node
+      node.port.onmessage = (e: MessageEvent) => {
+        if (gen !== sessionGen || connection !== deepgramConnection) return
+        const msg = e.data as { type: string; data?: ArrayBuffer; level?: number }
+        if (msg.type === 'pcm' && msg.data) connection.sendMedia(msg.data)
+        else if (msg.type === 'level' && msg.level !== undefined) handlers.onLevel?.(msg.level)
       }
-
-      deepgramStream = stream
-      const ctx = new AudioContext({ sampleRate: DG_SAMPLE_RATE })
-      deepgramAudioCtx = ctx
-
-      const source = ctx.createMediaStreamSource(stream)
-      // ScriptProcessorNode is deprecated but works everywhere including
-      // Quest Browser, where AudioWorklet has spotty support.
+      // Keep the node pulled without an audible path.
+      const sink = ctx.createGain()
+      sink.gain.value = 0
+      deepgramSink = sink
+      source.connect(node)
+      node.connect(sink)
+      sink.connect(ctx.destination)
+    } else {
+      // Fallback for engines without AudioWorklet.
       const proc = ctx.createScriptProcessor(4096, 1, 1)
-      deepgramProcessor = proc
-
+      deepgramCaptureNode = proc
       proc.onaudioprocess = (e) => {
         if (gen === sessionGen && connection === deepgramConnection) {
-          connection.sendMedia(float32ToPcm16(e.inputBuffer.getChannelData(0)))
+          const samples = e.inputBuffer.getChannelData(0)
+          connection.sendMedia(float32ToPcm16(samples))
+          if (handlers.onLevel) {
+            let sumSq = 0
+            for (let i = 0; i < samples.length; i += 16) sumSq += samples[i] * samples[i]
+            handlers.onLevel(Math.sqrt(sumSq / Math.ceil(samples.length / 16)))
+          }
         }
       }
-
       source.connect(proc)
       proc.connect(ctx.destination)
-      handlers.onListeningChange?.(true)
-    } catch (err) {
-      console.warn('[voice] getUserMedia failed:', err)
-      failVoiceSession('not-allowed')
     }
+
+    handlers.onListeningChange?.(true)
   } catch (err) {
-    console.warn('[voice] Deepgram connection failed:', err)
-    failVoiceSession('network')
+    console.warn('[voice] Deepgram session failed:', err)
+    for (const track of (pendingStream as MediaStream | null)?.getTracks() ?? []) track.stop()
+    try { (pendingConn as DeepgramConnection | null)?.close() } catch { /* ignore */ }
+    if (gen !== sessionGen) return
+    const notAllowed = err instanceof DOMException &&
+      (err.name === 'NotAllowedError' || err.name === 'SecurityError')
+    failVoiceSession(notAllowed ? 'not-allowed' : 'network')
   }
 }
 

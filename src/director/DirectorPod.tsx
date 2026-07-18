@@ -18,6 +18,7 @@ import {
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { submitDirectorCommand } from './director-command'
+import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
 import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
@@ -86,6 +87,32 @@ function isBlockedCrewLog(message: string): boolean {
   return CREW_LOG_BLOCK.test(message)
 }
 
+/**
+ * Transport readouts live in tiny children so their per-frame currentTime
+ * subscription doesn't reconcile the whole pod (incl. the log list) at 60fps
+ * during playback.
+ */
+function RecReadout({ takeNumber }: { takeNumber: number }) {
+  const currentTime = useEditorStore((s) => s.currentTime)
+  const takeStartTime = useEditorStore((s) => s.takeStartTime)
+  return (
+    <div className="transport-readout transport-readout--rec">
+      <span className="transport-dot transport-dot--rec" />
+      ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
+    </div>
+  )
+}
+
+function PlayReadout({ onClick }: { onClick: () => void }) {
+  const currentTime = useEditorStore((s) => s.currentTime)
+  return (
+    <button type="button" onClick={onClick} className="transport-readout">
+      <span className="transport-dot" />
+      {currentTime.toFixed(2)}s — PAUSE
+    </button>
+  )
+}
+
 export function DirectorPod() {
   const [status, setStatus] = useState<SocketStatus>('closed')
   const [log, setLog] = useState<LogEntry[]>([])
@@ -99,6 +126,8 @@ export function DirectorPod() {
   const [pendingSuggestions, setPendingSuggestions] = useState<AgentSuggestionMessage[]>([])
   const [planProgress, setPlanProgress] = useState<PlanProgress | null>(null)
   const [isProcessingCommand, setIsProcessingCommand] = useState(false)
+  /** Latest direct director answer (or miss) — legible at a glance, not buried in the log. */
+  const [directorLine, setDirectorLine] = useState<{ text: string; kind: 'reply' | 'miss' } | null>(null)
   const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -109,8 +138,6 @@ export function DirectorPod() {
   const isRolling = useEditorStore((s) => s.isRolling)
   const takeNumber = useEditorStore((s) => s.takeNumber)
   const cameraOpMode = useEditorStore((s) => s.cameraOpMode)
-  const currentTime = useEditorStore((s) => s.currentTime)
-  const takeStartTime = useEditorStore((s) => s.takeStartTime)
   const setOverlay = useEditorStore((s) => s.setOverlay)
   const togglePlay = useEditorStore((s) => s.togglePlay)
   const setSelected = useEditorStore((s) => s.setSelected)
@@ -248,6 +275,15 @@ export function DirectorPod() {
       }
     })
     const offLog = socket.onLog((msg) => {
+      if (msg.kind === 'miss') {
+        setDirectorLine({ text: 'didn’t catch that — name an object or a move', kind: 'miss' })
+      } else if (
+        (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
+        msg.level === 'info' &&
+        msg.forCommandId
+      ) {
+        setDirectorLine({ text: msg.message, kind: 'reply' })
+      }
       if (isBlockedCrewLog(msg.message)) return
       pushLog(msg.agent, msg.message, msg.level)
     })
@@ -321,8 +357,9 @@ export function DirectorPod() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const commandId = opts?.commandId ?? crypto.randomUUID()
+    const commandId = opts?.commandId ?? newCommandId()
     setInput('')
+    setDirectorLine(null)
     trackCommand(commandId)
     try {
       const result = await submitDirectorCommand(trimmed, {
@@ -358,8 +395,10 @@ export function DirectorPod() {
   }), [submit, pushLog])
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
-    startVoiceSession(voiceHandlers(), opts)
-  }, [voiceHandlers])
+    void startVoiceSession(voiceHandlers(), opts).catch((error) => {
+      pushLog('DIRECTOR', `voice failed to start: ${error instanceof Error ? error.message : error}`, 'error')
+    })
+  }, [voiceHandlers, pushLog])
 
   // Toggle-off finishes gracefully (waits for the trailing final transcript);
   // Escape/unmount use stopMic for a hard teardown.
@@ -373,22 +412,8 @@ export function DirectorPod() {
           CAM OP — WASD · Q/E · drag look · C off
         </div>
       )}
-      {isRolling && (
-        <div className="transport-readout transport-readout--rec">
-          <span className="transport-dot transport-dot--rec" />
-          ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
-        </div>
-      )}
-      {isPlaying && !isRolling && (
-        <button
-          type="button"
-          onClick={togglePlay}
-          className="transport-readout"
-        >
-          <span className="transport-dot" />
-          {currentTime.toFixed(2)}s — PAUSE
-        </button>
-      )}
+      {isRolling && <RecReadout takeNumber={takeNumber} />}
+      {isPlaying && !isRolling && <PlayReadout onClick={togglePlay} />}
 
       <motion.div
         layout
@@ -556,6 +581,18 @@ export function DirectorPod() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {directorLine && !listening && (
+          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-line text-[11px]">
+            <span
+              className="shrink-0 w-1.5 h-1.5 rounded-full"
+              style={{ background: directorLine.kind === 'miss' ? '#F27BAC' : '#57CFA0' }}
+            />
+            <span className={directorLine.kind === 'miss' ? 'text-ink-soft' : 'font-semibold'}>
+              {directorLine.text}
+            </span>
           </div>
         )}
 

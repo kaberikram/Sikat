@@ -336,7 +336,11 @@ export function enqueuePacket(packet: CommandPacket): void {
     const queue = queues.get(agent) ?? []
     queue.push(packet)
     queues.set(agent, queue)
-    if (!running.has(agent)) void runAgent(agent)
+    if (!running.has(agent)) {
+    void runAgent(agent).catch((e) => {
+      logger(agent, `agent runner crashed: ${e instanceof Error ? e.message : e}`, 'error')
+    })
+  }
     return
   }
 
@@ -368,7 +372,11 @@ export function enqueuePacket(packet: CommandPacket): void {
 
   queue.push(packet)
   queues.set(agent, queue)
-  if (!running.has(agent)) void runAgent(agent)
+  if (!running.has(agent)) {
+    void runAgent(agent).catch((e) => {
+      logger(agent, `agent runner crashed: ${e instanceof Error ? e.message : e}`, 'error')
+    })
+  }
 }
 
 export function markAgentActive(agent: string, note?: string | null, commandId?: string | null): void {
@@ -505,6 +513,17 @@ function scheduleAgentFadeOut(agent: string, motionWork = false): void {
 
 async function runAgent(agent: string): Promise<void> {
   running.add(agent)
+  // A throw escaping this loop would skip running.delete(agent) and wedge the
+  // agent's queue forever (runAgent is launched fire-and-forget) — every later
+  // packet would silently queue behind a drain that never restarts.
+  try {
+    await drainAgentQueue(agent)
+  } finally {
+    running.delete(agent)
+  }
+}
+
+async function drainAgentQueue(agent: string): Promise<void> {
   const queue = queues.get(agent)!
 
   if (!cursorVisible(agent)) {
@@ -517,7 +536,6 @@ async function runAgent(agent: string): Promise<void> {
         logger(agent, `${packet.command} failed: ${e instanceof Error ? e.message : e}`, 'error')
       }
     }
-    running.delete(agent)
     return
   }
 
@@ -614,13 +632,14 @@ async function runAgent(agent: string): Promise<void> {
         presence.setNote(agent, null)
         continue
       }
-      throw e
+      // One bad packet must not kill the drain loop (or wedge the queue).
+      logger(agent, `unexpected error in ${packet.command}: ${e instanceof Error ? e.message : e}`, 'error')
+      continue
     } finally {
       inFlight.delete(flightKey)
     }
   }
 
-  running.delete(agent)
   presence.setPhase(agent, 'done')
   pendingIdle.delete(agent)
   scheduleAgentFadeOut(agent, motionWork)

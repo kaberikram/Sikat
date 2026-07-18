@@ -7,6 +7,7 @@ Loads optional secrets from server/.env (gitignored). Copy .env.example to .env.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -80,6 +81,14 @@ class ConnectionManager:
             except Exception:
                 self.active.discard(ws)
 
+    async def send(self, ws: WebSocket, payload: dict) -> None:
+        """Per-connection send — command output belongs to the socket that
+        issued the command, not to every connected client."""
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            self.active.discard(ws)
+
 
 app = FastAPI(title="RADIO_EDIT Director Server")
 manager = ConnectionManager()
@@ -105,7 +114,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
         preview = build_intent_preview(msg.text, scene, msg.commandId)
         if preview:
             preview["timestamp"] = time.time()
-            await manager.broadcast(preview)
+            await manager.send(ws, preview)
             log.info(
                 "command %s: intent preview in %.0fms (%s)",
                 msg.commandId,
@@ -114,7 +123,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             )
 
     async def emit_log(agent: str, message: str, level: str = "info") -> None:
-        await manager.broadcast(agent_log_message(agent, message, level, msg.commandId))
+        await manager.send(ws, agent_log_message(agent, message, level, msg.commandId))
 
     async def emit_packet(packet) -> None:
         nonlocal first_packet_logged
@@ -122,7 +131,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
             first_packet_logged = True
             elapsed = time.monotonic() - received_at
             log.info("command %s: first packet in %.2fs (via %s)", msg.commandId, elapsed, packet.target_agent)
-        await manager.broadcast(agent_command_message(packet))
+        await manager.send(ws, agent_command_message(packet))
         session.note_server_edit(packet)
 
     async def emit_status(
@@ -130,19 +139,19 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
     ) -> None:
         if note:
             session.note_say(note)
-        await manager.broadcast(agent_status_message(agent, status, command_id, note))
+        await manager.send(ws, agent_status_message(agent, status, command_id, note))
 
     async def emit_preview(payload: dict) -> None:
-        await manager.broadcast(payload)
+        await manager.send(ws, payload)
 
     async def emit_plan_update(payload: dict) -> None:
-        await manager.broadcast(payload)
+        await manager.send(ws, payload)
 
     async def emit_cancel(payload: dict) -> None:
-        await manager.broadcast(payload)
+        await manager.send(ws, payload)
 
     async def emit_question(payload: dict) -> None:
-        await manager.broadcast(payload)
+        await manager.send(ws, payload)
 
     async def emit_suggest(obs) -> None:
         from .observer import emit_suggestion_from_producer
@@ -173,12 +182,15 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
         )
         if not packets and not describe_only:
             # Soft miss: crew redirect, not a hard error (open speech / miss).
-            await manager.broadcast(
-                agent_log_message("Producer", radio_reply(msg.text), "warn", msg.commandId)
+            await manager.send(
+                ws,
+                agent_log_message(
+                    "Producer", radio_reply(msg.text), "warn", msg.commandId, kind="miss"
+                ),
             )
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)
-        await manager.broadcast(error_message(str(exc), msg.commandId))
+        await manager.send(ws, error_message(str(exc), msg.commandId))
     finally:
         await emit_status("Producer", "idle", msg.commandId, None)
         session.command_finished()
@@ -207,11 +219,22 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     log.info("client connected (%d active)", len(manager.active))
     try:
         while True:
-            raw = await ws.receive_json()
+            try:
+                raw = await ws.receive_json()
+            except (ValueError, json.JSONDecodeError):
+                # Malformed frame — the socket is still healthy; don't let the
+                # exception escape and leak the session/observer/bridge.
+                await ws.send_json(error_message("invalid JSON"))
+                continue
             try:
                 msg = client_message_adapter.validate_python(raw)
             except ValidationError as exc:
-                await ws.send_json(error_message(f"invalid message: {exc.error_count()} error(s)"))
+                command_id = raw.get("commandId") if isinstance(raw, dict) else None
+                await ws.send_json(
+                    error_message(
+                        f"invalid message: {exc.error_count()} error(s)", command_id
+                    )
+                )
                 continue
             if isinstance(msg, SceneState):
                 scene_state.update(msg)
@@ -232,5 +255,9 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, Telemetry):
                 await _handle_telemetry(msg)
     except WebSocketDisconnect:
+        pass
+    finally:
+        # Always clean up — any exception path that skips this leaks the
+        # SessionContext, its observer task, and the AgentBridge.
         manager.disconnect(ws)
         log.info("client disconnected (%d active)", len(manager.active))

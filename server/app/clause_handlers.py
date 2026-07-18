@@ -136,6 +136,34 @@ DIRECTIONS: dict[str, tuple[float, float, float]] = {
 }
 
 _NUM = r"(-?\d+(?:\.\d+)?)"
+
+# STT says "move it up two", not "move it up 2" — normalize word-numbers to
+# digits, but only right after a magnitude preposition/direction so pronouns
+# ("this one") and performer addresses ("agent two, …") are untouched.
+_WORD_NUM_MAP = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "half": "0.5",
+}
+_WORD_NUM_RE = re.compile(
+    # "back to one" is the film cue for reset-to-start — never a magnitude.
+    r"(?<!back )\b(by|to|up|down|left|right|over)\s+"
+    r"(one|two|three|four|five|six|seven|eight|nine|ten)\b"
+)
+
+
+def _normalize_word_numbers(clause: str) -> str:
+    return _WORD_NUM_RE.sub(
+        lambda m: f"{m.group(1)} {_WORD_NUM_MAP[m.group(2)]}", clause
+    )
+
+
+def _clause_without_target(clause: str, target: str | None) -> str:
+    """Strip the resolved target's name so digits inside it (agent_2) never
+    read as magnitudes ("move agent_2 up" must move by 1, not 2)."""
+    if not target:
+        return clause
+    return clause.replace(target.lower(), " ")
 Handler = Callable[[str, SceneState | None, Transition | None], Intent | None]
 
 # Pronouns that refer back to the last object the director touched.
@@ -241,7 +269,9 @@ def _find_scene_target(clause: str, scene: SceneState | None) -> str | None:
             if "sphere" in name_lower or "ball" in name_lower or "orb" in name_lower:
                 return obj.name
     for obj in scene.objects:
-        if obj.name.lower() in clause:
+        # Word-boundary match — a short name like "orb" must not fire on
+        # unrelated words that merely contain it ("absorb").
+        if re.search(rf"(?<![a-z0-9_]){re.escape(obj.name.lower())}(?![a-z0-9_])", clause):
             return obj.name
     for obj in scene.objects:
         name_tokens = {t for t in re.split(r"[^a-z]+", obj.name.lower()) if len(t) >= 3}
@@ -296,7 +326,9 @@ def _target_has_motion(scene: SceneState, target_name: str) -> bool:
     needle = target_name.lower()
     for obj in scene.objects:
         name_lower = obj.name.lower()
-        if name_lower == needle or needle in name_lower:
+        if name_lower == needle or re.search(
+            rf"(?<![a-z0-9_]){re.escape(needle)}(?![a-z0-9_])", name_lower
+        ):
             return bool(obj.keyframedProperties) or bool(obj.tracks)
     return False
 
@@ -314,7 +346,11 @@ def _parse_playback(
         return Intent(action="playback", playback_action="record")
     if re.search(r"roll\s+(?:camera|sound|it)\b", clause):
         return Intent(action="playback", playback_action="record")
-    if re.search(r"\bcut\b", clause) or re.search(r"that'?s\s+a\s+(cut|wrap)", clause):
+    # "cut" only as a bare cue — "cut the bloom" / "haircut" must not end a take.
+    if (
+        re.search(r"^(?:ok(?:ay)?[,\s]+)?(?:and\s+|then\s+)?cut\s*[!.]*$", clause)
+        or re.search(r"that'?s\s+a\s+(cut|wrap)", clause)
+    ):
         return Intent(action="playback", playback_action="cut")
     if re.search(r"stop\s+recording", clause):
         return Intent(action="playback", playback_action="cut")
@@ -621,8 +657,9 @@ def _parse_scale(
     target = _find_target(clause, scene)
     if not target:
         return None
-    m = re.search(rf"\b(?:by|to)\s+{_NUM}", clause)
-    absolute = bool(re.search(rf"\bto\s+{_NUM}", clause))
+    clause_sans_target = _clause_without_target(clause, target)
+    m = re.search(rf"\b(?:by|to)\s+{_NUM}", clause_sans_target)
+    absolute = bool(re.search(rf"\bto\s+{_NUM}", clause_sans_target))
     if m:
         factor = float(m.group(1))
     elif re.search(r"\b(double|twice)\b", clause):
@@ -746,7 +783,7 @@ def _parse_move(
                 break
     if not direction:
         return None
-    m = re.search(rf"\b(?:by\s+)?{_NUM}\b", clause)
+    m = re.search(rf"\b(?:by\s+)?{_NUM}\b", _clause_without_target(clause, target))
     amount = float(m.group(1)) if m else 1.0
     return Intent(
         action="transform",
@@ -846,6 +883,7 @@ def parse_clause(clause: str, scene: SceneState | None) -> Intent | None:
     if work is None:
         return None
 
+    work = _normalize_word_numbers(work)
     transition, work = _extract_transition(work)
     snap, work = _extract_snap(work)
     if snap:

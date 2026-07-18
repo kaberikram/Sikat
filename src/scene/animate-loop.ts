@@ -36,7 +36,7 @@ export function createAnimateLoop(ctx: {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
 
-  const animate = (now: number, xrFrame?: XRFrame) => {
+  const frame = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
     lastTime = now
 
@@ -215,13 +215,44 @@ export function createAnimateLoop(ctx: {
     }
   }
 
+  // A throw inside setAnimationLoop's callback permanently stops the rAF chain
+  // (in XR that freezes the headset on the last frame). Guard every frame so a
+  // bad frame drops instead of killing the loop; bail out only if the loop is
+  // failing continuously with no recovery.
+  let consecutiveErrors = 0
+  let lastErrorLog = 0
+  const MAX_CONSECUTIVE_ERRORS = 120
+
+  const animate = (now: number, xrFrame?: XRFrame) => {
+    try {
+      frame(now, xrFrame)
+      consecutiveErrors = 0
+    } catch (e) {
+      consecutiveErrors += 1
+      if (now - lastErrorLog > 5000 || consecutiveErrors === 1) {
+        lastErrorLog = now
+        console.error(`[animate] frame error (${consecutiveErrors} consecutive):`, e)
+      }
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        console.error('[animate] too many consecutive frame errors — stopping render loop')
+        ctx.mainRenderer.setAnimationLoop(null)
+        useEditorStore.getState().setFatalRenderError(true)
+      }
+    }
+  }
+
   ctx.mainRenderer.setAnimationLoop(animate)
   return () => ctx.mainRenderer.setAnimationLoop(null)
 }
 
 export function subscribeShadowSync() {
+  let lastObjects: unknown = null
   let lastSig = ''
   return useEditorStore.subscribe((state) => {
+    // This fires on every store change (60fps during playback) — skip the
+    // JSON signature work unless the objects array itself changed.
+    if (state.objects === lastObjects) return
+    lastObjects = state.objects
     const sig = state.objects.map((o) => o.id).join(',') + JSON.stringify(state.objects.map((o) => o.subMeshShadow))
     if (sig === lastSig) return
     lastSig = sig

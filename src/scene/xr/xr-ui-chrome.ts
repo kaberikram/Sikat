@@ -74,6 +74,60 @@ export function makeCanvasTexture(
   return tex
 }
 
+export interface LiveCanvasTexture {
+  texture: THREE.CanvasTexture
+  /** Redraw into the same canvas + GPU texture — no allocation per update. */
+  repaint: (draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void) => void
+  dispose: () => void
+}
+
+/**
+ * A canvas texture meant to be repainted often (live transcripts, meters).
+ * Unlike makeCanvasTexture it never reallocates — repaint() redraws in place
+ * and flags needsUpdate, so hot paths don't churn canvases/GPU uploads.
+ */
+export function makeLiveCanvasTexture(width: number, height: number): LiveCanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.generateMipmaps = false
+  tex.minFilter = THREE.LinearFilter
+  tex.magFilter = THREE.LinearFilter
+
+  let lastDraw: ((ctx: CanvasRenderingContext2D, w: number, h: number) => void) | null = null
+
+  const repaint: LiveCanvasTexture['repaint'] = (draw) => {
+    lastDraw = draw
+    if (!ctx) return
+    ctx.clearRect(0, 0, width, height)
+    draw(ctx, width, height)
+    tex.needsUpdate = true
+  }
+
+  // Repaint once the real font lands so early paints don't keep the fallback.
+  if (ctx && 'fonts' in document && !document.fonts.check(FONT_PROBE)) {
+    void document.fonts.ready.then(() => {
+      if (lastDraw) repaint(lastDraw)
+    })
+  }
+
+  return {
+    texture: tex,
+    repaint,
+    dispose: () => {
+      lastDraw = null
+      tex.dispose()
+    },
+  }
+}
+
 /**
  * Faux-frost glass card: soft painted shadow + translucent rounded fill +
  * bright hairline stroke + top-edge highlight. `pad` reserves transparent
