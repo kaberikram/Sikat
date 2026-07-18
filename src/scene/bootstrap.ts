@@ -63,7 +63,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   mainRenderer.setClearColor(0x000000, 0)
   mainRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   mainRenderer.shadowMap.enabled = true
-  mainRenderer.shadowMap.type = THREE.PCFSoftShadowMap
+  mainRenderer.shadowMap.type = THREE.PCFShadowMap
   mainRenderer.toneMapping = THREE.ACESFilmicToneMapping
   mainRenderer.toneMappingExposure = 1
   mainRenderer.domElement.style.display = 'block'
@@ -192,6 +192,9 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   })
 
   const handleMainResize = () => {
+    // The XR compositor owns the framebuffer while presenting — resizing
+    // throws. Re-fit happens on 'sessionend' below.
+    if (mainRenderer.xr.isPresenting) return
     const w = container.clientWidth
     const h = container.clientHeight
     if (w === 0 || h === 0) return
@@ -199,6 +202,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     userCamera.updateProjectionMatrix()
     mainRenderer.setSize(w, h)
   }
+  mainRenderer.xr.addEventListener('sessionend', handleMainResize)
   const roMain = new ResizeObserver(handleMainResize)
   roMain.observe(container)
   const roPip = new ResizeObserver(handlePipResize)

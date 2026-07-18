@@ -14,6 +14,7 @@
  * inside the XR render loop).
  */
 import * as THREE from 'three'
+import { getLatestSuggestion } from '../../director/agent-runtime'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
 import { getAimedObject } from './aim-picker'
@@ -201,11 +202,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        // Idle: point lock-on wins, then the SET DAY shot list, then onboarding.
+        // Idle priority: point lock-on > crew suggestion > shot list > onboarding.
         const aim = getAimedObject()
+        const suggestion = getLatestSuggestion()
         const hint = bodyText ? null : currentDemoHint()
         line = bodyText
           || (aim ? `▸ ${aim.name} — say “make this…”` : null)
+          || (suggestion ? `💡 ${suggestion.text} — say “do it”` : null)
           || hint
           || 'say “crew, set the stage”'
         ghost = !bodyText
@@ -295,9 +298,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           repaint(true)
         }
       } else if (st === 'idle') {
-        // Repaint when the demo beat advances or the aim lock changes.
+        // Repaint when the demo beat, aim lock, or live suggestion changes.
         const aim = getAimedObject()
-        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}`
+        const suggestion = getLatestSuggestion()
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}`
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)

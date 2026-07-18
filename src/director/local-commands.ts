@@ -1,10 +1,15 @@
+import { consumeLatestSuggestion } from './agent-runtime'
 import { startSetDay, strikeSet } from './demo-shoot'
+import { cutTick } from './sound'
+import { undoLast } from './undo'
 import { useEditorStore } from '../store'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands'
 
 export interface LocalCommandResult {
   handled: boolean
   message?: string
+  /** Follow-up text to run through the full pipeline (suggestion accepts). */
+  resubmit?: string
 }
 
 function wordCount(text: string): number {
@@ -93,6 +98,21 @@ export function tryLocalCommand(text: string): LocalCommandResult {
   if (!t) return { handled: false }
 
   const store = useEditorStore.getState()
+
+  // "undo that" — revert the last command wholesale. The trust net.
+  if (/^(undo( that| it)?|go back|revert|scratch that)[!.]?$/.test(t)) {
+    const summary = undoLast()
+    cutTick()
+    return { handled: true, message: summary ?? 'nothing to undo' }
+  }
+
+  // Accept the crew's latest proactive suggestion ("💡 … — say 'do it'").
+  if (/^(do it|yes( please)?|go ahead|sure|make it so)[!.]?$/.test(t)) {
+    const suggestion = consumeLatestSuggestion()
+    if (suggestion?.suggestedCommand) {
+      return { handled: true, message: `on it — ${suggestion.text}`, resubmit: suggestion.suggestedCommand }
+    }
+  }
 
   // SET DAY demo cues — fully offline, deterministic.
   if (/^(crew,?\s*)?(set|build|dress)\s+the\s+(stage|set)\b/.test(t) || /^set day$/.test(t)) {

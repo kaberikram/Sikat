@@ -39,9 +39,9 @@ function displayNameFor(agent: string): string {
   return DISPLAY_NAMES[agent] ?? agent
 }
 
-const HOVER_HEIGHT = 1.15
-const STATUS_SLOT_Y = 0.46
-const LABEL_Y = 0.82
+const HOVER_HEIGHT = 0.22
+const STATUS_SLOT_Y = 0.18
+const LABEL_Y = 0.3
 const PENDING_COLOR = '#888888'
 const flightEase = getEaseFn('easeOut')
 
@@ -111,7 +111,7 @@ function makeLabel(name: string, color: string): {
   })
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false })
   const sprite = new THREE.Sprite(material)
-  sprite.scale.set(1.3, 0.27, 1)
+  sprite.scale.set(0.5, 0.104, 1)
   return { sprite, material }
 }
 
@@ -159,13 +159,13 @@ function makeCheckTexture(color: string): THREE.CanvasTexture {
 
 function makeCone(color: string): ConeParts & { cone: THREE.Mesh; outline: THREE.Mesh } {
   const coneOutlineMat = new THREE.MeshBasicMaterial({ color, transparent: true })
-  const outline = new THREE.Mesh(new THREE.ConeGeometry(0.174, 0.49, 24), coneOutlineMat)
+  const outline = new THREE.Mesh(new THREE.ConeGeometry(0.066, 0.185, 24), coneOutlineMat)
   outline.rotation.x = Math.PI
   outline.castShadow = false
   outline.receiveShadow = false
 
   const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true })
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.46, 24), coneMat)
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.17, 24), coneMat)
   cone.rotation.x = Math.PI
   cone.castShadow = false
   cone.receiveShadow = false
@@ -183,7 +183,7 @@ function makeSpinner(color: string): SpinnerParts {
     opacity: 0,
   })
   const spinner = new THREE.Sprite(spinnerMat)
-  spinner.scale.set(0.3, 0.3, 1)
+  spinner.scale.set(0.12, 0.12, 1)
   spinner.position.set(0, STATUS_SLOT_Y, 0)
   return { spinnerMat, arcTex, checkTex, spinner }
 }
@@ -283,7 +283,7 @@ function drawNote(cursor: Cursor, text: string): void {
   })
   cursor.noteMat.map = texture
   cursor.noteMat.needsUpdate = true
-  const worldH = lines.length === 2 ? 0.28 : 0.2
+  const worldH = lines.length === 2 ? 0.14 : 0.1
   cursor.noteSprite.scale.set(worldH * (cardW / cardH), worldH, 1)
 }
 
@@ -332,12 +332,27 @@ function buildCursor(agent: string, seed: number): Cursor {
 }
 
 function buildPendingCursor(seed: number): Cursor {
+  // Not a cursor at all — a small "listening dot" that breathes above the
+  // anchor. Reads as "the set heard you", never as a broken gray ghost.
   const group = new THREE.Group()
-  const { coneMat, coneOutlineMat, cone, outline } = makeCone(PENDING_COLOR)
-  group.add(outline)
-  group.add(cone)
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: XR_UI.mint,
+    transparent: true,
+    depthTest: false,
+  })
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), coneMat)
+  group.add(dot)
+  const coneOutlineMat = new THREE.MeshBasicMaterial({
+    color: '#ffffff',
+    transparent: true,
+    opacity: 0.35,
+    depthTest: false,
+  })
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), coneOutlineMat)
+  group.add(halo)
 
   const { spinnerMat, arcTex, checkTex, spinner } = makeSpinner(PENDING_COLOR)
+  spinner.visible = false
   group.add(spinner)
 
   group.renderOrder = 999
@@ -483,21 +498,17 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
           cursor.base.set(entry.position[0], entry.position[1], entry.position[2])
         }
       }
-      const bob = REDUCE_MOTION ? 0 : Math.sin(now / 320 + cursor.seed) * 0.05
+      const bob = REDUCE_MOTION ? 0 : Math.sin(now / 320 + cursor.seed) * 0.02
       cursor.group.position.set(
         cursor.base.x,
         cursor.base.y + HOVER_HEIGHT + bob,
         cursor.base.z
       )
-      cursor.group.scale.setScalar(1)
-      cursor.coneMat.opacity = cursor.opacity
-      cursor.coneOutlineMat.opacity = cursor.opacity
-      updateStatusChrome(cursor, now, {
-        showCheck: false,
-        showNote: false,
-        showSpinner: true,
-        note: '',
-      })
+      // Breathing: gentle scale + opacity pulse, transform-only.
+      const breath = REDUCE_MOTION ? 1 : 1 + Math.sin(now / 420 + cursor.seed) * 0.25
+      cursor.group.scale.setScalar(breath)
+      cursor.coneMat.opacity = cursor.opacity * 0.9
+      cursor.coneOutlineMat.opacity = cursor.opacity * 0.3
     }
 
     for (const [agent, cursor] of cursors) {

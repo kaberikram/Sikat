@@ -9,5 +9,8 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, '.'),
     },
+    // @iwsdk/xr-input pulls its own copy otherwise ("Multiple instances of
+    // Three.js being imported" — and two class hierarchies that don't mix).
+    dedupe: ['three'],
   },
 });

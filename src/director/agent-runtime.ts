@@ -6,6 +6,7 @@
  * No fake path-tracing or trail drawing.
  */
 import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
+import { clearGhost, showGhost } from './ghost-preview'
 import { liveTargetPosition, packetTargetPosition } from './cursor-targets'
 import { markFirstApply, markFirstCursorMove, markFirstPreview, markFirstRefinement } from './latency'
 import { crewWhoosh } from './sound'
@@ -394,6 +395,9 @@ export function markAgentActive(agent: string, note?: string | null, commandId?:
 
 /** Authoritative server preview — names the agent and flies from the pending spot. */
 export function applyIntentPreview(msg: IntentPreviewMessage): void {
+  // Ghost of the understood outcome — shown even for Producer-attributed
+  // previews (the ghost is about the scene, not the cursor).
+  showGhost(msg)
   if (!cursorVisible(msg.agent)) return
   markFirstPreview(msg.commandId)
   let target: Vec3 = stationFor(msg.agent)
@@ -406,6 +410,7 @@ export function applyIntentPreview(msg: IntentPreviewMessage): void {
 
 /** Clear pending cursor + steered agent for a command (cancel / error / send fail). */
 export function releaseCommandPresence(commandId: string): void {
+  clearGhost(commandId)
   clearPendingCommand(commandId)
   const agent = lastAgentByCommand.get(commandId)
   if (agent) markAgentIdle(agent)
@@ -471,8 +476,31 @@ export function releaseWaitingAgents(): void {
   }
 }
 
+/** Latest actionable crew suggestion — surfaced on the XR slate; "do it" accepts. */
+const SUGGESTION_FRESH_MS = 25_000
+let latestSuggestion: { msg: AgentSuggestionMessage; at: number } | null = null
+
+export function getLatestSuggestion(): AgentSuggestionMessage | null {
+  if (!latestSuggestion) return null
+  if (Date.now() - latestSuggestion.at > SUGGESTION_FRESH_MS) {
+    latestSuggestion = null
+    return null
+  }
+  return latestSuggestion.msg
+}
+
+/** Returns and clears the fresh suggestion (accept path). */
+export function consumeLatestSuggestion(): AgentSuggestionMessage | null {
+  const msg = getLatestSuggestion()
+  latestSuggestion = null
+  return msg
+}
+
 /** Proactive crew suggestion — cursor glance without packet queue (Phase A4). */
 export function reactToSuggestion(msg: AgentSuggestionMessage): void {
+  if (msg.kind === 'suggestion' && msg.suggestedCommand) {
+    latestSuggestion = { msg, at: Date.now() }
+  }
   if (!cursorVisible(msg.agent)) return
   const agent = msg.agent
   suggestionGlance.add(agent)
@@ -533,6 +561,7 @@ async function drainAgentQueue(agent: string): Promise<void> {
     while (queue.length > 0) {
       const packet = queue.shift()!
       try {
+        clearGhost(packet.commandId)
         const result = applyCommandPacket(packet)
         logger(agent, `${packet.command}: ${result}`, 'info')
       } catch (e) {
@@ -574,6 +603,7 @@ async function drainAgentQueue(agent: string): Promise<void> {
           await sleepAbortable(REFINE_INTENT_MS, abort.signal)
         }
         try {
+          clearGhost(packet.commandId)
           const result = applyCommandPacket(packet)
           logger(agent, `${packet.command} (refine): ${result}`, 'info')
           const refineElapsed = markFirstRefinement(packet.commandId)
@@ -600,6 +630,7 @@ async function drainAgentQueue(agent: string): Promise<void> {
 
       const applyPacket = () => {
         try {
+          clearGhost(packet.commandId)
           const result = applyCommandPacket(packet)
           logger(agent, `${packet.command}: ${result}`, 'info')
           const applyElapsed = markFirstApply(packet.commandId)
