@@ -50,6 +50,10 @@ export async function submitDirectorCommand(
     }
     log?.('DIRECTOR', trimmed)
     if (local.message) log?.('SYSTEM', local.message)
+    if (local.resubmit) {
+      // Suggestion accepted — run the suggested command through the full pipeline.
+      return submitDirectorCommand(local.resubmit, opts)
+    }
     return { ok: true, local: true }
   }
 

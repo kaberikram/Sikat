@@ -471,8 +471,31 @@ export function releaseWaitingAgents(): void {
   }
 }
 
+/** Latest actionable crew suggestion — surfaced on the XR slate; "do it" accepts. */
+const SUGGESTION_FRESH_MS = 25_000
+let latestSuggestion: { msg: AgentSuggestionMessage; at: number } | null = null
+
+export function getLatestSuggestion(): AgentSuggestionMessage | null {
+  if (!latestSuggestion) return null
+  if (Date.now() - latestSuggestion.at > SUGGESTION_FRESH_MS) {
+    latestSuggestion = null
+    return null
+  }
+  return latestSuggestion.msg
+}
+
+/** Returns and clears the fresh suggestion (accept path). */
+export function consumeLatestSuggestion(): AgentSuggestionMessage | null {
+  const msg = getLatestSuggestion()
+  latestSuggestion = null
+  return msg
+}
+
 /** Proactive crew suggestion — cursor glance without packet queue (Phase A4). */
 export function reactToSuggestion(msg: AgentSuggestionMessage): void {
+  if (msg.kind === 'suggestion' && msg.suggestedCommand) {
+    latestSuggestion = { msg, at: Date.now() }
+  }
   if (!cursorVisible(msg.agent)) return
   const agent = msg.agent
   suggestionGlance.add(agent)

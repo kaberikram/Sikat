@@ -25,7 +25,7 @@ export const CURSOR_MOTION_FADE_MS = 1100 // post-motion hold before soft fade
 export const CURSOR_FADE_MS = 900 // post-work hold before soft fade
 /** Wait before showing the anonymous pending cursor — skips flash on fast
  *  chitchat / describe-only replies that never need a stage cursor. */
-export const PENDING_SHOW_DELAY_MS = 400
+export const PENDING_SHOW_DELAY_MS = 600
 export const PENDING_RESPONSE_TIMEOUT_MS = 10_000 // clear a silent server request
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling' | 'done'
@@ -43,12 +43,18 @@ const PERFORMER_PALETTE = ['#ff6b00', '#0a84ff', '#30d158', '#bf5af2']
 
 /** The crew that gets a cursor. The Director's Assistant only parses text, so
  *  it never shows up on stage. */
+/** Station DIRECTIONS (unit-ish compass offsets) — real positions are derived
+ *  from the live stage in agentMetaFor so everything scales to the 1m set. */
 export const AGENT_META: Record<string, AgentMeta> = {
-  AssetAnimator: { color: '#ff6b00', station: [3, 1.8, 2] },
-  LightingTech: { color: '#ffd60a', station: [3.4, 2.7, 1] },
-  VFXOperator: { color: '#bf5af2', station: [-2.6, 2.4, 1.5] },
-  Producer: { color: '#30d158', station: [1.5, 2.4, 1.5] },
+  AssetAnimator: { color: '#ff6b00', station: [0.83, 0, 0.55] },
+  LightingTech: { color: '#ffd60a', station: [0.96, 0, 0.28] },
+  VFXOperator: { color: '#bf5af2', station: [-0.87, 0, 0.5] },
+  Producer: { color: '#30d158', station: [0.7, 0, 0.7] },
 }
+
+/** Crew hover at the rim of the set, roughly chest height on a tabletop stage. */
+const STATION_RING_EXTRA = 0.6
+const STATION_HEIGHT = 0.9
 
 /** Producer speaks in the log/radio — never gets a stage cursor. */
 export function cursorVisible(agent: string): boolean {
@@ -65,12 +71,12 @@ export function agentMetaFor(agent: string): AgentMeta {
     const n = parseInt(perfMatch[1], 10)
     const stage = useEditorStore.getState().stage
     const angle = ((n - 1) / 4) * Math.PI * 2 - Math.PI / 2
-    const r = stage.radius + 1.2
+    const r = stage.radius + 0.5
     return {
       color: PERFORMER_PALETTE[(n - 1) % PERFORMER_PALETTE.length],
       station: [
         stage.position[0] + r * Math.cos(angle),
-        stage.position[1] + 1.8,
+        stage.position[1] + 0.7,
         stage.position[2] + r * Math.sin(angle),
       ],
     }
@@ -78,17 +84,20 @@ export function agentMetaFor(agent: string): AgentMeta {
   const crew = AGENT_META[agent]
   if (crew) {
     const stage = useEditorStore.getState().stage
+    const [dx, , dz] = crew.station
+    const len = Math.hypot(dx, dz) || 1
+    const r = stage.radius + STATION_RING_EXTRA
     return {
       color: crew.color,
       station: [
-        stage.position[0] + crew.station[0],
-        stage.position[1] + crew.station[1],
-        stage.position[2] + crew.station[2],
+        stage.position[0] + (dx / len) * r,
+        stage.position[1] + STATION_HEIGHT,
+        stage.position[2] + (dz / len) * r,
       ],
     }
   }
   const stage = useEditorStore.getState().stage
-  return { color: '#30d158', station: [stage.position[0], stage.position[1] + 4, stage.position[2]] }
+  return { color: '#30d158', station: [stage.position[0], stage.position[1] + 1.1, stage.position[2]] }
 }
 
 export function stationFor(agent: string): Vec3 {
@@ -106,7 +115,7 @@ export function pendingAnchorPosition(): Vec3 {
     }
   }
   const stage = st.stage
-  return [stage.position[0], stage.position[1] + 2.2, stage.position[2]]
+  return [stage.position[0], stage.position[1] + 0.6, stage.position[2]]
 }
 
 export interface AgentPresence {
