@@ -142,7 +142,7 @@ def build_intent_preview(
     confidence = "grammar" if intent is not None else "guess"
     note = intent.say if intent and intent.say else _preview_note(agent, target, action, motion)
 
-    return {
+    preview = {
         "type": "intent_preview",
         "commandId": command_id,
         "agent": agent,
@@ -152,3 +152,17 @@ def build_intent_preview(
         "note": note[:80],
         "confidence": confidence,
     }
+    # Spatial payload → the client renders a ghost of the understood outcome
+    # while the full parse is still in flight.
+    if intent is not None:
+        if intent.position is not None:
+            preview["position"] = intent.position
+        if intent.scale is not None:
+            preview["scale"] = intent.scale
+        if intent.mode is not None:
+            preview["mode"] = intent.mode
+        if intent.primitive is not None:
+            preview["primitive"] = intent.primitive
+        if intent.color is not None:
+            preview["color"] = intent.color
+    return preview

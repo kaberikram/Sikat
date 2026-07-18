@@ -27,6 +27,7 @@ import { buildSpawnMesh } from './spawn-factory'
 import { callStoreAction } from './store-action-bridge'
 import { spawnPop } from './sound'
 import { startTween, cancelTween, retargetTween } from './tween'
+import { captureBefore } from './undo'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
 import { applyLiveCameraPose } from './camera-pose'
@@ -266,6 +267,12 @@ function applyCameraVector(
 export function applyCommandPacket(packet: CommandPacket): string {
   const st = useEditorStore.getState()
   const isRefinement = packet.refinement === true
+
+  // One undo snapshot per command, before its first mutation. Transport and
+  // raw store calls aren't undoable state.
+  if (packet.command !== 'PLAYBACK' && packet.command !== 'CALL_STORE_ACTION') {
+    captureBefore(packet.commandId ?? 'local')
+  }
 
   switch (packet.command) {
     case 'SPAWN_OBJECT': {

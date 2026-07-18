@@ -1,5 +1,7 @@
 import { consumeLatestSuggestion } from './agent-runtime'
 import { startSetDay, strikeSet } from './demo-shoot'
+import { cutTick } from './sound'
+import { undoLast } from './undo'
 import { useEditorStore } from '../store'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands'
 
@@ -96,6 +98,13 @@ export function tryLocalCommand(text: string): LocalCommandResult {
   if (!t) return { handled: false }
 
   const store = useEditorStore.getState()
+
+  // "undo that" — revert the last command wholesale. The trust net.
+  if (/^(undo( that| it)?|go back|revert|scratch that)[!.]?$/.test(t)) {
+    const summary = undoLast()
+    cutTick()
+    return { handled: true, message: summary ?? 'nothing to undo' }
+  }
 
   // Accept the crew's latest proactive suggestion ("💡 … — say 'do it'").
   if (/^(do it|yes( please)?|go ahead|sure|make it so)[!.]?$/.test(t)) {

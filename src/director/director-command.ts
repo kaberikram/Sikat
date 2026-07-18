@@ -4,6 +4,7 @@
 import { beginPendingCommand, releaseCommandPresence } from './agent-runtime'
 import { noteDemoUtterance } from './demo-shoot'
 import { newCommandId } from './ids'
+import { noteCommandText } from './undo'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
@@ -59,6 +60,7 @@ export async function submitDirectorCommand(
 
   const socket = getDirectorSocket()
   const commandId = opts?.commandId ?? newCommandId()
+  noteCommandText(commandId, trimmed)
   beginPendingCommand(commandId, { onTimeout: opts?.onNoResponse })
   markCommandSent(commandId)
 

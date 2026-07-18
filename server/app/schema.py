@@ -696,9 +696,15 @@ def intent_preview_message(
     action: str | None = None,
     motion: str | None = None,
     confidence: IntentPreviewConfidence = "grammar",
+    position: Vec3 | None = None,
+    scale: Vec3 | None = None,
+    mode: str | None = None,
+    primitive: str | None = None,
+    color: str | None = None,
 ) -> dict:
-    """Fast acknowledge before full parse — client moves cursor immediately."""
-    return {
+    """Fast acknowledge before full parse — client moves cursor immediately.
+    Spatial kwargs feed the client's ghost preview of the understood outcome."""
+    msg = {
         "type": "intent_preview",
         "timestamp": now(),
         "commandId": command_id,
@@ -709,6 +715,16 @@ def intent_preview_message(
         "note": note,
         "confidence": confidence,
     }
+    for key, value in (
+        ("position", position),
+        ("scale", scale),
+        ("mode", mode),
+        ("primitive", primitive),
+        ("color", color),
+    ):
+        if value is not None:
+            msg[key] = value
+    return msg
 
 
 PlanUpdateStatus = Literal[
