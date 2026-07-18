@@ -87,6 +87,32 @@ function isBlockedCrewLog(message: string): boolean {
   return CREW_LOG_BLOCK.test(message)
 }
 
+/**
+ * Transport readouts live in tiny children so their per-frame currentTime
+ * subscription doesn't reconcile the whole pod (incl. the log list) at 60fps
+ * during playback.
+ */
+function RecReadout({ takeNumber }: { takeNumber: number }) {
+  const currentTime = useEditorStore((s) => s.currentTime)
+  const takeStartTime = useEditorStore((s) => s.takeStartTime)
+  return (
+    <div className="transport-readout transport-readout--rec">
+      <span className="transport-dot transport-dot--rec" />
+      ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
+    </div>
+  )
+}
+
+function PlayReadout({ onClick }: { onClick: () => void }) {
+  const currentTime = useEditorStore((s) => s.currentTime)
+  return (
+    <button type="button" onClick={onClick} className="transport-readout">
+      <span className="transport-dot" />
+      {currentTime.toFixed(2)}s — PAUSE
+    </button>
+  )
+}
+
 export function DirectorPod() {
   const [status, setStatus] = useState<SocketStatus>('closed')
   const [log, setLog] = useState<LogEntry[]>([])
@@ -110,8 +136,6 @@ export function DirectorPod() {
   const isRolling = useEditorStore((s) => s.isRolling)
   const takeNumber = useEditorStore((s) => s.takeNumber)
   const cameraOpMode = useEditorStore((s) => s.cameraOpMode)
-  const currentTime = useEditorStore((s) => s.currentTime)
-  const takeStartTime = useEditorStore((s) => s.takeStartTime)
   const setOverlay = useEditorStore((s) => s.setOverlay)
   const togglePlay = useEditorStore((s) => s.togglePlay)
   const setSelected = useEditorStore((s) => s.setSelected)
@@ -376,22 +400,8 @@ export function DirectorPod() {
           CAM OP — WASD · Q/E · drag look · C off
         </div>
       )}
-      {isRolling && (
-        <div className="transport-readout transport-readout--rec">
-          <span className="transport-dot transport-dot--rec" />
-          ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
-        </div>
-      )}
-      {isPlaying && !isRolling && (
-        <button
-          type="button"
-          onClick={togglePlay}
-          className="transport-readout"
-        >
-          <span className="transport-dot" />
-          {currentTime.toFixed(2)}s — PAUSE
-        </button>
-      )}
+      {isRolling && <RecReadout takeNumber={takeNumber} />}
+      {isPlaying && !isRolling && <PlayReadout onClick={togglePlay} />}
 
       <motion.div
         layout

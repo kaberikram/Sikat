@@ -16,11 +16,11 @@ import type { Vec3 } from './protocol'
 /** Choreography timings, shared so the runtime's paced apply and the scene's
  *  flight easing agree to the millisecond. Calm directing sequence: announce →
  *  travel → note/apply → held check → soft exit. */
-export const CURSOR_ANNOUNCE_MS = 350 // named label + spinner hold before travel
-export const CURSOR_FLIGHT_MS = 750 // visible, natural glide to the target
-export const CURSOR_INTENT_MS = 350 // deliberate identity handoff / initial drift
-export const CURSOR_WORK_MS = 350 // readable action-note / apply beat
-export const CURSOR_SETTLE_MS = 800 // check has time to register
+export const CURSOR_ANNOUNCE_MS = 200 // named label + spinner hold before travel
+export const CURSOR_FLIGHT_MS = 450 // visible, natural glide to the target
+export const CURSOR_INTENT_MS = 250 // deliberate identity handoff / initial drift
+export const CURSOR_WORK_MS = 250 // readable action-note / apply beat
+export const CURSOR_SETTLE_MS = 450 // check has time to register
 export const CURSOR_MOTION_FADE_MS = 1100 // post-motion hold before soft fade
 export const CURSOR_FADE_MS = 900 // post-work hold before soft fade
 /** Wait before showing the anonymous pending cursor — skips flash on fast

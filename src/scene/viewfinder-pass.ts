@@ -42,6 +42,9 @@ interface ViewfinderTargetContext {
 }
 
 const scratchRenderSize = new THREE.Vector2()
+// Per-frame scratch — this pass runs 1-2× every frame; no allocations inside.
+const scratchPrevClear = new THREE.Color()
+const scratchStudioBg = new THREE.Color()
 
 // ---- fullscreen blit (composer output → render target) ----
 
@@ -133,14 +136,14 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   renderer.autoClear = true
   renderer.autoClearColor = true
 
-  const prevClearColor = new THREE.Color()
+  const prevClearColor = scratchPrevClear
   renderer.getClearColor(prevClearColor)
   const prevClearAlpha = renderer.getClearAlpha()
   const prevBg = scene.background
   const studioBg =
     clearColor instanceof THREE.Color
       ? clearColor
-      : new THREE.Color(clearColor ?? '#f2f2f2')
+      : scratchStudioBg.set(clearColor ?? '#f2f2f2')
 
   // Three.js swaps to the XR headset camera on every render while presenting —
   // bypass so the viewfinder RT uses virtCamera (controller-tracked).
@@ -151,7 +154,11 @@ export function renderViewfinderToTarget(ctx: ViewfinderTargetContext): void {
   scene.background = studioBg
   renderer.setRenderTarget(target)
   renderer.setClearColor(studioBg, 1)
-  viewfinder.composer.setSize(width, height)
+  if (viewfinder.composerWidth !== width || viewfinder.composerHeight !== height) {
+    viewfinder.composer.setSize(width, height)
+    viewfinder.composerWidth = width
+    viewfinder.composerHeight = height
+  }
 
   const shouldCompose = viewfinderShouldUseComposer(stack)
   if (shouldCompose) {

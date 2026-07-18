@@ -182,7 +182,7 @@ export function startSceneStateSync(socket: DirectorSocket): void {
   started = true
 
   let lastSignature = ''
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let dirty = false
 
   const send = () => {
     const snapshot = buildHeartbeatSnapshot()
@@ -196,8 +196,15 @@ export function startSceneStateSync(socket: DirectorSocket): void {
     send()
   })
 
+  // Dirty-flag + interval instead of a debounce: during playback the store
+  // updates every frame, and a self-resetting debounce timer never fired —
+  // the server's scene grounding froze whenever the timeline was playing.
   useEditorStore.subscribe(() => {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(send, DEBOUNCE_MS)
+    dirty = true
   })
+  setInterval(() => {
+    if (!dirty) return
+    dirty = false
+    send()
+  }, DEBOUNCE_MS)
 }

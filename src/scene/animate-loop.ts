@@ -246,8 +246,13 @@ export function createAnimateLoop(ctx: {
 }
 
 export function subscribeShadowSync() {
+  let lastObjects: unknown = null
   let lastSig = ''
   return useEditorStore.subscribe((state) => {
+    // This fires on every store change (60fps during playback) — skip the
+    // JSON signature work unless the objects array itself changed.
+    if (state.objects === lastObjects) return
+    lastObjects = state.objects
     const sig = state.objects.map((o) => o.id).join(',') + JSON.stringify(state.objects.map((o) => o.subMeshShadow))
     if (sig === lastSig) return
     lastSig = sig

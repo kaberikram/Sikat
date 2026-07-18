@@ -81,6 +81,9 @@ export function createViewfinderComposer(
   ditherPass: ShaderPass
   outputPass: OutputPass
   composer: EffectComposer
+  /** Last size passed to composer.setSize — lets hot paths skip redundant calls. */
+  composerWidth: number
+  composerHeight: number
 } {
   const composer = new EffectComposer(renderer)
   composer.setPixelRatio(pixelRatio)
@@ -102,7 +105,16 @@ export function createViewfinderComposer(
   composer.addPass(bloomPass)
   composer.addPass(ditherPass)
   composer.addPass(outputPass)
-  return { renderPass, pixelatedPass, bloomPass, ditherPass, outputPass, composer }
+  return {
+    renderPass,
+    pixelatedPass,
+    bloomPass,
+    ditherPass,
+    outputPass,
+    composer,
+    composerWidth: 0,
+    composerHeight: 0,
+  }
 }
 
 export function updateViewfinderComposerFromStack(

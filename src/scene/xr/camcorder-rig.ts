@@ -125,6 +125,7 @@ export function createCamcorderRig(
   let suppressRec: (() => boolean) | null = null
 
   const lensOffset = new THREE.Vector3(0, 0.01, -LENS_FORWARD_M)
+  const scratchOffset = new THREE.Vector3()
   const worldPos = new THREE.Vector3()
   const worldQuat = new THREE.Quaternion()
   const scratchScale = new THREE.Vector3()
@@ -157,25 +158,41 @@ export function createCamcorderRig(
     void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
+      onLevel: (level) => directorSlate.setLevel(level),
       onError: (error) => directorSlate.setLastSent(
         error === 'voice needs Deepgram key' ? error : `voice error: ${error}`
       ),
       onFinal: (transcript) => {
+        const line = transcript.trim()
+        if (!line) {
+          directorSlate.setMisheard()
+          return
+        }
         const commandId = newCommandId()
+        directorSlate.setThinking(true)
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
-          onNoResponse: () => directorSlate.setLastSent('no response'),
+          onNoResponse: () => {
+            directorSlate.setThinking(false)
+            directorSlate.setLastSent('no response')
+          },
         }).then((result) => {
-          const line = transcript.trim()
           if (result.offline) {
             directorSlate.setOffline(true)
+            directorSlate.setThinking(false)
             directorSlate.setLastSent(line || 'offline')
+          } else if (result.ok && result.local) {
+            // Local commands apply instantly — no crew round-trip to wait on.
+            directorSlate.setThinking(false)
+            directorSlate.setLastSent(line)
           } else if (result.ok) {
             directorSlate.setOffline(false)
-            directorSlate.setLastSent(line)
+            // Stay in thinking until the first crew packet/reply lands
+            // (cleared via setReply/onFirstResponse wiring in xr-session).
           }
         }).catch(() => {
+          directorSlate.setThinking(false)
           directorSlate.setLastSent('command failed')
         })
       },
@@ -256,13 +273,14 @@ export function createCamcorderRig(
     if (pad?.getButtonUp(InputComponent.A_Button)) endTalk()
 
     updateRollingIndicator()
+    directorSlate.update(timeSec * 1000)
 
     const grip = xrInput.xrOrigin.gripSpaces.right
     grip.updateWorldMatrix(true, false)
     grip.matrixWorld.decompose(worldPos, worldQuat, scratchScale)
     // Grip −Z + AIM_UP_DEG pitch (natural hold aims slightly above the barrel).
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
-    worldPos.add(lensOffset.clone().applyQuaternion(aimQuat))
+    worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
     euler.setFromQuaternion(aimQuat, 'XYZ')
     applyLiveCameraPose({

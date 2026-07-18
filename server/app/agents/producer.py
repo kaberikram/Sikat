@@ -61,8 +61,8 @@ _LLM_STREAM_DONE = object()
 # Server-side pacing. Kept intentionally light: the client owns the real
 # choreography (flight/hover/settle). These sleeps only interleave the crew so
 # statuses and packets stream over a few hundred ms instead of one burst.
-AGENT_STEP_DELAY = 0.35  # between successive packets from the same specialist
-AGENT_STAGGER = 0.30  # head-start offset between specialists so cursors fan out
+AGENT_STEP_DELAY = 0.15  # between successive packets from the same specialist
+AGENT_STAGGER = 0.15  # head-start offset between specialists so cursors fan out
 
 # Present-tense verb per command, shown on the agent's cursor as a "note" the
 # instant it goes active — fills the parse latency ("dead air") so the crew's

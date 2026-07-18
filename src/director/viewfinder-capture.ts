@@ -28,6 +28,59 @@ function canvasToJpegBase64(
   return dataUrl.slice(comma + 1)
 }
 
+/**
+ * Persistent offscreen renderer + composer, reused across captures.
+ * Creating a WebGL context per frame grab cost tens of ms and risked
+ * Chromium's live-context cap when vision commands overlapped.
+ */
+let captureRenderer: THREE.WebGLRenderer | null = null
+let capturePasses: ReturnType<typeof createViewfinderComposer> | null = null
+let captureScene: THREE.Scene | null = null
+let captureCam: THREE.PerspectiveCamera | null = null
+
+function getCaptureRenderer(width: number, height: number): THREE.WebGLRenderer {
+  if (!captureRenderer) {
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      preserveDrawingBuffer: true,
+    })
+    renderer.setPixelRatio(1)
+    renderer.shadowMap.enabled = true
+    renderer.toneMapping = THREE.ACESFilmicToneMapping
+    renderer.toneMappingExposure = 1
+    renderer.domElement.addEventListener('webglcontextlost', () => {
+      // Next capture recreates from scratch.
+      capturePasses?.composer.dispose()
+      capturePasses = null
+      captureScene = null
+      captureCam = null
+      captureRenderer = null
+    })
+    captureRenderer = renderer
+  }
+  const size = new THREE.Vector2()
+  captureRenderer.getSize(size)
+  if (size.x !== width || size.y !== height) {
+    captureRenderer.setSize(width, height, false)
+  }
+  return captureRenderer
+}
+
+function getCapturePasses(
+  scene: THREE.Scene,
+  vcam: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer
+): ReturnType<typeof createViewfinderComposer> {
+  if (!capturePasses || captureScene !== scene || captureCam !== vcam) {
+    capturePasses?.composer.dispose()
+    capturePasses = createViewfinderComposer(scene, vcam, renderer, 1)
+    captureScene = scene
+    captureCam = vcam
+  }
+  return capturePasses
+}
+
 export async function captureViewfinderFrame(
   opts?: CaptureOptions
 ): Promise<SceneFrame | null> {
@@ -47,21 +100,17 @@ export async function captureViewfinderFrame(
   const width = maxWidth
   const height = Math.max(1, Math.round(maxWidth / (prevAspect > 0 ? prevAspect : 16 / 9)))
 
-  const exportRenderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: false,
-    preserveDrawingBuffer: true,
-  })
-  exportRenderer.setPixelRatio(1)
-  exportRenderer.setSize(width, height, false)
-  exportRenderer.shadowMap.enabled = true
-  exportRenderer.toneMapping = THREE.ACESFilmicToneMapping
-  exportRenderer.toneMappingExposure = 1
+  const exportRenderer = getCaptureRenderer(width, height)
 
   vcam.aspect = width / height
   vcam.updateProjectionMatrix()
 
-  const passes = createViewfinderComposer(scene, vcam, exportRenderer, 1)
+  const passes = getCapturePasses(scene, vcam, exportRenderer)
+  if (passes.composerWidth !== width || passes.composerHeight !== height) {
+    passes.composer.setSize(width, height)
+    passes.composerWidth = width
+    passes.composerHeight = height
+  }
 
   // Do not set isExporting — that flag pauses the entire animate loop (including
   // XR). Video export in exporter.ts owns isExporting; JPEG capture must not.
@@ -80,11 +129,5 @@ export async function captureViewfinderFrame(
     vcam.aspect = prevAspect
     vcam.updateProjectionMatrix()
     remeasurePip()
-    passes.pixelatedPass.dispose()
-    passes.bloomPass.dispose()
-    passes.ditherPass.dispose()
-    passes.outputPass.dispose()
-    passes.composer.dispose()
-    exportRenderer.dispose()
   }
 }

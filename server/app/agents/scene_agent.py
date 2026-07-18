@@ -30,8 +30,9 @@ you autonomously plan, execute, verify, and iterate until it's met.
 
 Conventions:
 - Rotations are world-space euler XYZ in RADIANS. Colors are "#rrggbb".
-- The stage is a disc at the origin, radius 25; keep action near the center
-  unless directed otherwise. +Y is up.
+- The stage is a disc at the origin, radius 1 (meters, real-world XR scale);
+  keep action near the center unless directed otherwise. +Y is up. Typical
+  objects are 0.05-0.3 units — think tabletop diorama, not film lot.
 - The virtual camera is the SHOT — what gets recorded. Compose it.
 - Motion craft: entrances/reveals ease out, on-screen moves ease in-out, loops linear.
   Ambient/idle motion stays subtle (amplitude 0.1–0.3); hero moves earn anticipation
