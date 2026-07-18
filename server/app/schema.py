@@ -31,7 +31,7 @@ Vec3 = tuple[float, float, float]
 HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 Easing = Literal["linear", "easeIn", "easeOut", "easeInOut"]
 FxSection = Literal["bloom", "pixelate", "cellShading", "glitch", "dither"]
-Primitive = Literal["box", "sphere", "cone", "cylinder", "torus", "plane", "text"]
+Primitive = Literal["box", "sphere", "cone", "cylinder", "torus", "plane", "text", "sneaker"]
 AgentName = Literal[
     "Producer",
     "DirectorsAssistant",

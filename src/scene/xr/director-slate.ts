@@ -14,6 +14,7 @@
  * inside the XR render loop).
  */
 import * as THREE from 'three'
+import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
@@ -104,6 +105,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let lastPaint = 0
   let holdUntil = 0
   let pulsePhase = 0
+  let lastHint: string | null = null
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
   const mat = new THREE.MeshBasicMaterial({
@@ -198,7 +200,9 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        line = bodyText || 'say a direction…'
+        // Idle: the SET DAY shot list coaches the next cue.
+        const hint = bodyText ? null : currentDemoHint()
+        line = bodyText || hint || 'say “crew, set the stage”'
         ghost = !bodyText
       }
 
@@ -283,6 +287,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           state = 'idle'
           bodyText = ''
           holdUntil = 0
+          repaint(true)
+        }
+      } else if (st === 'idle') {
+        // Shot-list coaching: repaint when the demo beat advances.
+        const hint = isDemoActive() ? currentDemoHint() : null
+        if (hint !== lastHint) {
+          lastHint = hint
           repaint(true)
         }
       }

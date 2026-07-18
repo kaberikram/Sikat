@@ -2,6 +2,7 @@
  * Shared director command submit — desktop pod + XR voice finals.
  */
 import { beginPendingCommand, releaseCommandPresence } from './agent-runtime'
+import { noteDemoUtterance } from './demo-shoot'
 import { newCommandId } from './ids'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
@@ -31,6 +32,9 @@ export async function submitDirectorCommand(
 ): Promise<SubmitDirectorResult> {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false }
+
+  // Advance the SET DAY shot list on any matching cue, whichever path handles it.
+  noteDemoUtterance(trimmed)
 
   const log = opts?.log
   const local = tryLocalCommand(trimmed)

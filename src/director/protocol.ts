@@ -18,7 +18,7 @@ export interface Target {
 }
 
 export interface SpawnObjectPayload {
-  primitive: 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus' | 'plane' | 'text'
+  primitive: 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus' | 'plane' | 'text' | 'sneaker'
   id?: string | null
   name?: string | null
   color?: string | null

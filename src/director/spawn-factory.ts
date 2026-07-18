@@ -15,9 +15,10 @@ const DEFAULT_COLORS: Record<SpawnObjectPayload['primitive'], string> = {
   torus: '#ffd60a',
   plane: '#8e8e93',
   text: '#FF6B00',
+  sneaker: '#FF5A5F',
 }
 
-export function buildSpawnMesh(payload: SpawnObjectPayload): { mesh: THREE.Mesh; name: string } {
+export function buildSpawnMesh(payload: SpawnObjectPayload): { mesh: THREE.Mesh | THREE.Group; name: string } {
   const color = payload.color ?? DEFAULT_COLORS[payload.primitive]
   spawnCounter += 1
   const fallbackName = `${payload.primitive.toUpperCase()}_AGT_${String(spawnCounter).padStart(2, '0')}`

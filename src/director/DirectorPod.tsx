@@ -17,6 +17,7 @@ import {
   setRuntimeLogger,
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
+import { currentDemoHint } from './demo-shoot'
 import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
@@ -623,7 +624,7 @@ export function DirectorPod() {
                 ? 'listening…'
                 : isProcessingCommand
                   ? 'crew is working…'
-                  : PLACEHOLDERS[placeholderIdx])
+                  : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
             }
             className="flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0"
           />
