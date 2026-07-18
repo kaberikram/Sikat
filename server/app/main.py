@@ -7,6 +7,7 @@ Loads optional secrets from server/.env (gitignored). Copy .env.example to .env.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -207,11 +208,22 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     log.info("client connected (%d active)", len(manager.active))
     try:
         while True:
-            raw = await ws.receive_json()
+            try:
+                raw = await ws.receive_json()
+            except (ValueError, json.JSONDecodeError):
+                # Malformed frame — the socket is still healthy; don't let the
+                # exception escape and leak the session/observer/bridge.
+                await ws.send_json(error_message("invalid JSON"))
+                continue
             try:
                 msg = client_message_adapter.validate_python(raw)
             except ValidationError as exc:
-                await ws.send_json(error_message(f"invalid message: {exc.error_count()} error(s)"))
+                command_id = raw.get("commandId") if isinstance(raw, dict) else None
+                await ws.send_json(
+                    error_message(
+                        f"invalid message: {exc.error_count()} error(s)", command_id
+                    )
+                )
                 continue
             if isinstance(msg, SceneState):
                 scene_state.update(msg)
@@ -232,5 +244,9 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, Telemetry):
                 await _handle_telemetry(msg)
     except WebSocketDisconnect:
+        pass
+    finally:
+        # Always clean up — any exception path that skips this leaks the
+        # SessionContext, its observer task, and the AgentBridge.
         manager.disconnect(ws)
         log.info("client disconnected (%d active)", len(manager.active))

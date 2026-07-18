@@ -6,6 +6,7 @@ import {
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
 import { submitDirectorCommand } from '../../director/director-command'
+import { newCommandId } from '../../director/ids'
 import { getDirectorSocket } from '../../director/socket'
 import {
   finishVoiceSession,
@@ -153,14 +154,14 @@ export function createCamcorderRig(
       return
     }
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
-    startVoiceSession({
+    void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
       onError: (error) => directorSlate.setLastSent(
         error === 'voice needs Deepgram key' ? error : `voice error: ${error}`
       ),
       onFinal: (transcript) => {
-        const commandId = crypto.randomUUID()
+        const commandId = newCommandId()
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
@@ -174,8 +175,13 @@ export function createCamcorderRig(
             directorSlate.setOffline(false)
             directorSlate.setLastSent(line)
           }
+        }).catch(() => {
+          directorSlate.setLastSent('command failed')
         })
       },
+    }).catch((e) => {
+      console.warn('[xr] voice session failed to start:', e)
+      directorSlate.setLastSent('voice error')
     })
   }
 

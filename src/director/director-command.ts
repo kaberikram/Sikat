@@ -2,6 +2,7 @@
  * Shared director command submit — desktop pod + XR voice finals.
  */
 import { beginPendingCommand, releaseCommandPresence } from './agent-runtime'
+import { newCommandId } from './ids'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
@@ -47,7 +48,7 @@ export async function submitDirectorCommand(
   }
 
   const socket = getDirectorSocket()
-  const commandId = opts?.commandId ?? crypto.randomUUID()
+  const commandId = opts?.commandId ?? newCommandId()
   beginPendingCommand(commandId, { onTimeout: opts?.onNoResponse })
   markCommandSent(commandId)
 

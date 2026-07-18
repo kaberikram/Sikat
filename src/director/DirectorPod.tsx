@@ -18,6 +18,7 @@ import {
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { submitDirectorCommand } from './director-command'
+import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
 import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
@@ -321,7 +322,7 @@ export function DirectorPod() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const commandId = opts?.commandId ?? crypto.randomUUID()
+    const commandId = opts?.commandId ?? newCommandId()
     setInput('')
     trackCommand(commandId)
     try {
@@ -358,8 +359,10 @@ export function DirectorPod() {
   }), [submit, pushLog])
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
-    startVoiceSession(voiceHandlers(), opts)
-  }, [voiceHandlers])
+    void startVoiceSession(voiceHandlers(), opts).catch((error) => {
+      pushLog('DIRECTOR', `voice failed to start: ${error instanceof Error ? error.message : error}`, 'error')
+    })
+  }, [voiceHandlers, pushLog])
 
   // Toggle-off finishes gracefully (waits for the trailing final transcript);
   // Escape/unmount use stopMic for a hard teardown.
