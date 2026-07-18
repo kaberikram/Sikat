@@ -25,6 +25,7 @@ import {
 } from '../motion-composite'
 import { buildSpawnMesh } from './spawn-factory'
 import { callStoreAction } from './store-action-bridge'
+import { spawnPop } from './sound'
 import { startTween, cancelTween, retargetTween } from './tween'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
@@ -287,6 +288,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
         scale: targetScale,
       })
       // Entrance pop: new props scale in instead of blinking into existence.
+      spawnPop()
       const spawned = useEditorStore.getState().objects.find((o) => o.mesh === mesh)
       if (spawned) {
         useEditorStore.getState().updateObject(spawned.id, {

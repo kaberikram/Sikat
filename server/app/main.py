@@ -106,6 +106,8 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
     token = bind_session(session)
     session.command_started()
     session.cancel_active_plan()
+    # Point + speak: a physical aim accompanies this command only.
+    session.set_pointed_target(msg.targetHint.name if msg.targetHint else None)
     received_at = time.monotonic()
     first_packet_logged = False
 
@@ -192,6 +194,7 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
         log.exception("user command failed: %s", msg.text)
         await manager.send(ws, error_message(str(exc), msg.commandId))
     finally:
+        session.set_pointed_target(None)
         await emit_status("Producer", "idle", msg.commandId, None)
         session.command_finished()
         reset_session(token)

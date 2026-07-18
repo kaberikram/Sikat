@@ -305,6 +305,11 @@ def _resolve_target_or_clarify(
     clarify = session_context.consume_clarify_target()
     if clarify:
         return clarify
+    # Point + speak: a physical aim resolves deictics outright — never clarify.
+    if _PRONOUN.search(clause):
+        pointed = session_context.pointed_target()
+        if pointed:
+            return pointed
     ranked = rank_targets(clause, scene)
     if len(ranked) >= 2 and is_ambiguous(ranked):
         options = ambiguous_options(ranked)

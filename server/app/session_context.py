@@ -71,6 +71,9 @@ class SessionContext:
     def __init__(self) -> None:
         self._history: deque[Exchange] = deque(maxlen=_MAX)
         self._pending_target: str | None = None
+        # Point + speak: the object the director is physically aiming at while
+        # speaking. Scoped to the current command; cleared when it finishes.
+        self._pointed_target: str | None = None
         self._pending_addressee: int | None = None
         self._last_transform: Intent | None = None
         self._pending_clarify: PendingClarify | None = None
@@ -115,7 +118,16 @@ class SessionContext:
     def history(self) -> list[Exchange]:
         return list(self._history)
 
+    def set_pointed_target(self, name: str | None) -> None:
+        self._pointed_target = name
+
+    def pointed_target(self) -> str | None:
+        return self._pointed_target
+
     def last_target(self) -> str | None:
+        # A physical point beats every textual heuristic.
+        if self._pointed_target:
+            return self._pointed_target
         if self._pending_target:
             return self._pending_target
         for exchange in reversed(self._history):
@@ -330,6 +342,10 @@ def history() -> list[Exchange]:
 
 def last_target() -> str | None:
     return get_session().last_target()
+
+
+def pointed_target() -> str | None:
+    return get_session().pointed_target()
 
 
 def last_transform() -> Intent | None:

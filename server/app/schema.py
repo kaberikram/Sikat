@@ -496,6 +496,8 @@ class UserCommand(BaseModel):
     commandId: str | None = None
     scene: SceneState | None = None
     frame: SceneFrame | None = None
+    # Point + speak: the object the director is physically aiming at (XR).
+    targetHint: Target | None = None
 
 
 class TelemetryPose(BaseModel):

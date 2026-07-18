@@ -18,7 +18,9 @@ import {
 } from '../../director/voice-session'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import { clearAimPick, getAimedObject, setAimChangeListener, updateAimPick } from './aim-picker'
 import { createDirectorSlate } from './director-slate'
+import { startEntrySequence } from './entry-sequence'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
 /**
@@ -115,6 +117,21 @@ export function createCamcorderRig(
 
   setEditorLayer(group)
 
+  // Point + speak lock-on feedback: tip swells mint while aiming at an object.
+  const aimRayMat = aimRay.material as THREE.MeshBasicMaterial
+  const aimTipMat = aimTip.material as THREE.MeshBasicMaterial
+  setAimChangeListener((id) => {
+    if (id) {
+      aimRayMat.color.set(0x57cfa0)
+      aimTipMat.color.set(0x57cfa0)
+      aimTip.scale.setScalar(1.8)
+    } else {
+      aimRayMat.color.set(0xff3300)
+      aimTipMat.color.set(0xffee00)
+      aimTip.scale.setScalar(1)
+    }
+  })
+
   xrInput.xrOrigin.gripSpaces.right.add(group)
 
   let takeLabel: THREE.Mesh | null = null
@@ -201,9 +218,12 @@ export function createCamcorderRig(
         const commandId = newCommandId()
         directorSlate.setThinking(true)
         thinkingLine = line
+        // Point + speak: "this/that/it" while aiming means THAT object.
+        const aimed = /\b(this|that|it|there|these|those)\b/i.test(line) ? getAimedObject() : null
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
+          targetHint: aimed ?? undefined,
           onNoResponse: () => {
             thinkingLine = null
             directorSlate.setThinking(false)
@@ -317,6 +337,8 @@ export function createCamcorderRig(
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
     worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
+    updateAimPick(worldPos, aimQuat, timeSec * 1000)
+
     euler.setFromQuaternion(aimQuat, 'XYZ')
     applyLiveCameraPose({
       position: [worldPos.x, worldPos.y, worldPos.z],
@@ -332,7 +354,8 @@ export function createCamcorderRig(
     screenMesh,
     xrInput,
     update,
-    bindSession: () => {},
+    // First boot: entering XR is an event — dim, ripple, motes, title.
+    bindSession: () => startEntrySequence(),
     setTakeEndedHandler: (fn) => {
       onTakeEnded = fn
     },
@@ -342,6 +365,8 @@ export function createCamcorderRig(
     dispose: () => {
       offSlateLog()
       offSlatePacket()
+      setAimChangeListener(null)
+      clearAimPick()
       stopVoiceSession()
       directorSlate.dispose()
       group.removeFromParent()

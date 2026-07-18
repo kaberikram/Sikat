@@ -2,6 +2,7 @@
  * Auto-keyframes camera base pose while a take is rolling.
  * Store subscription keeps scene/ renderer-only.
  */
+import { cutTick, slateClap } from './sound'
 import { useEditorStore } from '../store'
 import type { Vec3 } from './protocol'
 
@@ -66,12 +67,14 @@ export function startTakeRecorder(): () => void {
       state.staticSince = null
       state.wasRolling = true
       snapshotAt(st.takeStartTime)
+      slateClap()
       return
     }
 
     if (falling && state.wasRolling) {
       state.wasRolling = false
       snapshotAt(st.currentTime)
+      cutTick()
       return
     }
 

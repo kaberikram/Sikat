@@ -13,6 +13,8 @@
  */
 import { enqueuePacket } from './agent-runtime'
 import { getDirectorSocket } from './socket'
+import { setRoomDim } from '../scene/xr/entry-sequence'
+import { beatTick, crewWhoosh, wrapChord } from './sound'
 import { presenceStore, agentMetaFor } from './presence'
 import { useEditorStore, defaultKeyLightPosition } from '../store'
 import type { CommandPacket, Vec3 } from './protocol'
@@ -112,6 +114,7 @@ export function noteDemoUtterance(text: string): void {
     }
     state.beat += 1
     if (state.beat > BEATS.length) state.beat = BEATS.length
+    beatTick()
   }
 }
 
@@ -144,6 +147,7 @@ function rollCall(): void {
       p.appearAt(agent, entry)
       p.flyTo(agent, meta.station as Vec3, 'intent', 900)
       p.setNote(agent, 'on set', true)
+      crewWhoosh(meta.station[0])
     })
   })
 }
@@ -298,6 +302,9 @@ export function strikeSet(): string {
   clearTimers()
   state.active = false
   state.beat = -1
+  wrapChord()
+  // Lights up — the wrap brings the room back.
+  setRoomDim(0)
 
   for (const name of [SIGN, HERO, PEDESTAL]) {
     enqueuePacket(packet('AssetAnimator', {

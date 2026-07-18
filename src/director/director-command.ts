@@ -28,6 +28,8 @@ export async function submitDirectorCommand(
     commandId?: string
     log?: DirectorLogFn
     onNoResponse?: () => void
+    /** Point + speak: the object the director is physically aiming at. */
+    targetHint?: { id: string; name: string }
   }
 ): Promise<SubmitDirectorResult> {
   const trimmed = text.trim()
@@ -59,6 +61,7 @@ export async function submitDirectorCommand(
   const sent = await socket.sendUserCommand(trimmed, {
     forceVision: opts?.forceVision,
     commandId,
+    targetHint: opts?.targetHint,
   })
   if (sent) {
     log?.('DIRECTOR', trimmed)

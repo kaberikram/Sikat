@@ -16,6 +16,7 @@
 import * as THREE from 'three'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
+import { getAimedObject } from './aim-picker'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 const SLATE_W = 0.14
@@ -200,9 +201,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        // Idle: the SET DAY shot list coaches the next cue.
+        // Idle: point lock-on wins, then the SET DAY shot list, then onboarding.
+        const aim = getAimedObject()
         const hint = bodyText ? null : currentDemoHint()
-        line = bodyText || hint || 'say “crew, set the stage”'
+        line = bodyText
+          || (aim ? `▸ ${aim.name} — say “make this…”` : null)
+          || hint
+          || 'say “crew, set the stage”'
         ghost = !bodyText
       }
 
@@ -290,8 +295,9 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           repaint(true)
         }
       } else if (st === 'idle') {
-        // Shot-list coaching: repaint when the demo beat advances.
-        const hint = isDemoActive() ? currentDemoHint() : null
+        // Repaint when the demo beat advances or the aim lock changes.
+        const aim = getAimedObject()
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}`
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)
