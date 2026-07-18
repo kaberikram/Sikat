@@ -202,7 +202,7 @@ function failVoiceSession(error: string): void {
   handlers.onError?.(error)
 }
 
-function getSharedAudioContext(): AudioContext {
+export function getSharedAudioContext(): AudioContext {
   if (!sharedAudioCtx) {
     // Native hardware rate — no resampling; Deepgram is told the real rate.
     sharedAudioCtx = new AudioContext()

@@ -8,6 +8,7 @@
 import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
 import { liveTargetPosition, packetTargetPosition } from './cursor-targets'
 import { markFirstApply, markFirstCursorMove, markFirstPreview, markFirstRefinement } from './latency'
+import { crewWhoosh } from './sound'
 import {
   presenceStore,
   stationFor,
@@ -108,8 +109,10 @@ function resolvePending(commandId: string | null | undefined, agent: string): vo
     pendingAnchors.get(commandId) ??
     pendingAnchorPosition()
   pendingAnchors.delete(commandId)
+  const wasVisible = Boolean(presence.agents[agent]?.active)
   presence.appearAt(agent, pos)
   presence.clearPending(commandId)
+  if (!wasVisible && cursorVisible(agent)) crewWhoosh(pos[0])
 }
 
 /** Arm pending tracking. The anonymous cursor only appears after a short delay

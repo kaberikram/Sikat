@@ -17,6 +17,8 @@ import {
   setRuntimeLogger,
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
+import { currentDemoHint } from './demo-shoot'
+import { isSoundEnabled, setSoundEnabled } from './sound'
 import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
@@ -128,6 +130,7 @@ export function DirectorPod() {
   const [isProcessingCommand, setIsProcessingCommand] = useState(false)
   /** Latest direct director answer (or miss) — legible at a glance, not buried in the log. */
   const [directorLine, setDirectorLine] = useState<{ text: string; kind: 'reply' | 'miss' } | null>(null)
+  const [soundOn, setSoundOn] = useState(isSoundEnabled())
   const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -432,6 +435,13 @@ export function DirectorPod() {
                 {cmd.label} ({cmd.hotkey.toUpperCase()})
               </button>
             ))}
+            <button
+              type="button"
+              className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
+              onClick={() => { setSoundEnabled(!soundOn); setSoundOn(!soundOn) }}
+            >
+              Sound {soundOn ? 'ON' : 'OFF'}
+            </button>
           </div>
         )}
         <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col">
@@ -623,7 +633,7 @@ export function DirectorPod() {
                 ? 'listening…'
                 : isProcessingCommand
                   ? 'crew is working…'
-                  : PLACEHOLDERS[placeholderIdx])
+                  : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
             }
             className="flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0"
           />

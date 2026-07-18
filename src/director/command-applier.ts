@@ -25,6 +25,7 @@ import {
 } from '../motion-composite'
 import { buildSpawnMesh } from './spawn-factory'
 import { callStoreAction } from './store-action-bridge'
+import { spawnPop } from './sound'
 import { startTween, cancelTween, retargetTween } from './tween'
 import { getEaseFn } from '../easing'
 import { patchCameraPostSection } from '../post-processing'
@@ -276,6 +277,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
         stage.position[1] + 0.5,
         stage.position[2],
       ]
+      const targetScale: Vec3 = p.scale ?? [1, 1, 1]
       st.addObject({
         id: p.id ?? undefined,
         name,
@@ -283,8 +285,24 @@ export function applyCommandPacket(packet: CommandPacket): string {
         mesh,
         position: spawnPos,
         rotation: p.rotation ?? [0, 0, 0],
-        scale: p.scale ?? [1, 1, 1],
+        scale: targetScale,
       })
+      // Entrance pop: new props scale in instead of blinking into existence.
+      spawnPop()
+      const spawned = useEditorStore.getState().objects.find((o) => o.mesh === mesh)
+      if (spawned) {
+        useEditorStore.getState().updateObject(spawned.id, {
+          scale: [targetScale[0] * 0.01, targetScale[1] * 0.01, targetScale[2] * 0.01],
+        })
+        startTween({
+          key: `${spawned.id}:scale`,
+          from: [targetScale[0] * 0.01, targetScale[1] * 0.01, targetScale[2] * 0.01],
+          to: [...targetScale],
+          durationSec: 0.35,
+          easing: 'easeOut',
+          set: (v) => useEditorStore.getState().updateObject(spawned.id, { scale: v as Vec3 }),
+        })
+      }
       return `spawned ${name}`
     }
 

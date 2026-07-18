@@ -1,3 +1,4 @@
+import { startSetDay, strikeSet } from './demo-shoot'
 import { useEditorStore } from '../store'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands'
 
@@ -92,6 +93,14 @@ export function tryLocalCommand(text: string): LocalCommandResult {
   if (!t) return { handled: false }
 
   const store = useEditorStore.getState()
+
+  // SET DAY demo cues — fully offline, deterministic.
+  if (/^(crew,?\s*)?(set|build|dress)\s+the\s+(stage|set)\b/.test(t) || /^set day$/.test(t)) {
+    return { handled: true, message: startSetDay() }
+  }
+  if (/^(crew,?\s*)?strike\s+the\s+set\b/.test(t)) {
+    return { handled: true, message: strikeSet() }
+  }
 
   const transport = tryTransport(t)
   if (transport) return transport

@@ -441,6 +441,12 @@ def _history_section() -> str:
     hist = session_context.history()
     recent = list(session.recent_notes)
     parts: list[str] = []
+    pointed = session.pointed_target()
+    if pointed:
+        parts.append(
+            f'The director is PHYSICALLY POINTING at "{pointed}" right now — '
+            'any "this/that/it/there" in the command means that exact object.'
+        )
     if hist:
         lines = "\n".join(
             f'- "{ex.text}" -> {", ".join(ex.intent_summaries) or "(no action)"}'

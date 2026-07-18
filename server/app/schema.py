@@ -31,7 +31,7 @@ Vec3 = tuple[float, float, float]
 HexColor = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 Easing = Literal["linear", "easeIn", "easeOut", "easeInOut"]
 FxSection = Literal["bloom", "pixelate", "cellShading", "glitch", "dither"]
-Primitive = Literal["box", "sphere", "cone", "cylinder", "torus", "plane", "text"]
+Primitive = Literal["box", "sphere", "cone", "cylinder", "torus", "plane", "text", "sneaker"]
 AgentName = Literal[
     "Producer",
     "DirectorsAssistant",
@@ -496,6 +496,8 @@ class UserCommand(BaseModel):
     commandId: str | None = None
     scene: SceneState | None = None
     frame: SceneFrame | None = None
+    # Point + speak: the object the director is physically aiming at (XR).
+    targetHint: Target | None = None
 
 
 class TelemetryPose(BaseModel):

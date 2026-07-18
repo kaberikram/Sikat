@@ -57,6 +57,25 @@ Steps 1–2 of the desktop phase are the architectural investment that makes Pha
   - `DITHER` — Bayer-dithered, quantized color with optional monochrome
 - **JSON export** of the full scene (transforms, keyframes, FX settings)
 
+## SET DAY — the guided demo shoot
+
+A fully offline, end-to-end demo of the whole platform. Works on desktop
+(typed) and on Quest 3 (spoken, camcorder in hand). Say each cue and the set
+answers; the slate (XR) / input placeholder (desktop) coaches the next line.
+
+1. **"crew, set the stage"** — the crew rolls in one by one (GAFFER, ANIMATOR,
+   VFX), then builds a product set around you: mood lighting, pedestal, hero
+   sneaker with a slow turntable spin, glowing sign.
+2. **"golden hour"** — the gaffer relights the set warm.
+3. **"make the sneaker float"** — the hero lifts into a hover.
+4. **"action"** — you're rolling; walk the set and film with the camcorder
+   (trigger = REC on Quest).
+5. **"and cut"** — the take ends and replays on the review monitor.
+6. **"strike the set"** — the crew clears the stage and restores the lights.
+
+Every beat runs through the same command pipeline as real directing — nothing
+is pre-rendered. Between beats, any other voice command works as usual.
+
 ## Tech Stack
 
 - **React 19** + **TypeScript** + **Vite**

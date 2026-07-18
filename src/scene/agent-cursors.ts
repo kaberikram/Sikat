@@ -28,6 +28,17 @@ import { drawGlassCard, drawPill, makeCanvasTexture, XR_UI } from './xr/xr-ui-ch
 import { getCursorStatusVisibility } from './agent-cursor-status'
 import { dampToward } from './opacity-damp'
 
+/** Film-set badge names — display only; agent ids stay canonical everywhere. */
+const DISPLAY_NAMES: Record<string, string> = {
+  AssetAnimator: 'ANIMATOR',
+  LightingTech: 'GAFFER',
+  VFXOperator: 'VFX',
+}
+
+function displayNameFor(agent: string): string {
+  return DISPLAY_NAMES[agent] ?? agent
+}
+
 const HOVER_HEIGHT = 1.15
 const STATUS_SLOT_Y = 0.46
 const LABEL_Y = 0.82
@@ -284,7 +295,7 @@ function buildCursor(agent: string, seed: number): Cursor {
   group.add(outline)
   group.add(cone)
 
-  const { sprite, material: labelMat } = makeLabel(agent, color)
+  const { sprite, material: labelMat } = makeLabel(displayNameFor(agent), color)
   sprite.position.set(0, LABEL_Y, 0)
   group.add(sprite)
 
@@ -540,10 +551,14 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
       }
 
       const bob = REDUCE_MOTION ? 0 : Math.sin(now / 320 + cursor.seed) * 0.05
+      // Slow, tiny station drift so an idle crew never reads as frozen.
+      // Small enough (~6cm) to be invisible during flights.
+      const driftX = REDUCE_MOTION ? 0 : Math.sin(now / 4700 + cursor.seed * 3.1) * 0.06
+      const driftZ = REDUCE_MOTION ? 0 : Math.cos(now / 5600 + cursor.seed * 2.3) * 0.06
       cursor.group.position.set(
-        cursor.base.x,
+        cursor.base.x + driftX,
         cursor.base.y + HOVER_HEIGHT + bob,
-        cursor.base.z
+        cursor.base.z + driftZ
       )
       cursor.group.scale.setScalar(1)
       cursor.coneMat.opacity = cursor.opacity

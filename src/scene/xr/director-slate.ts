@@ -14,7 +14,9 @@
  * inside the XR render loop).
  */
 import * as THREE from 'three'
+import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
+import { getAimedObject } from './aim-picker'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 const SLATE_W = 0.14
@@ -104,6 +106,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let lastPaint = 0
   let holdUntil = 0
   let pulsePhase = 0
+  let lastHint: string | null = null
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
   const mat = new THREE.MeshBasicMaterial({
@@ -198,7 +201,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        line = bodyText || 'say a direction…'
+        // Idle: point lock-on wins, then the SET DAY shot list, then onboarding.
+        const aim = getAimedObject()
+        const hint = bodyText ? null : currentDemoHint()
+        line = bodyText
+          || (aim ? `▸ ${aim.name} — say “make this…”` : null)
+          || hint
+          || 'say “crew, set the stage”'
         ghost = !bodyText
       }
 
@@ -283,6 +292,14 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           state = 'idle'
           bodyText = ''
           holdUntil = 0
+          repaint(true)
+        }
+      } else if (st === 'idle') {
+        // Repaint when the demo beat advances or the aim lock changes.
+        const aim = getAimedObject()
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}`
+        if (hint !== lastHint) {
+          lastHint = hint
           repaint(true)
         }
       }

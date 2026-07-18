@@ -157,7 +157,11 @@ export class DirectorSocket {
   /** Returns the commandId used, or null when the socket is not open. */
   async sendUserCommand(
     text: string,
-    opts?: { forceVision?: boolean; commandId?: string }
+    opts?: {
+      forceVision?: boolean
+      commandId?: string
+      targetHint?: { id: string; name: string }
+    }
   ): Promise<string | null> {
     const commandId = opts?.commandId ?? newCommandId()
     const attachVision = opts?.forceVision === true || shouldAttachVision(text)
@@ -169,6 +173,7 @@ export class DirectorSocket {
       commandId,
       scene: { type: 'scene_state', timestamp: Date.now() / 1000, ...buildFullSnapshot() },
       ...(frame ? { frame } : {}),
+      ...(opts?.targetHint ? { targetHint: opts.targetHint } : {}),
     })
     return sent ? commandId : null
   }

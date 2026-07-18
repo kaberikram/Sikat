@@ -15,6 +15,7 @@ import { setupPicking } from './setup-picking'
 import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
 import { createAgentCursors } from './agent-cursors'
 import { createStageMarker, disposeStageMarker } from './stage-marker'
+import { initEntrySequence } from './xr/entry-sequence'
 import { bindFlyControls } from './fly-controls'
 import { createCamcorderRig } from './xr/camcorder-rig'
 import { createReviewScreen } from './xr/review-screen'
@@ -168,6 +169,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     reviewScreen.showAfterTake(takeStart, takeEnd, head)
   })
   camcorderRig.setSuppressRec(() => reviewScreen.isOpen())
+  initEntrySequence(scene, camcorderRig.xrInput.xrOrigin.head, stageMarker)
   const disposeXr = initXrSession(mainRenderer, camcorderRig)
 
   const stopAnimate = createAnimateLoop({
