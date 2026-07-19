@@ -95,3 +95,23 @@ test('freeform text falls through to the server path', () => {
   assert.equal(parseOfflineClauses('paint everything like a monet'), null)
   assert.equal(parseOfflineClauses(''), null)
 })
+
+import { WRAP_CUE_RE, MONITOR_RECALL_RE } from './local-grammar.ts'
+
+test('wrap cues match, near-misses do not', () => {
+  for (const cue of ["that's a wrap", 'thats a wrap', 'wrap it up', 'exit xr', 'exit the headset', 'leave the set', 'wrap for today']) {
+    assert.ok(WRAP_CUE_RE.test(cue), `should match: "${cue}"`)
+  }
+  for (const miss of ['wrap the sandwich', "that's a wrap party", 'exit strategy', 'wrap']) {
+    assert.equal(WRAP_CUE_RE.test(miss), false, `must not match: "${miss}"`)
+  }
+})
+
+test('monitor recall cues match, near-misses do not', () => {
+  for (const cue of ["where's the monitor", 'where is the monitor', 'show me the take', 'bring back the review', 'show the replay']) {
+    assert.ok(MONITOR_RECALL_RE.test(cue), `should match: "${cue}"`)
+  }
+  for (const miss of ['monitor the situation', 'show me around', 'take five']) {
+    assert.equal(MONITOR_RECALL_RE.test(miss), false, `must not match: "${miss}"`)
+  }
+})

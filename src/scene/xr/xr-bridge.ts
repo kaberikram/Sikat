@@ -1,5 +1,27 @@
 let enterXrSession: (() => Promise<void>) | null = null
 let endXrSessionFn: (() => Promise<void>) | null = null
+let stagePlacer: (() => void) | null = null
+let reviewRecall: (() => boolean) | null = null
+
+/** The camcorder rig registers this; places the stage in front of the user's head. */
+export function registerStagePlacer(fn: (() => void) | null): void {
+  stagePlacer = fn
+}
+
+/** No-op outside an active XR session (nothing registered). */
+export function placeStageAtUser(): void {
+  stagePlacer?.()
+}
+
+/** The review screen registers this; re-places the take monitor in front of the head. */
+export function registerReviewRecall(fn: (() => boolean) | null): void {
+  reviewRecall = fn
+}
+
+/** True when a take monitor was open and got recalled. */
+export function recallReviewScreen(): boolean {
+  return reviewRecall?.() ?? false
+}
 
 export function registerXrSessionEntry(fn: (() => Promise<void>) | null): void {
   enterXrSession = fn

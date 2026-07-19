@@ -5,7 +5,7 @@ import { DirectorPod } from './director/DirectorPod'
 import { TimelineOverlay } from './ui/timeline-overlay'
 import { ObjectsOverlay } from './ui/objects-overlay'
 import { ExportOverlay } from './ui/export-overlay'
-import { Toasts } from './ui/toast'
+import { Toasts, pushToast } from './ui/toast'
 import { Button } from './ui/button'
 import { useMountEffect } from './hooks/useMountEffect'
 import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
@@ -23,16 +23,22 @@ export const Editor: React.FC = () => {
   })
 
   async function handleEnterXr(): Promise<void> {
+    const st = useEditorStore.getState()
     try {
       // Ask for mic access here, before going immersive: the permission
       // dialog can't render once inside the XR session on headset browsers
       // (e.g. Meta Quest Browser), so push-to-talk would otherwise silently
       // fail with no trigger to grant it. Request unconditionally —
       // getUserMedia is independent of SpeechRecognition feature detection.
-      await requestMicPermission()
+      // A denial never blocks XR entry; the slate guides the user instead.
+      st.setMicGranted(await requestMicPermission())
       await requestXrSession()
+      st.setXrError(null)
     } catch (err) {
       console.error('XR session failed', err)
+      const message = 'Headset session failed — check the headset is connected and the browser has XR permission.'
+      st.setXrError(message)
+      pushToast(message)
     }
   }
 
@@ -41,6 +47,7 @@ export const Editor: React.FC = () => {
       await endXrSession()
     } catch (err) {
       console.error('XR exit failed', err)
+      pushToast('Could not end the XR session cleanly — remove the headset or reload.')
     }
   }
 

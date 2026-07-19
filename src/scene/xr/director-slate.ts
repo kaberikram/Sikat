@@ -18,6 +18,7 @@ import { getLatestSuggestion } from '../../director/agent-runtime'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
 import { getAimedObject } from './aim-picker'
+import { currentCoachHint } from './xr-coach'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 const SLATE_W = 0.14
@@ -36,6 +37,8 @@ export interface DirectorSlate {
   setReply: (text: string) => void
   setMisheard: () => void
   setOffline: (on: boolean) => void
+  /** Sticky guidance line (e.g. "pick up the right controller") — cleared explicitly. */
+  setNotice: (text: string | null) => void
   setLevel: (level: number) => void
   /** Per-frame tick from the rig — drives pulse/level animation repaints. */
   update: (nowMs: number) => void
@@ -102,6 +105,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let state: SlateState = 'idle'
   let interim = ''
   let bodyText = ''
+  let notice: string | null = null
   let offline = false
   let smoothedLevel = 0
   let lastPaint = 0
@@ -202,16 +206,19 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        // Idle priority: point lock-on > crew suggestion > shot list > onboarding.
+        // Idle priority: sticky notice > point lock-on > crew suggestion >
+        // first-run coach > shot list > onboarding fallback.
         const aim = getAimedObject()
         const suggestion = getLatestSuggestion()
         const hint = bodyText ? null : currentDemoHint()
-        line = bodyText
+        line = notice
+          || bodyText
           || (aim ? `▸ ${aim.name} — say “make this…”` : null)
           || (suggestion ? `💡 ${suggestion.text} — say “do it”` : null)
+          || currentCoachHint(nowMs)
           || hint
           || 'say “crew, set the stage”'
-        ghost = !bodyText
+        ghost = !bodyText && !notice
       }
 
       ctx.fillStyle = ghost ? XR_UI.inkSoft : XR_UI.ink
@@ -281,6 +288,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       offline = on
       repaint(true)
     },
+    setNotice: (text) => {
+      if (text === notice) return
+      notice = text
+      repaint(true)
+    },
     setLevel: (next) => {
       // Fast attack, slow release — bars feel alive without flicker.
       smoothedLevel = next > smoothedLevel ? next : smoothedLevel * 0.85 + next * 0.15
@@ -298,10 +310,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           repaint(true)
         }
       } else if (st === 'idle') {
-        // Repaint when the demo beat, aim lock, or live suggestion changes.
+        // Repaint when the demo beat, aim lock, suggestion, or coach line changes.
         const aim = getAimedObject()
         const suggestion = getLatestSuggestion()
-        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}`
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}|${currentCoachHint(performance.now()) ?? ''}`
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)

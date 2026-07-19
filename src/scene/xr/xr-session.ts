@@ -68,6 +68,9 @@ export function initXrSession(
     priorCameraOpMode = useEditorStore.getState().cameraOpMode
     const session = await requestImmersiveSession()
     activeSession = session
+    // 'opaque' = no passthrough (immersive-vr fallback) — the rig tells the
+    // user once so a black world reads as a mode, not a bug.
+    useEditorStore.getState().setXrBlendOpaque(session.environmentBlendMode === 'opaque')
     forceLegacyXrLayerIfNeeded(session, renderer.getContext())
     await renderer.xr.setSession(session)
     rig.bindSession(session)

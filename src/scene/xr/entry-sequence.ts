@@ -44,6 +44,12 @@ let startedAt = 0
 let dimTarget = 0
 let dimLevel = 0
 
+// One-shot "stage locks in" ripple — fired when the stage re-places mid-session.
+let lockRipple: THREE.Mesh | null = null
+let lockRippleMat: THREE.MeshBasicMaterial | null = null
+let lockStartedAt = 0
+const LOCK_PULSE_MS = 700
+
 const easeOut = (t: number) => 1 - (1 - t) ** 3
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
 /** 0→1→0 window between a and b with soft edges. */
@@ -172,12 +178,47 @@ export function setRoomDim(level: number): void {
   dimTarget = clamp01(level)
 }
 
+/** "Stage locks in" — a quick ripple at the (re-)placed stage position. */
+export function playStageLockPulse(): void {
+  if (!refs) return
+  disposeMesh(lockRipple)
+  const stage = useEditorStore.getState().stage
+  lockRippleMat = new THREE.MeshBasicMaterial({
+    color: XR_UI.mintDeep,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  })
+  lockRipple = new THREE.Mesh(new THREE.RingGeometry(0.94, 1.0, 64), lockRippleMat)
+  lockRipple.rotation.x = -Math.PI / 2
+  lockRipple.position.set(stage.position[0], stage.position[1] + 0.005, stage.position[2])
+  lockRipple.renderOrder = 5
+  tagSceneInfrastructure(lockRipple)
+  setEditorLayer(lockRipple)
+  refs.scene.add(lockRipple)
+  lockStartedAt = performance.now()
+}
+
 export function updateEntrySequence(now: number, delta: number): void {
   // Dome ambience runs for the whole session, not just the entry beat.
   if (domeMat) {
     dimLevel += (dimTarget - dimLevel) * Math.min(1, delta * 3)
     domeMat.opacity = dimLevel
   }
+  if (lockRipple && lockRippleMat) {
+    const lt = (now - lockStartedAt) / LOCK_PULSE_MS
+    if (lt >= 1) {
+      disposeMesh(lockRipple)
+      lockRipple = null
+      lockRippleMat = null
+    } else {
+      const s = 1 + easeOut(lt) * 1.6
+      lockRipple.scale.set(s, s, s)
+      lockRippleMat.opacity = 0.5 * (1 - lt)
+    }
+  }
+
   if (!running || !refs) return
 
   const t = (now - startedAt) / ENTRY_MS // 0..1 over 5s
@@ -267,6 +308,9 @@ export function disposeEntrySequence(): void {
   dimTarget = 0
   dimLevel = 0
   disposeEntryObjects()
+  disposeMesh(lockRipple)
+  lockRipple = null
+  lockRippleMat = null
   disposeMesh(dome)
   dome = null
   domeMat = null

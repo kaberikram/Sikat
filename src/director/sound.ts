@@ -171,3 +171,37 @@ export function wrapChord(): void {
     toneVoice(s.ctx, s.out, t0 + i * 0.12, { type: 'sine', from: freq, peak: 0.16, attack: 0.04, decay: 0.9 })
   })
 }
+
+/** Push-to-talk opens — two quick rising notes, quiet and close. */
+export function listenStart(): void {
+  const s = ready()
+  if (!s) return
+  const t0 = s.ctx.currentTime
+  toneVoice(s.ctx, s.out, t0, { type: 'sine', from: 660, peak: 0.09, attack: 0.008, decay: 0.07 })
+  toneVoice(s.ctx, s.out, t0 + 0.09, { type: 'sine', from: 880, peak: 0.11, attack: 0.008, decay: 0.09 })
+}
+
+/** Release-to-send — a soft falling whoosh as the line goes to the crew. */
+export function listenEnd(): void {
+  const s = ready()
+  if (!s) return
+  const t0 = s.ctx.currentTime
+  noiseVoice(s.ctx, s.out, t0, { type: 'bandpass', from: 1600, to: 500, q: 2, peak: 0.14, attack: 0.02, decay: 0.22 })
+}
+
+/** The director answered — mint two-note ding, distinct from beatTick. */
+export function replyChime(): void {
+  const s = ready()
+  if (!s) return
+  const t0 = s.ctx.currentTime
+  toneVoice(s.ctx, s.out, t0, { type: 'sine', from: 880, peak: 0.12, attack: 0.008, decay: 0.18 })
+  toneVoice(s.ctx, s.out, t0 + 0.09, { type: 'sine', from: 1175, peak: 0.1, attack: 0.008, decay: 0.22 })
+}
+
+/** Didn't catch that — one gentle low note, never punitive. */
+export function missedBuzz(): void {
+  const s = ready()
+  if (!s) return
+  const t0 = s.ctx.currentTime
+  toneVoice(s.ctx, s.out, t0, { type: 'triangle', from: 220, to: 180, peak: 0.1, attack: 0.015, decay: 0.2 })
+}

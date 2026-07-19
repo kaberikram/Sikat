@@ -16,11 +16,16 @@ import {
   startVoiceSession,
   stopVoiceSession,
 } from '../../director/voice-session'
+import { beatTick, listenEnd, listenStart, missedBuzz, replyChime } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { clearAimPick, getAimedObject, setAimChangeListener, updateAimPick } from './aim-picker'
 import { createDirectorSlate } from './director-slate'
-import { startEntrySequence } from './entry-sequence'
+import { playStageLockPulse, startEntrySequence } from './entry-sequence'
+import { doublePulse, pulse } from './haptics'
+import { computeStagePose, isHeadPoseValid, shouldReplaceStage, type V3 } from './stage-placement'
+import { registerStagePlacer } from './xr-bridge'
+import { noteCoachAction, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
 /**
@@ -125,6 +130,7 @@ export function createCamcorderRig(
       aimRayMat.color.set(0x57cfa0)
       aimTipMat.color.set(0x57cfa0)
       aimTip.scale.setScalar(1.8)
+      pulse(padRef, 0.25, 20)
     } else {
       aimRayMat.color.set(0xff3300)
       aimTipMat.color.set(0xffee00)
@@ -150,6 +156,7 @@ export function createCamcorderRig(
     if (!useEditorStore.getState().xrActive) return
     if (msg.kind === 'miss') {
       thinkingLine = null
+      missedBuzz()
       directorSlate.setMisheard()
       return
     }
@@ -159,6 +166,7 @@ export function createCamcorderRig(
       msg.forCommandId
     ) {
       thinkingLine = null
+      replyChime()
       directorSlate.setReply(msg.message)
     }
   })
@@ -179,21 +187,80 @@ export function createCamcorderRig(
   const euler = new THREE.Euler(0, 0, 0, 'XYZ')
   const aimQuat = new THREE.Quaternion()
 
+  const headPos = new THREE.Vector3()
+  const headQuat = new THREE.Quaternion()
+  const headForward = new THREE.Vector3()
+
+  /** Session entry waits for the first tracked head pose — placing the stage
+   *  (and the entry cinematic) from the identity pose puts everything at the
+   *  guardian center instead of in front of the user. */
+  let pendingEntry = false
+  /** Last frame's right pad — button handlers fire outside update()'s scope. */
+  let padRef: ReturnType<typeof getRightPad> = null
+  let padMissingSec = 0
+  let controllerNoticeShown = false
+
+  function getRightPad() {
+    return xrInput.gamepads.right ?? null
+  }
+
+  function readHeadPose(): { pos: V3; forward: V3 } {
+    const head = xrInput.xrOrigin.head
+    head.updateWorldMatrix(true, false)
+    head.getWorldPosition(headPos)
+    head.getWorldQuaternion(headQuat)
+    headForward.set(0, 0, -1).applyQuaternion(headQuat)
+    return {
+      pos: [headPos.x, headPos.y, headPos.z],
+      forward: [headForward.x, headForward.y, headForward.z],
+    }
+  }
+
+  /** Move the stage in front of the user (only after a real move) — the whole
+   *  set, entry ripple, and crew stations follow the store's stage anchor. */
+  function placeStageAtCurrentUser(): void {
+    const { pos, forward } = readHeadPose()
+    if (!isHeadPoseValid(pos)) return
+    const st = useEditorStore.getState()
+    if (!shouldReplaceStage(pos, forward, st.stage.position)) return
+    st.updateStage({ position: computeStagePose(pos, forward).position })
+    playStageLockPulse()
+    beatTick()
+  }
+  registerStagePlacer(placeStageAtCurrentUser)
+
   function toggleRecord(): void {
-    if (suppressRec?.()) return
+    if (suppressRec?.()) {
+      // The review monitor owns the trigger right now — say so, don't go mute.
+      missedBuzz()
+      pulse(padRef, 0.3, 40)
+      directorSlate.setLastSent('dismiss the monitor to roll again')
+      return
+    }
     const st = useEditorStore.getState()
     if (st.isRolling) {
       const takeStart = st.takeStartTime
+      const takeNumber = st.takeNumber
       st.endTake()
+      doublePulse(padRef, 0.5, 40)
       const takeEnd = useEditorStore.getState().currentTime
       onTakeEnded?.(takeStart, takeEnd, xrInput.xrOrigin.head)
+      directorSlate.setLastSent(`take ${takeNumber} saved to the timeline — export on desktop`)
       return
     }
     st.startTake()
+    pulse(padRef, 0.8, 70)
+    noteCoachAction('rec')
   }
 
   function beginTalk(): void {
+    if (useEditorStore.getState().micGranted === false) {
+      missedBuzz()
+      directorSlate.setLastSent('mic blocked — allow it on desktop, then re-enter XR')
+      return
+    }
     if (!isSpeechAvailable()) {
+      missedBuzz()
       directorSlate.setLastSent(
         useEditorStore.getState().xrActive && !isDeepgramConfigured()
           ? 'voice needs Deepgram key'
@@ -201,20 +268,33 @@ export function createCamcorderRig(
       )
       return
     }
+    listenStart()
+    pulse(padRef, 0.3, 25)
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
     void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => directorSlate.setInterim(text),
       onLevel: (level) => directorSlate.setLevel(level),
-      onError: (error) => directorSlate.setLastSent(
-        error === 'voice needs Deepgram key' ? error : `voice error: ${error}`
-      ),
+      onError: (error) => {
+        missedBuzz()
+        directorSlate.setLastSent(
+          error === 'voice needs Deepgram key'
+            ? error
+            : error === 'not-allowed'
+              ? 'mic blocked — allow it on desktop, then re-enter XR'
+              : error === 'network'
+                ? 'voice needs internet — check the link'
+                : `voice error: ${error}`
+        )
+      },
       onFinal: (transcript) => {
         const line = transcript.trim()
         if (!line) {
+          missedBuzz()
           directorSlate.setMisheard()
           return
         }
+        noteCoachAction('talk')
         const commandId = newCommandId()
         directorSlate.setThinking(true)
         thinkingLine = line
@@ -260,7 +340,11 @@ export function createCamcorderRig(
   function endTalk(): void {
     // Graceful finish: the final transcript lands *after* release, so keep
     // handlers alive while it drains.
-    if (isVoiceListening()) finishVoiceSession()
+    if (isVoiceListening()) {
+      listenEnd()
+      pulse(padRef, 0.2, 20)
+      finishVoiceSession()
+    }
     directorSlate.setListening(false)
     directorSlate.setInterim('')
   }
@@ -315,7 +399,43 @@ export function createCamcorderRig(
     xrInput.update(xrManager, delta, timeSec)
     setEditorLayer(xrInput.xrOrigin)
 
+    // Entry waits for real head tracking: place the stage ahead of the user,
+    // then roll the cinematic (ripple/title read the freshly placed stage).
+    if (pendingEntry) {
+      const { pos, forward } = readHeadPose()
+      if (isHeadPoseValid(pos)) {
+        pendingEntry = false
+        useEditorStore.getState().updateStage({
+          position: computeStagePose(pos, forward).position,
+        })
+        startEntrySequence()
+        startXrCoach(timeSec * 1000)
+        if (useEditorStore.getState().xrBlendOpaque) {
+          directorSlate.setLastSent('VR mode — no passthrough here')
+        }
+      }
+    }
+
     const pad = xrInput.gamepads.right
+    padRef = pad ?? null
+
+    // Right controller is the whole rig — say so when it goes missing
+    // (hands, left-only, tracking loss) instead of silently freezing.
+    if (!pad) {
+      padMissingSec += delta
+      if (padMissingSec > 1.5 && !controllerNoticeShown) {
+        controllerNoticeShown = true
+        directorSlate.setNotice('pick up the right controller')
+      }
+    } else {
+      padMissingSec = 0
+      if (controllerNoticeShown) {
+        controllerNoticeShown = false
+        directorSlate.setNotice(null)
+        beatTick()
+      }
+    }
+
     if (
       pad &&
       (pad.getButtonDown(InputComponent.Trigger) || pad.getSelectStart())
@@ -354,8 +474,11 @@ export function createCamcorderRig(
     screenMesh,
     xrInput,
     update,
-    // First boot: entering XR is an event — dim, ripple, motes, title.
-    bindSession: () => startEntrySequence(),
+    // First boot: entering XR is an event — but the cinematic (and stage
+    // placement) wait for the first tracked head pose in update().
+    bindSession: () => {
+      pendingEntry = true
+    },
     setTakeEndedHandler: (fn) => {
       onTakeEnded = fn
     },
@@ -365,6 +488,8 @@ export function createCamcorderRig(
     dispose: () => {
       offSlateLog()
       offSlatePacket()
+      registerStagePlacer(null)
+      stopXrCoach()
       setAimChangeListener(null)
       clearAimPick()
       stopVoiceSession()

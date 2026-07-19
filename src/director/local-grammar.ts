@@ -258,3 +258,13 @@ export function parseOfflineClauses(text: string): LocalPacketSpec[] | null {
   }
   return specs
 }
+
+/**
+ * In-headset session cues — kept here (pure) so tests can cover them.
+ * "that's a wrap" ends the XR session; the monitor cue recalls the take review.
+ */
+export const WRAP_CUE_RE =
+  /^(that'?s\s+a\s+wrap|wrap\s+it\s+up|wrap\s+for\s+today|exit\s+(?:xr|the\s+headset|headset|the\s+set)|leave\s+the\s+set)[!.]?$/
+
+export const MONITOR_RECALL_RE =
+  /^(?:where'?s|where\s+is|show(?:\s+me)?|bring(?:\s+back)?)\s+(?:the\s+)?(?:monitor|review|take|replay)[?!.]?$/
