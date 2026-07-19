@@ -594,11 +594,30 @@ def _parse_material(
     color = _find_color(clause)
     if not color:
         return None
-    ranked = rank_targets(clause, scene)
-    if ranked:
-        existing = ranked[0][0]
-    else:
-        existing = _find_scene_target(clause, scene)
+    # Point + speak: a physical aim resolves "it/that" outright.
+    existing: str | None = None
+    if _PRONOUN.search(clause):
+        existing = session_context.pointed_target()
+    if not existing:
+        ranked = rank_targets(clause, scene)
+        if len(ranked) >= 2 and is_ambiguous(ranked):
+            options = ambiguous_options(ranked)
+            return Intent(
+                action="clarify",
+                clarify_question=f"Which one should I recolor — {', '.join(options)}?",
+                clarify_options=options,
+            )
+        if ranked:
+            existing = ranked[0][0]
+        else:
+            # _find_scene_target only matches real scene objects — unlike
+            # _find_target, it never falls back to a bare primitive word
+            # ("make a blue cone" must still fall through to _parse_spawn
+            # when nothing named "cone" exists yet).
+            existing = _find_scene_target(clause, scene)
+    if not existing and _PRONOUN.search(clause):
+        # Pronoun ("make it gold") -> whatever the director last addressed.
+        existing = session_context.last_target()
     if not existing:
         return None
     intent = Intent(action="set_material", target=existing, color=color)

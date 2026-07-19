@@ -271,7 +271,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
   // One undo snapshot per command, before its first mutation. Transport and
   // raw store calls aren't undoable state.
   if (packet.command !== 'PLAYBACK' && packet.command !== 'CALL_STORE_ACTION') {
-    captureBefore(packet.commandId ?? 'local')
+    captureBefore(packet.commandId)
   }
 
   switch (packet.command) {

@@ -1,6 +1,7 @@
 """Grammar robustness against real STT output — digits in names, word
-numbers, substring targets, and spurious take-cuts."""
+numbers, substring targets, spurious take-cuts, and pronoun resolution."""
 from app.clause_handlers import parse_clause
+from app.session_context import SessionContext, bind_session, reset_session
 
 from tests.helpers import scene_with
 
@@ -103,3 +104,29 @@ def test_cut_the_bloom_does_not_end_take():
 def test_haircut_does_not_end_take():
     intent = parse_clause("give it a haircut", None)
     assert not _is_cut(intent)
+
+
+# ---- material/color commands must resolve pronouns, same as move ----
+
+def test_material_pronoun_resolves_to_last_target():
+    scene = scene_with("BOX_SPAWN")
+    ctx = SessionContext()
+    ctx.note_target("BOX_SPAWN")
+    token = bind_session(ctx)
+    try:
+        intent = parse_clause("make it gold", scene)
+        assert intent is not None
+        assert intent.action == "set_material"
+        assert intent.target == "BOX_SPAWN"
+        assert intent.color == "#ffd700"
+    finally:
+        reset_session(token)
+
+
+def test_material_without_pronoun_or_target_falls_through_to_spawn():
+    # "make a blue cone" must still spawn when nothing named "cone" exists —
+    # material parsing must not swallow it via a bare-primitive-word target.
+    intent = parse_clause("make a blue cone", None)
+    assert intent is not None
+    assert intent.action == "spawn"
+    assert intent.primitive == "cone"

@@ -29,6 +29,17 @@ def test_scale_preview_carries_scale():
     assert preview["scale"] == (1.5, 1.5, 1.5)
 
 
+def test_rotate_preview_carries_rotation():
+    import math
+
+    scene = scene_with("BOX")
+    preview = build_intent_preview("rotate the box 90 degrees", scene, "cmd5")
+    assert preview is not None
+    assert preview["action"] == "transform"
+    assert preview["mode"] == "relative"
+    assert preview["rotation"][1] == math.pi / 2
+
+
 def test_non_spatial_preview_has_no_ghost_fields():
     preview = build_intent_preview("enable bloom", None, "cmd4")
     assert preview is not None

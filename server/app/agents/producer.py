@@ -740,7 +740,7 @@ class Producer:
         return built
 
     def _resolve_pronoun_target(
-        self, intent: Intent, grammar_emitted: list[Intent]
+        self, intent: Intent, grammar_emitted: list[Intent], scene: SceneState | None = None
     ) -> Intent:
         if intent.action != "animate":
             return intent
@@ -749,7 +749,9 @@ class Producer:
             return intent
         for g in grammar_emitted:
             if g.action == "spawn":
-                return intent.model_copy(update={"target": default_spawn_name(g)})
+                # Must predict the same name AssetAnimator.build() will give
+                # this spawn in the same command, scene-uniqued identically.
+                return intent.model_copy(update={"target": default_spawn_name(g, scene)})
         pending = session_context.last_target()
         if pending:
             return intent.model_copy(update={"target": pending})
@@ -792,7 +794,7 @@ class Producer:
                 await emit_log(self.assistant.name, intent.say, "info")
             return []
 
-        working = self._resolve_pronoun_target(intent, grammar_emitted)
+        working = self._resolve_pronoun_target(intent, grammar_emitted, scene)
         return await self._emit_staged_intent(
             working,
             command_id,

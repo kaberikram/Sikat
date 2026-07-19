@@ -697,6 +697,7 @@ def intent_preview_message(
     motion: str | None = None,
     confidence: IntentPreviewConfidence = "grammar",
     position: Vec3 | None = None,
+    rotation: Vec3 | None = None,
     scale: Vec3 | None = None,
     mode: str | None = None,
     primitive: str | None = None,
@@ -717,6 +718,7 @@ def intent_preview_message(
     }
     for key, value in (
         ("position", position),
+        ("rotation", rotation),
         ("scale", scale),
         ("mode", mode),
         ("primitive", primitive),

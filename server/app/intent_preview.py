@@ -157,6 +157,8 @@ def build_intent_preview(
     if intent is not None:
         if intent.position is not None:
             preview["position"] = intent.position
+        if intent.rotation is not None:
+            preview["rotation"] = intent.rotation
         if intent.scale is not None:
             preview["scale"] = intent.scale
         if intent.mode is not None:
