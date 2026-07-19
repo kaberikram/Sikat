@@ -25,8 +25,20 @@ from ..schema import (
 from ..transitions import default_object_transition
 
 
-def default_spawn_name(intent: Intent) -> str:
-    return intent.name or f"{(intent.primitive or 'box').upper()}_SPAWN"
+def default_spawn_name(intent: Intent, scene: SceneState | None = None) -> str:
+    if intent.name:
+        return intent.name
+    base = f"{(intent.primitive or 'box').upper()}_SPAWN"
+    existing = {obj.name for obj in scene.objects} if scene else set()
+    if base not in existing:
+        return base
+    # A second unnamed spawn of the same primitive must not collide with the
+    # first — same name on two live objects breaks target resolution
+    # ("move the box" becomes ambiguous) and object-identity UI lists.
+    n = 2
+    while f"{base}_{n}" in existing:
+        n += 1
+    return f"{base}_{n}"
 
 
 class AssetAnimator:
@@ -39,7 +51,7 @@ class AssetAnimator:
                 SpawnObjectPacket(
                     payload=SpawnObjectPayload(
                         primitive=intent.primitive or "box",
-                        name=default_spawn_name(intent),
+                        name=default_spawn_name(intent, scene),
                         color=intent.color,
                         text=intent.text,
                         position=intent.position,

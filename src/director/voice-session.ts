@@ -77,6 +77,15 @@ let handlers: VoiceSessionHandlers = {}
 let finishTimer: ReturnType<typeof setTimeout> | null = null
 /** Bumped on every start — stale grace timers / late finals no-op when gen mismatches. */
 let sessionGen = 0
+/**
+ * Segments the engine has marked final, accumulated across the whole hold.
+ * Hold-to-talk contract: nothing is submitted until release — a mid-hold
+ * pause finalizing a segment must not fire a command early, and the words
+ * must not disappear from the display while you keep talking. Reset only at
+ * the top of startVoiceSession; a hard stop leaves it for the next start to
+ * clear, so a graceful finish that reads-then-stops is never raced.
+ */
+let finalSegments: string[] = []
 
 /** Minimal interface for the Deepgram SDK connection object. */
 interface DeepgramConnection {
@@ -99,6 +108,8 @@ const NATIVE_COOLDOWN_MS = 500
 let nativeCooldownUntil = 0
 
 const FINISH_GRACE_MS = 5000
+/** Backstop only — rec.stop() -> onend normally resolves in well under this. */
+const NATIVE_STOP_GRACE_MS = 800
 
 // ---- native path ----
 
@@ -186,6 +197,27 @@ function deepgramStop(): void {
     try { conn.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
     try { conn.close() } catch { /* ignore */ }
   }
+}
+
+function pushFinalSegment(text: string): void {
+  const t = text.trim()
+  if (t) finalSegments.push(t)
+}
+
+/** The full running transcript so far — confirmed segments plus the live tail. */
+function runningTranscript(ghost: string): string {
+  return [...finalSegments, ghost].filter(Boolean).join(' ')
+}
+
+/**
+ * The one and only submit point: called once the session is fully finished
+ * (release + grace drain, or a flushed native stop). `fv` is snapshotted by
+ * the caller before any teardown that might reset the module-level forceVision.
+ */
+function emitFinalAndReset(fv: boolean): void {
+  const text = finalSegments.join(' ').trim()
+  finalSegments = []
+  handlers.onFinal?.(text, { forceVision: fv })
 }
 
 function failVoiceSession(error: string): void {
@@ -286,13 +318,23 @@ async function deepgramStart(gen: number): Promise<void> {
         if (!alt || alt.transcript === undefined) return
         const transcript = (alt.transcript as string).trim()
         if (!transcript) return
-        if (message.is_final) handlers.onFinal?.(transcript, { forceVision })
-        else handlers.onInterim?.(transcript)
+        // Buffer — never submit mid-hold (see finalSegments doc comment).
+        if (message.is_final) {
+          pushFinalSegment(transcript)
+          handlers.onInterim?.(runningTranscript(''))
+        } else {
+          handlers.onInterim?.(runningTranscript(transcript))
+        }
       }
       if (message.type === 'UtteranceEnd') {
         // Speech ended. If the user already released push-to-talk (grace
         // drain), close out now instead of waiting the full grace window.
-        if (!listening && finishTimer) stopVoiceSession()
+        if (!listening && finishTimer) {
+          const fv = forceVision
+          clearFinishTimer()
+          stopVoiceSession()
+          emitFinalAndReset(fv)
+        }
       }
       if (message.type === 'Error') {
         console.warn('[voice] Deepgram error:', message.description)
@@ -430,9 +472,12 @@ export function stopVoiceSession(): void {
 export function finishVoiceSession(): void {
   if (!listening) return
   const gen = sessionGen
+  const fv = forceVision
   listening = false
   handlers.onListeningChange?.(false)
-  handlers.onInterim?.('')
+  // Keep the running transcript on screen through the drain — the words you
+  // just said shouldn't vanish the instant you release the button.
+  handlers.onInterim?.(runningTranscript(''))
 
   if (deepgramConnection) {
     const conn = deepgramConnection
@@ -440,22 +485,28 @@ export function finishVoiceSession(): void {
     clearFinishTimer()
     finishTimer = setTimeout(() => {
       if (gen !== sessionGen) return
-      if (deepgramConnection === conn) stopVoiceSession()
+      if (deepgramConnection === conn) {
+        stopVoiceSession()
+        emitFinalAndReset(fv)
+      }
     }, FINISH_GRACE_MS)
     return
   }
 
   if (recognition) {
     const rec = recognition
-    detachNativeRecognition()
     clearFinishTimer()
+    // Ask the engine to stop WITHOUT detaching handlers first — Chrome
+    // flushes one last final onresult (whatever you were mid-saying) before
+    // firing onend, and that handler (above) does the graceful submit. This
+    // backstop only covers onend never firing.
+    try { rec.stop() } catch { /* already stopped */ }
     finishTimer = setTimeout(() => {
       if (gen !== sessionGen) return
-      if (recognition === rec) return // already replaced by a new session
-      listening = false
-      handlers.onListeningChange?.(false)
-      handlers.onInterim?.('')
-    }, FINISH_GRACE_MS)
+      if (recognition === rec) detachNativeRecognition()
+      stopVoiceSession()
+      emitFinalAndReset(fv)
+    }, NATIVE_STOP_GRACE_MS)
   }
 }
 
@@ -464,7 +515,9 @@ export async function startVoiceSession(
   opts?: { forceVision?: boolean }
 ): Promise<void> {
   clearFinishTimer()
-  // Tear down any live or draining session.
+  // Tear down any live or draining session. A session mid-grace-drain is
+  // discarded here (hard cancel, matching a fresh press-and-hold) — only a
+  // clean release drains through to a submit.
   if (recognition || deepgramConnection) stopVoiceSession()
 
   sessionGen += 1
@@ -472,6 +525,7 @@ export async function startVoiceSession(
   handlers = next
   if (opts?.forceVision) forceVision = true
   listening = true
+  finalSegments = []
 
   const xrActive = useEditorStore.getState().xrActive
   if (xrActive && !isDeepgramAvailable() && getNativeSpeechRecognitionCtor() === null) {
@@ -493,10 +547,12 @@ export async function startVoiceSession(
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i]
         const transcript = result[0]?.transcript ?? ''
-        if (result.isFinal) handlers.onFinal?.(transcript, { forceVision })
+        // Buffer — never submit mid-hold. A natural pause finalizing a
+        // segment must not fire a command before you've released the button.
+        if (result.isFinal) pushFinalSegment(transcript)
         else ghost += transcript
       }
-      handlers.onInterim?.(ghost)
+      handlers.onInterim?.(runningTranscript(ghost))
     }
 
     rec.onerror = (event) => {
@@ -524,7 +580,13 @@ export async function startVoiceSession(
     rec.onend = () => {
       if (gen !== sessionGen || recognition !== rec) return
       if (!listening) {
+        // Graceful finish: rec.stop() already flushed any trailing final
+        // into finalSegments (onresult ran before onend) — submit now,
+        // faster than waiting for the backstop timer.
+        const fv = forceVision
+        clearFinishTimer()
         stopVoiceSession()
+        emitFinalAndReset(fv)
         return
       }
       // Chrome auto-ends on silence — restart while the mic is held open.

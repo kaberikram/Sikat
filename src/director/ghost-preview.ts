@@ -98,7 +98,7 @@ export function showGhost(msg: IntentPreviewMessage): void {
     return
   }
 
-  if (msg.action === 'transform' && msg.target && (msg.position || msg.scale)) {
+  if (msg.action === 'transform' && msg.target && (msg.position || msg.rotation || msg.scale)) {
     const obj = resolveTarget({ name: msg.target })
     if (!obj?.mesh) return
     const st = useEditorStore.getState()
@@ -117,7 +117,19 @@ export function showGhost(msg: IntentPreviewMessage): void {
           ]
     }
     root.position.set(pos[0], pos[1], pos[2])
-    root.rotation.set(sampled.rotation[0], sampled.rotation[1], sampled.rotation[2])
+
+    let rot: Vec3 = sampled.rotation
+    if (msg.rotation) {
+      // Relative rotation is additive, same as position (command-applier's combine()).
+      rot = msg.mode === 'absolute'
+        ? msg.rotation
+        : [
+            sampled.rotation[0] + msg.rotation[0],
+            sampled.rotation[1] + msg.rotation[1],
+            sampled.rotation[2] + msg.rotation[2],
+          ]
+    }
+    root.rotation.set(rot[0], rot[1], rot[2])
 
     let scale: Vec3 = sampled.scale
     if (msg.scale) {

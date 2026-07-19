@@ -297,6 +297,7 @@ export interface IntentPreviewMessage {
   confidence: IntentPreviewConfidence
   /** Spatial payload for ghost previews — what the crew understood, pre-commit. */
   position?: Vec3 | null
+  rotation?: Vec3 | null
   scale?: Vec3 | null
   mode?: 'absolute' | 'relative' | null
   primitive?: SpawnObjectPayload['primitive'] | null

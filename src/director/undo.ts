@@ -98,7 +98,11 @@ function snapshotObjects(objects: MotionObject[]): MotionObject[] {
 }
 
 /** Snapshot the undoable slice once per command, before the first mutation. */
-export function captureBefore(commandId: string): void {
+export function captureBefore(commandId: string | null | undefined): void {
+  // Packets without a commandId (e.g. camera telemetry mirrors) aren't a
+  // "command" a director issued — bucketing them under a shared fallback key
+  // would let the first one claim that slot forever and corrupt later undos.
+  if (!commandId) return
   if (stack.some((entry) => entry.commandId === commandId)) return
   const st = useEditorStore.getState()
   stack.push({
