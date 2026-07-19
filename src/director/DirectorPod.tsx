@@ -18,6 +18,7 @@ import {
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { currentDemoHint } from './demo-shoot'
+import { PLACEHOLDERS } from './local-grammar'
 import { isSoundEnabled, setSoundEnabled } from './sound'
 import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
@@ -64,13 +65,26 @@ const STATUS_COLORS: Record<SocketStatus, string> = {
   closed: '#ff3b30',
 }
 
-const PLACEHOLDERS = [
-  'add a red box then dim the lights',
-  'sunset mood',
-  'enable bloom',
-  'move the box up 2 over 3 seconds',
-  'show timeline',
-]
+/** Calm amber for "no server in this setup" — offline is a mode, not an error. */
+const LOCAL_CREW_COLOR = '#ffb020'
+
+const SEEN_SET_DAY_KEY = 'radio-edit:seen-set-day'
+
+function hasSeenSetDay(): boolean {
+  try {
+    return localStorage.getItem(SEEN_SET_DAY_KEY) === '1'
+  } catch {
+    return true
+  }
+}
+
+function markSetDaySeen(): void {
+  try {
+    localStorage.setItem(SEEN_SET_DAY_KEY, '1')
+  } catch {
+    // private mode — the chip just shows again next session
+  }
+}
 
 const LOG_CLASS: Record<LogEntry['level'], string> = {
   info: '',
@@ -131,6 +145,7 @@ export function DirectorPod() {
   /** Latest direct director answer (or miss) — legible at a glance, not buried in the log. */
   const [directorLine, setDirectorLine] = useState<{ text: string; kind: 'reply' | 'miss' } | null>(null)
   const [soundOn, setSoundOn] = useState(isSoundEnabled())
+  const [showCueChip, setShowCueChip] = useState(() => !hasSeenSetDay())
   const suggestionExpiryRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const pendingCommandIdsRef = useRef(new Set<string>())
   const pendingCommandTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
@@ -148,9 +163,11 @@ export function DirectorPod() {
 
   const stopMicRef = useRef<() => void>(() => {})
 
-  const socketConfigured = getDirectorSocket().isConfigured
   const speechAvailable = isSpeechAvailable()
   const hasContext = selectedId !== null
+  // Never-connected ≠ error: without a server the LOCAL CREW grammar runs the
+  // set, so the pod shows a calm amber mode instead of a red failure.
+  const offlineLocal = status !== 'open' && !getDirectorSocket().everConnected
 
   const pushLog = useCallback((source: string, text: string, level: LogEntry['level'] = 'info') => {
     setLog((prev) => [
@@ -360,6 +377,10 @@ export function DirectorPod() {
   ) => {
     const trimmed = text.trim()
     if (!trimmed) return
+    if (/set\s+the\s+(stage|set)\b|^set day$/i.test(trimmed)) {
+      markSetDaySeen()
+      setShowCueChip(false)
+    }
     const commandId = opts?.commandId ?? newCommandId()
     setInput('')
     setDirectorLine(null)
@@ -417,6 +438,35 @@ export function DirectorPod() {
       )}
       {isRolling && <RecReadout takeNumber={takeNumber} />}
       {isPlaying && !isRolling && <PlayReadout onClick={togglePlay} />}
+
+      <AnimatePresence>
+        {showCueChip && (
+          <motion.div
+            key="set-day-cue"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 26, delay: 0.8 }}
+            className="flex flex-col items-center gap-1.5"
+          >
+            <span className="text-[10px] font-mono tracking-wide text-ink-soft">
+              type a cue — the crew does the rest
+            </span>
+            <button
+              type="button"
+              className="cue-chip"
+              onClick={() => {
+                markSetDaySeen()
+                setShowCueChip(false)
+                void submit('crew, set the stage')
+              }}
+            >
+              <span className="cue-chip-dot" aria-hidden />
+              crew, set the stage
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.div
         layout
@@ -489,21 +539,21 @@ export function DirectorPod() {
             )}
           </div>
 
-        <div className="flex items-center gap-2 px-3 py-1 bg-ink text-white text-[10px] font-mono select-none">
+        <div
+          className="flex items-center gap-2 px-3 py-1 bg-ink text-white text-[10px] font-mono select-none"
+          title={
+            offlineLocal
+              ? 'offline — cue grammar runs on-device; connect an agent server (VITE_DIRECTOR_WS_URL) for freeform direction'
+              : status
+          }
+        >
           <span
             className="inline-block w-2 h-2 rounded-full shrink-0"
-            style={{ background: STATUS_COLORS[status] }}
-            title={status}
+            style={{ background: offlineLocal ? LOCAL_CREW_COLOR : STATUS_COLORS[status] }}
           />
           <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
-          <span className="opacity-60 uppercase">{status}</span>
+          <span className="opacity-60 uppercase">{offlineLocal ? 'LOCAL CREW' : status}</span>
         </div>
-
-        {!socketConfigured && (
-          <div className="px-3 py-1.5 border-t border-line bg-rec/15 text-[10px] font-mono font-bold text-rec">
-            SERVER NOT CONFIGURED — set VITE_DIRECTOR_WS_URL (wss://…/ws) and redeploy
-          </div>
-        )}
 
         {planProgress && (
           <div className="px-3 py-1.5 border-t border-line bg-candy-blue/30 text-[10px] font-mono">

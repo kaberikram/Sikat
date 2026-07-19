@@ -12,6 +12,7 @@
  * placeholder on desktop) and advances as cues are spoken.
  */
 import { enqueuePacket } from './agent-runtime'
+import { parseOfflineClauses } from './local-grammar'
 import { getDirectorSocket } from './socket'
 import { setRoomDim } from '../scene/xr/entry-sequence'
 import { beatTick, crewWhoosh, wrapChord } from './sound'
@@ -108,8 +109,13 @@ export function noteDemoUtterance(text: string): void {
   if (!state.active || state.beat < 1) return
   const beat = BEATS[state.beat - 1]
   if (beat && beat.cue.test(text.toLowerCase())) {
-    // No server? The demo still delivers the beat itself.
-    if (beat.offlineFallback && getDirectorSocket().status !== 'open') {
+    // No server? The demo still delivers the beat itself — unless the LOCAL
+    // CREW grammar already handles this exact cue (it runs on every submit).
+    if (
+      beat.offlineFallback &&
+      getDirectorSocket().status !== 'open' &&
+      !parseOfflineClauses(text)
+    ) {
       beat.offlineFallback()
     }
     state.beat += 1
@@ -160,8 +166,19 @@ export function startSetDay(): string {
 
   const stage = useEditorStore.getState().stage
   const [cx, cy, cz] = stage.position
+  const r = stage.radius
 
   rollCall()
+
+  // Pull the viewport back to a wide shot so the whole build is watchable —
+  // the default orbit sits close enough that the pedestal alone fills it.
+  at(1200, () => {
+    useEditorStore.getState().cueUserCamera(
+      [cx + r * 1.7, cy + r * 1.05, cz + r * 2.1],
+      [cx, cy + r * 0.5, cz],
+      1.8
+    )
+  })
 
   // Clear center stage: anything already sitting where the set goes gets
   // slid out to the rim — the crew makes room, it never deletes your work.
@@ -277,13 +294,17 @@ export function startSetDay(): string {
   })
 
   // Frame the hero for the viewfinder (in XR the handheld camcorder pose
-  // takes over live — this sets the desktop money shot).
+  // takes over live — this sets the desktop money shot). Pose scales with the
+  // stage so the sneaker sits in frame above the pedestal instead of the lens
+  // parking inside it.
   at(8800, () => {
+    const heroPos = useEditorStore.getState().objects
+      .find((o) => o.name === HERO)?.position ?? [cx, cy + 0.43, cz]
     enqueuePacket(packet('Producer', {
       command: 'MOVE_CAMERA',
       payload: {
-        position: [cx + 0.55, cy + 0.55, cz + 0.75],
-        lookAtTarget: { name: HERO },
+        position: [cx + r * 0.95, cy + r * 0.75, cz + r * 1.2],
+        lookAt: [heroPos[0], heroPos[1] + 0.18, heroPos[2]],
       },
       transition: { durationSec: 1.2, easing: 'easeInOut' },
     }))
@@ -305,6 +326,18 @@ export function strikeSet(): string {
   wrapChord()
   // Lights up — the wrap brings the room back.
   setRoomDim(0)
+
+  // And the viewport eases home to the default framing.
+  const st = useEditorStore.getState()
+  st.cueUserCamera(
+    [
+      st.stage.position[0] + st.stage.radius * 0.56,
+      st.stage.position[1] + st.stage.radius * 0.32,
+      st.stage.position[2] + st.stage.radius * 0.56,
+    ],
+    st.stage.position,
+    1.4
+  )
 
   for (const name of [SIGN, HERO, PEDESTAL]) {
     enqueuePacket(packet('AssetAnimator', {

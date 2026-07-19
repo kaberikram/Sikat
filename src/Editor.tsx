@@ -5,6 +5,7 @@ import { DirectorPod } from './director/DirectorPod'
 import { TimelineOverlay } from './ui/timeline-overlay'
 import { ObjectsOverlay } from './ui/objects-overlay'
 import { ExportOverlay } from './ui/export-overlay'
+import { Toasts } from './ui/toast'
 import { Button } from './ui/button'
 import { useMountEffect } from './hooks/useMountEffect'
 import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
@@ -89,6 +90,7 @@ export const Editor: React.FC = () => {
         <ObjectsOverlay />
         <ExportOverlay />
         <DirectorPod />
+        <Toasts />
       </main>
     </div>
   )

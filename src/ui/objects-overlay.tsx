@@ -6,6 +6,7 @@ import { createBoxMesh, createSphereMesh, createTextTagMesh } from '../scene/pri
 import { Button, buttonCn } from './button'
 import { cn } from './cn'
 import { OverlayPanel } from './overlay-panel'
+import { pushToast } from './toast'
 
 export function ObjectsOverlay() {
   const open = useEditorStore((s) => s.overlayObjects)
@@ -36,6 +37,7 @@ export function ObjectsOverlay() {
       (error) => {
         URL.revokeObjectURL(url)
         console.error('Failed to load model:', error)
+        pushToast(`couldn't load ${file.name} — is it a valid .glb/.gltf?`)
       }
     )
   }

@@ -182,6 +182,15 @@ export function createDefaultVirtualCamera(): VirtualCamera {
   }
 }
 
+/** A one-shot request to fly the USER (viewport) camera somewhere — consumed
+ *  by the animate loop, which owns OrbitControls. Bump `nonce` per request. */
+export interface UserCameraCue {
+  position: [number, number, number]
+  target: [number, number, number]
+  durationSec: number
+  nonce: number
+}
+
 export interface StageAnchor {
   position: [number, number, number]
   radius: number
@@ -241,6 +250,12 @@ interface EditorState {
   /** Set when the render loop has died repeatedly and been halted — UI should offer a reload. */
   fatalRenderError: boolean
   setFatalRenderError: (on: boolean) => void
+  userCameraCue: UserCameraCue | null
+  cueUserCamera: (
+    position: [number, number, number],
+    target: [number, number, number],
+    durationSec: number
+  ) => void
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
   overlayTimeline: boolean
@@ -319,6 +334,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   cameraOpMode: false,
   xrActive: false,
   fatalRenderError: false,
+  userCameraCue: null,
   xrSupported: false,
   isExporting: false,
   overlayTimeline: false,
@@ -402,6 +418,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setCameraOpMode: (on) => set({ cameraOpMode: on }),
   setXrActive: (on) => set({ xrActive: on }),
   setFatalRenderError: (on) => set({ fatalRenderError: on }),
+  cueUserCamera: (position, target, durationSec) => set((state) => ({
+    userCameraCue: {
+      position,
+      target,
+      durationSec,
+      nonce: (state.userCameraCue?.nonce ?? 0) + 1,
+    },
+  })),
   setXrSupported: (on) => set({ xrSupported: on }),
   startTake: () => set((state) => {
     if (state.isRolling) return state
@@ -546,3 +570,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })
   },
 }))
+
+// Debug/smoke-test hook — lets headless E2E runs assert on live editor state.
+declare global {
+  interface Window {
+    __editorStore?: typeof useEditorStore
+  }
+}
+if (typeof window !== 'undefined') window.__editorStore = useEditorStore

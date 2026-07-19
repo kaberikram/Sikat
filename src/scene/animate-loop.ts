@@ -37,6 +37,25 @@ export function createAnimateLoop(ctx: {
   let lastGizmoObject: THREE.Object3D | null = null
   let lastTime = performance.now()
 
+  // User-camera fly cue (e.g. SET DAY pulling the viewport back to a wide
+  // shot). The loop owns OrbitControls, so the tween lives here; grabbing the
+  // orbit mid-flight cancels it — the user always wins.
+  let cameraCueNonce = 0
+  let cameraCue: {
+    fromPos: THREE.Vector3
+    toPos: THREE.Vector3
+    fromTarget: THREE.Vector3
+    toTarget: THREE.Vector3
+    elapsed: number
+    duration: number
+  } | null = null
+  const cancelCameraCue = () => {
+    cameraCue = null
+  }
+  ctx.controls.addEventListener('start', cancelCameraCue)
+
+  const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2)
+
   const frame = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
     lastTime = now
@@ -139,6 +158,28 @@ export function createAnimateLoop(ctx: {
 
     ctx.agentCursors.update(now)
     updateStageMarker(ctx.stageMarker)
+
+    const cueRequest = useEditorStore.getState().userCameraCue
+    if (cueRequest && cueRequest.nonce !== cameraCueNonce) {
+      cameraCueNonce = cueRequest.nonce
+      if (!xrActive) {
+        cameraCue = {
+          fromPos: ctx.userCamera.position.clone(),
+          toPos: new THREE.Vector3(...cueRequest.position),
+          fromTarget: ctx.controls.target.clone(),
+          toTarget: new THREE.Vector3(...cueRequest.target),
+          elapsed: 0,
+          duration: Math.max(0.01, cueRequest.durationSec),
+        }
+      }
+    }
+    if (cameraCue && !xrActive && !cameraOpMode) {
+      cameraCue.elapsed += delta
+      const alpha = easeInOut(Math.min(1, cameraCue.elapsed / cameraCue.duration))
+      ctx.userCamera.position.lerpVectors(cameraCue.fromPos, cameraCue.toPos, alpha)
+      ctx.controls.target.lerpVectors(cameraCue.fromTarget, cameraCue.toTarget, alpha)
+      if (alpha >= 1) cameraCue = null
+    }
 
     if (!xrActive) ctx.controls.update()
 
@@ -244,7 +285,10 @@ export function createAnimateLoop(ctx: {
   }
 
   ctx.mainRenderer.setAnimationLoop(animate)
-  return () => ctx.mainRenderer.setAnimationLoop(null)
+  return () => {
+    ctx.controls.removeEventListener('start', cancelCameraCue)
+    ctx.mainRenderer.setAnimationLoop(null)
+  }
 }
 
 export function subscribeShadowSync() {

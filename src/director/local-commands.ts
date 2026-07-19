@@ -1,5 +1,7 @@
 import { consumeLatestSuggestion } from './agent-runtime'
 import { startSetDay, strikeSet } from './demo-shoot'
+import { OFFLINE_SUGGESTIONS, parseOfflineClauses } from './local-grammar'
+import { runLocalPackets } from './local-packets'
 import { cutTick } from './sound'
 import { undoLast } from './undo'
 import { useEditorStore } from '../store'
@@ -155,6 +157,21 @@ export function tryLocalCommand(text: string): LocalCommandResult {
   if (/^(deselect|clear selection)$/.test(t)) {
     store.setSelected(null)
     return { handled: true, message: 'selection cleared' }
+  }
+
+  if (/^(help|what can (i|you) (say|do)|commands)\??$/.test(t)) {
+    return {
+      handled: true,
+      message: `cues: “crew, set the stage” · ${OFFLINE_SUGGESTIONS.map((s) => `“${s}”`).join(' · ')} · “action” / “cut” · “undo that”`,
+    }
+  }
+
+  // LOCAL CREW grammar — spawns, moods, FX, motions, moves. Deterministic and
+  // offline; runs through the same packet pipeline as server commands.
+  const specs = parseOfflineClauses(text)
+  if (specs) {
+    runLocalPackets(text, specs)
+    return { handled: true }
   }
 
   return { handled: false }

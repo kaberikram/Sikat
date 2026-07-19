@@ -7,8 +7,8 @@ import {
   buildTurnaroundRotationKeyframes,
   DEFAULT_BOUNCE_DECAY,
   type PresetKeyframes,
-} from './animation-presets'
-import { ease } from './easing'
+} from './animation-presets.ts'
+import { ease } from './easing.ts'
 import type { Easing } from './director/protocol'
 
 export type Vec3 = [number, number, number]

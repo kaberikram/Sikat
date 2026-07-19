@@ -59,6 +59,10 @@ export class DirectorSocket {
 
   status: SocketStatus = 'closed'
 
+  /** True once a connection has ever succeeded — distinguishes "no server
+   *  in this setup" (calm LOCAL CREW mode) from "link lost" (an error). */
+  everConnected = false
+
   constructor(url?: string | null) {
     this.url = url ?? defaultUrl()
   }
@@ -85,6 +89,7 @@ export class DirectorSocket {
     }
     this.ws.onopen = () => {
       this.attempts = 0
+      this.everConnected = true
       this.setStatus('open')
       for (const cb of this.openListeners) cb()
     }
