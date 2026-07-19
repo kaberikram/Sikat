@@ -256,6 +256,15 @@ interface EditorState {
     target: [number, number, number],
     durationSec: number
   ) => void
+  /** Human-readable reason the last XR enter/exit failed — surfaced as a toast. */
+  xrError: string | null
+  setXrError: (message: string | null) => void
+  /** null = not asked yet; false = denied (voice needs guidance, not silence). */
+  micGranted: boolean | null
+  setMicGranted: (granted: boolean | null) => void
+  /** True when the session has no passthrough (immersive-vr / opaque blend). */
+  xrBlendOpaque: boolean
+  setXrBlendOpaque: (opaque: boolean) => void
   /** When true, Scene skips its RAF loop so export can own the same Three.js scene. */
   isExporting: boolean
   overlayTimeline: boolean
@@ -335,6 +344,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   xrActive: false,
   fatalRenderError: false,
   userCameraCue: null,
+  xrError: null,
+  micGranted: null,
+  xrBlendOpaque: false,
   xrSupported: false,
   isExporting: false,
   overlayTimeline: false,
@@ -426,6 +438,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       nonce: (state.userCameraCue?.nonce ?? 0) + 1,
     },
   })),
+  setXrError: (message) => set({ xrError: message }),
+  setMicGranted: (granted) => set({ micGranted: granted }),
+  setXrBlendOpaque: (opaque) => set({ xrBlendOpaque: opaque }),
   setXrSupported: (on) => set({ xrSupported: on }),
   startTake: () => set((state) => {
     if (state.isRolling) return state

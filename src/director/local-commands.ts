@@ -1,9 +1,16 @@
 import { consumeLatestSuggestion } from './agent-runtime'
 import { startSetDay, strikeSet } from './demo-shoot'
-import { OFFLINE_SUGGESTIONS, parseOfflineClauses } from './local-grammar'
+import {
+  MONITOR_RECALL_RE,
+  OFFLINE_SUGGESTIONS,
+  parseOfflineClauses,
+  WRAP_CUE_RE,
+} from './local-grammar'
 import { runLocalPackets } from './local-packets'
-import { cutTick } from './sound'
+import { cutTick, wrapChord } from './sound'
 import { undoLast } from './undo'
+import { endXrSession, placeStageAtUser, recallReviewScreen } from '../scene/xr/xr-bridge'
+import { noteCoachAction } from '../scene/xr/xr-coach'
 import { useEditorStore } from '../store'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands'
 
@@ -116,9 +123,29 @@ export function tryLocalCommand(text: string): LocalCommandResult {
     }
   }
 
-  // SET DAY demo cues — fully offline, deterministic.
+  // SET DAY demo cues — fully offline, deterministic. In-headset the stage
+  // first re-places in front of wherever the user is standing now.
   if (/^(crew,?\s*)?(set|build|dress)\s+the\s+(stage|set)\b/.test(t) || /^set day$/.test(t)) {
+    if (store.xrActive) {
+      placeStageAtUser()
+      noteCoachAction('stage')
+    }
     return { handled: true, message: startSetDay() }
+  }
+
+  // In-headset session cues: exit by voice, recall the take monitor.
+  if (WRAP_CUE_RE.test(t)) {
+    if (store.xrActive) {
+      wrapChord()
+      // Let the chord + slate line land before the session tears down.
+      setTimeout(() => void endXrSession(), 600)
+      return { handled: true, message: "that's a wrap" }
+    }
+    // Desktop: no session to end — fall through to the server/grammar.
+  }
+  if (MONITOR_RECALL_RE.test(t)) {
+    if (recallReviewScreen()) return { handled: true, message: 'monitor recalled' }
+    if (store.xrActive) return { handled: true, message: 'no take on the monitor yet' }
   }
   if (/^(crew,?\s*)?strike\s+the\s+set\b/.test(t)) {
     return { handled: true, message: strikeSet() }
@@ -162,7 +189,7 @@ export function tryLocalCommand(text: string): LocalCommandResult {
   if (/^(help|what can (i|you) (say|do)|commands)\??$/.test(t)) {
     return {
       handled: true,
-      message: `cues: “crew, set the stage” · ${OFFLINE_SUGGESTIONS.map((s) => `“${s}”`).join(' · ')} · “action” / “cut” · “undo that”`,
+      message: `cues: “crew, set the stage” · ${OFFLINE_SUGGESTIONS.map((s) => `“${s}”`).join(' · ')} · “action” / “cut” · “undo that” · “that's a wrap”`,
     }
   }
 

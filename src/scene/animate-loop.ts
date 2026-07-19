@@ -56,6 +56,12 @@ export function createAnimateLoop(ctx: {
 
   const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2)
 
+  // XR frame-budget helpers: with the review monitor open, the grip LCD drops
+  // to every-other-frame (attention is on the monitor), and the monitor itself
+  // skips re-rendering while paused on an unchanged frame.
+  let xrFrameParity = 0
+  let lastReviewRenderedT = -1
+
   const frame = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
     lastTime = now
@@ -201,34 +207,43 @@ export function createAnimateLoop(ctx: {
       // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
       const XR_VF_W = 640
       const XR_VF_H = 360
-      ctx.xrViewfinder.render({
-        renderer: ctx.mainRenderer,
-        scene: ctx.scene,
-        virtCamera: ctx.virtCamera,
-        screenMesh: ctx.camcorderRig.screenMesh,
-        objects: liveObjects,
-        stack,
-        width: XR_VF_W,
-        height: XR_VF_H,
-        delta,
-        t,
-        isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
-        clearColor: lighting.background,
-      })
-
-      // Review monitor: timeline camera playback (separate from live grip LCD).
-      if (ctx.reviewScreen.isOpen()) {
-        ctx.reviewScreen.update(ctx.camcorderRig.xrInput)
-        ctx.reviewScreen.renderPlayback({
+      xrFrameParity ^= 1
+      const reviewOpen = ctx.reviewScreen.isOpen()
+      if (!reviewOpen || xrFrameParity === 0) {
+        ctx.xrViewfinder.render({
           renderer: ctx.mainRenderer,
           scene: ctx.scene,
+          virtCamera: ctx.virtCamera,
+          screenMesh: ctx.camcorderRig.screenMesh,
           objects: liveObjects,
           stack,
+          width: XR_VF_W,
+          height: XR_VF_H,
           delta,
           t,
-          clearColor: lighting.background,
           isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+          clearColor: lighting.background,
         })
+      }
+
+      // Review monitor: timeline camera playback (separate from live grip LCD).
+      if (reviewOpen) {
+        ctx.reviewScreen.update(ctx.camcorderRig.xrInput)
+        if (isPlaying || t !== lastReviewRenderedT) {
+          lastReviewRenderedT = t
+          ctx.reviewScreen.renderPlayback({
+            renderer: ctx.mainRenderer,
+            scene: ctx.scene,
+            objects: liveObjects,
+            stack,
+            delta,
+            t,
+            clearColor: lighting.background,
+            isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+          })
+        }
+      } else {
+        lastReviewRenderedT = -1
       }
 
       // Headset view: passthrough / transparent composite over the real world.

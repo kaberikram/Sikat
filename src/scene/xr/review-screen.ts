@@ -9,7 +9,10 @@ import {
   tagSceneInfrastructure,
   VIEWFINDER_BACKDROP_LAYER,
 } from '../infrastructure'
+import { replyChime } from '../../director/sound'
 import { renderViewfinderToTarget } from '../viewfinder-pass'
+import { pulse } from './haptics'
+import { registerReviewRecall } from './xr-bridge'
 import {
   makeButtonTexture,
   makeCloseTexture,
@@ -206,25 +209,43 @@ export function createReviewScreen(
     if (useEditorStore.getState().isPlaying) useEditorStore.getState().togglePlay()
   }
 
-  function showAfterTake(start: number, end: number, head: THREE.Object3D): void {
-    takeStart = start
-    takeEnd = Math.max(end, start + 0.05)
-    open = true
-    group.visible = true
-    group.scale.setScalar(1)
+  let lastHead: THREE.Object3D | null = null
 
+  function placeInFrontOfHead(head: THREE.Object3D): void {
     head.updateWorldMatrix(true, false)
     head.getWorldPosition(worldPos)
     head.getWorldQuaternion(worldQuat)
     forward.set(0, 0, -1).applyQuaternion(worldQuat)
     group.position.copy(worldPos).addScaledVector(forward, PLACE_DIST)
     group.quaternion.copy(worldQuat)
+  }
+
+  function showAfterTake(start: number, end: number, head: THREE.Object3D): void {
+    takeStart = start
+    takeEnd = Math.max(end, start + 0.05)
+    open = true
+    group.visible = true
+    group.scale.setScalar(1)
+    lastHead = head
+
+    placeInFrontOfHead(head)
+    // A small "look here" chime — the monitor spawns outside the viewfinder
+    // the user was just staring at.
+    replyChime()
 
     const st = useEditorStore.getState()
     st.setTime(takeStart)
     st.setPlayOnceEnd(takeEnd)
     if (!st.isPlaying) st.togglePlay()
   }
+
+  // Voice cue "where's the monitor" — re-place the open card in front of the head.
+  registerReviewRecall(() => {
+    if (!open || !lastHead) return false
+    placeInFrontOfHead(lastHead)
+    replyChime()
+    return true
+  })
 
   function syncScrubThumb(): void {
     const { currentTime } = useEditorStore.getState()
@@ -306,6 +327,7 @@ export function createReviewScreen(
     syncHoverScale()
 
     if (triggerDown && hit) {
+      pulse(pad, 0.3, 25)
       if (hit.kind === 'play') {
         useEditorStore.getState().togglePlay()
       } else if (hit.kind === 'dismiss') {
@@ -318,6 +340,7 @@ export function createReviewScreen(
     }
 
     if (squeezeDown && hit) {
+      pulse(pad, 0.2, 20)
       if (hit.kind === 'scale') {
         dragging = 'scale'
         grabScale0 = group.scale.x
@@ -394,6 +417,7 @@ export function createReviewScreen(
   }
 
   function dispose(): void {
+    registerReviewRecall(null)
     hide()
     scene.remove(group)
     target.dispose()
