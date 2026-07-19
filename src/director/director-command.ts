@@ -74,6 +74,15 @@ export async function submitDirectorCommand(
     return { ok: true }
   }
   releaseCommandPresence(commandId)
-  log?.('DIRECTOR', 'not connected — command dropped', 'error')
+  if (socket.everConnected) {
+    log?.('DIRECTOR', 'link lost — command dropped, reconnecting…', 'error')
+  } else {
+    log?.('DIRECTOR', trimmed)
+    log?.(
+      'SYSTEM',
+      'LOCAL CREW didn’t catch that — try “add a red box”, “golden hour”, or “make the sphere bounce”',
+      'warn'
+    )
+  }
   return { ok: false, offline: true }
 }

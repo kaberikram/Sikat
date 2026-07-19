@@ -12,3 +12,4 @@ coverage/
 server/.venv/
 __pycache__/
 .pytest_cache/
+scripts/smoke-out/

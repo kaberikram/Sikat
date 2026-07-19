@@ -374,3 +374,48 @@
   flex: 1;
   overflow-y: auto;
 }
+
+/* First-run SET DAY cue chip — the front door to the guided demo shoot. */
+.cue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--color-ink, #3b3a48);
+  color: #fff;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow:
+    0 4px 18px rgba(59, 58, 72, 0.3),
+    0 0 0 0 rgba(255, 196, 61, 0.55);
+  animation: cue-chip-glow 2.4s ease-in-out infinite;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.cue-chip:hover {
+  transform: translateY(-1px) scale(1.03);
+  background: var(--color-candy-sun-deep);
+  color: var(--color-ink, #3b3a48);
+}
+
+.cue-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-candy-sun-deep);
+  animation: cue-chip-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes cue-chip-glow {
+  0%, 100% { box-shadow: 0 4px 18px rgba(59, 58, 72, 0.3), 0 0 0 0 rgba(255, 196, 61, 0.55); }
+  50% { box-shadow: 0 4px 18px rgba(59, 58, 72, 0.3), 0 0 0 9px rgba(255, 196, 61, 0); }
+}
+
+@keyframes cue-chip-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
