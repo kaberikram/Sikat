@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { parseOfflineClauses, PLACEHOLDERS, OFFLINE_SUGGESTIONS } from './local-grammar.ts'
+import {
+  normalizeUtterance,
+  parseOfflineClauses,
+  PLACEHOLDERS,
+  OFFLINE_SUGGESTIONS,
+} from './local-grammar.ts'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands.ts'
 
 function handledByOverlay(text: string): boolean {
@@ -94,6 +99,47 @@ test('lighting moods parse', () => {
 test('freeform text falls through to the server path', () => {
   assert.equal(parseOfflineClauses('paint everything like a monet'), null)
   assert.equal(parseOfflineClauses(''), null)
+})
+
+test('normalization strips the punctuation speech engines add', () => {
+  // Deepgram runs with punctuate + smart_format; these are the exact shapes the
+  // most-used on-set cues arrive in, and every matcher for them is anchored.
+  assert.equal(normalizeUtterance('Cut.'), 'Cut')
+  assert.equal(normalizeUtterance('Action!'), 'Action')
+  assert.equal(normalizeUtterance('Show timeline.'), 'Show timeline')
+  assert.equal(normalizeUtterance('Play.'), 'Play')
+  assert.equal(normalizeUtterance('  golden hour  '), 'golden hour')
+  assert.equal(normalizeUtterance('add   a  red   box'), 'add a red box')
+})
+
+test('normalization drops leading fillers but never the cue itself', () => {
+  assert.equal(normalizeUtterance('Okay, cut.'), 'cut')
+  assert.equal(normalizeUtterance('Um, golden hour.'), 'golden hour')
+  assert.equal(normalizeUtterance('So, well, action.'), 'action')
+  assert.equal(normalizeUtterance('Alright, add a red box.'), 'add a red box')
+  // An all-filler utterance keeps its words rather than normalizing to nothing.
+  assert.equal(normalizeUtterance('Okay.'), 'Okay')
+})
+
+test('normalization leaves the suggestion-accept cues alone', () => {
+  for (const cue of ['yes', 'yeah', 'sure', 'do it']) {
+    assert.equal(normalizeUtterance(cue), cue, `must survive: "${cue}"`)
+  }
+})
+
+test('normalization straightens curly apostrophes', () => {
+  assert.equal(normalizeUtterance('that’s a wrap'), "that's a wrap")
+})
+
+test('spoken cues survive normalization into the offline grammar', () => {
+  for (const placeholder of PLACEHOLDERS) {
+    const spoken = `Okay, ${placeholder.charAt(0).toUpperCase()}${placeholder.slice(1)}.`
+    const normalized = normalizeUtterance(spoken).toLowerCase()
+    assert.ok(
+      parseOfflineClauses(normalized) !== null || handledByOverlay(normalized),
+      `spoken form would fail: "${spoken}"`
+    )
+  }
 })
 
 import { WRAP_CUE_RE, MONITOR_RECALL_RE } from './local-grammar.ts'

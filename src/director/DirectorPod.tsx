@@ -19,7 +19,7 @@ import {
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { currentDemoHint } from './demo-shoot'
 import { PLACEHOLDERS } from './local-grammar'
-import { isSoundEnabled, setSoundEnabled } from './sound'
+import { isSoundEnabled, listenEnd, listenStart, missedBuzz, replyChime, setSoundEnabled } from './sound'
 import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
@@ -29,6 +29,7 @@ import {
   finishVoiceSession,
   isSpeechAvailable,
   isVoiceListening,
+  primeVoiceCapture,
   startVoiceSession,
   stopVoiceSession,
 } from './voice-session'
@@ -135,6 +136,8 @@ export function DirectorPod() {
   const [input, setInput] = useState('')
   const [listening, setListening] = useState(false)
   const [interim, setInterim] = useState('')
+  /** Live mic RMS while holding — drives the ring on the mic button. */
+  const [micLevel, setMicLevel] = useState(0)
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [placeholderIdx, setPlaceholderIdx] = useState(0)
@@ -296,12 +299,17 @@ export function DirectorPod() {
     })
     const offLog = socket.onLog((msg) => {
       if (msg.kind === 'miss') {
-        setDirectorLine({ text: 'didn’t catch that — name an object or a move', kind: 'miss' })
+        // The crew's own redirect, not a fixed string.
+        setDirectorLine({
+          text: msg.message || 'didn’t catch that — name an object or a move',
+          kind: 'miss',
+        })
       } else if (
         (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
         msg.level === 'info' &&
         msg.forCommandId
       ) {
+        replyChime()
         setDirectorLine({ text: msg.message, kind: 'reply' })
       }
       if (isBlockedCrewLog(msg.message)) return
@@ -406,19 +414,45 @@ export function DirectorPod() {
     stopVoiceSession()
     setListening(false)
     setInterim('')
+    setMicLevel(0)
   }, [])
   stopMicRef.current = stopMic
 
   const voiceHandlers = useCallback(() => ({
     onInterim: setInterim,
     onListeningChange: setListening,
-    onError: (error: string) => pushLog('DIRECTOR', `voice error: ${error}`, 'error'),
+    onLevel: setMicLevel,
+    onError: (error: string) => {
+      missedBuzz()
+      pushLog('DIRECTOR', `voice error: ${error}`, 'error')
+      setDirectorLine({
+        text:
+          error === 'not-allowed' || error === 'service-not-allowed'
+            ? 'mic blocked — allow the microphone for this site, then try again'
+            : error === 'network'
+              ? 'lost the mic link — click the mic to try again'
+              : `voice error: ${error}`,
+        kind: 'miss',
+      })
+    },
     onFinal: (transcript: string, opts: { forceVision: boolean }) => {
+      setMicLevel(0)
+      if (!transcript.trim()) {
+        // Never end a press in silence — XR already says this on the slate.
+        missedBuzz()
+        setDirectorLine({ text: 'didn’t catch that — name an object or a move', kind: 'miss' })
+        return
+      }
+      listenEnd()
       void submit(transcript, { forceVision: opts.forceVision })
     },
   }), [submit, pushLog])
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
+    // The click is the user gesture that lets the shared AudioContext run —
+    // without it the earcons are silent and Deepgram capture starves.
+    void primeVoiceCapture()
+    listenStart()
     void startVoiceSession(voiceHandlers(), opts).catch((error) => {
       pushLog('DIRECTOR', `voice failed to start: ${error instanceof Error ? error.message : error}`, 'error')
     })
@@ -693,9 +727,18 @@ export function DirectorPod() {
               onClick={(e) => toggleMic(e.shiftKey)}
               title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
               aria-pressed={listening}
-              className={`px-2.5 border-l border-line transition-colors ${listening ? 'bg-rec text-white animate-pulse' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
+              className={`relative px-2.5 border-l border-line transition-colors ${listening ? 'bg-rec text-white' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
             >
-              <Mic size={12} />
+              {listening && (
+                // Breathes with your actual voice — the tell that it hears you.
+                <motion.span
+                  aria-hidden
+                  className="absolute inset-0 bg-white/25 pointer-events-none"
+                  animate={{ opacity: Math.min(micLevel * 6, 1) }}
+                  transition={{ duration: 0.08, ease: 'linear' }}
+                />
+              )}
+              <Mic size={12} className="relative" />
             </button>
           )}
           <button

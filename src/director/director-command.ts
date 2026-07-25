@@ -8,6 +8,7 @@ import { noteCommandText } from './undo'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
+import { normalizeUtterance } from './local-grammar'
 import { getDirectorSocket } from './socket'
 
 export type DirectorLogFn = (
@@ -33,7 +34,9 @@ export async function submitDirectorCommand(
     targetHint?: { id: string; name: string }
   }
 ): Promise<SubmitDirectorResult> {
-  const trimmed = text.trim()
+  // One normalization for both paths — the local grammar and the server's
+  // parser should never see a different string for the same spoken cue.
+  const trimmed = normalizeUtterance(text)
   if (!trimmed) return { ok: false }
 
   // Advance the SET DAY shot list on any matching cue, whichever path handles it.

@@ -13,6 +13,7 @@ import {
   isDeepgramConfigured,
   isSpeechAvailable,
   isVoiceListening,
+  primeVoiceCapture,
   startVoiceSession,
   stopVoiceSession,
 } from '../../director/voice-session'
@@ -148,6 +149,8 @@ export function createCamcorderRig(
   let suppressRec: (() => boolean) | null = null
   /** The line we're waiting on the crew for — echoed once work starts. */
   let thinkingLine: string | null = null
+  /** Last non-empty interim of the current hold — what to show on release. */
+  let lastInterim = ''
 
   // Route director replies / misses / first-work into the slate so the
   // in-headset surface answers you, not just echoes you.
@@ -157,7 +160,9 @@ export function createCamcorderRig(
     if (msg.kind === 'miss') {
       thinkingLine = null
       missedBuzz()
-      directorSlate.setMisheard()
+      // The crew writes its own redirect ("copy — give me a move on set");
+      // showing it beats a fixed string, and it varies like a person would.
+      directorSlate.setMisheard(msg.message)
       return
     }
     if (
@@ -254,11 +259,6 @@ export function createCamcorderRig(
   }
 
   function beginTalk(): void {
-    if (useEditorStore.getState().micGranted === false) {
-      missedBuzz()
-      directorSlate.setLastSent('mic blocked — allow it on desktop, then re-enter XR')
-      return
-    }
     if (!isSpeechAvailable()) {
       missedBuzz()
       directorSlate.setLastSent(
@@ -268,22 +268,32 @@ export function createCamcorderRig(
       )
       return
     }
+    if (useEditorStore.getState().micGranted === false) {
+      // A denial before entry is not permanent — re-ask rather than refusing
+      // for the rest of the session. If it's still blocked, the voice session
+      // reports 'not-allowed' through onError below.
+      void primeVoiceCapture().then((ok) => useEditorStore.getState().setMicGranted(ok))
+    }
+    lastInterim = ''
     listenStart()
     pulse(padRef, 0.3, 25)
     directorSlate.setOffline(getDirectorSocket().status !== 'open')
     void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
-      onInterim: (text) => directorSlate.setInterim(text),
+      onInterim: (text) => {
+        if (text) lastInterim = text
+        directorSlate.setInterim(text)
+      },
       onLevel: (level) => directorSlate.setLevel(level),
       onError: (error) => {
         missedBuzz()
         directorSlate.setLastSent(
           error === 'voice needs Deepgram key'
             ? error
-            : error === 'not-allowed'
-              ? 'mic blocked — allow it on desktop, then re-enter XR'
+            : error === 'not-allowed' || error === 'service-not-allowed'
+              ? 'mic blocked — allow the microphone for this site, then hold A again'
               : error === 'network'
-                ? 'voice needs internet — check the link'
+                ? 'lost the mic link — hold A to try again'
                 : `voice error: ${error}`
         )
       },
@@ -340,13 +350,16 @@ export function createCamcorderRig(
   function endTalk(): void {
     // Graceful finish: the final transcript lands *after* release, so keep
     // handlers alive while it drains.
-    if (isVoiceListening()) {
-      listenEnd()
-      pulse(padRef, 0.2, 20)
-      finishVoiceSession()
+    if (!isVoiceListening()) {
+      directorSlate.setListening(false)
+      return
     }
-    directorSlate.setListening(false)
-    directorSlate.setInterim('')
+    listenEnd()
+    pulse(padRef, 0.2, 20)
+    // Show the captured words the instant the button comes up. Clearing the
+    // slate here (as this used to) left a blank card for the whole drain.
+    directorSlate.setSending(lastInterim.trim())
+    finishVoiceSession()
   }
 
   function updateRollingIndicator(): void {

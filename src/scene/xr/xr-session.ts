@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
-import { stopVoiceSession } from '../../director/voice-session'
+import { releaseVoiceCapture, stopVoiceSession } from '../../director/voice-session'
 import { EDITOR_LAYER } from '../infrastructure'
 import { disposeEntrySequence } from './entry-sequence'
 import { registerXrSessionEntry, registerXrSessionExit } from './xr-bridge'
@@ -80,6 +80,9 @@ export function initXrSession(
     session.addEventListener('end', () => {
       activeSession = null
       stopVoiceSession()
+      // The mic is held warm for the whole session — don't let the recording
+      // indicator outlive it.
+      releaseVoiceCapture()
       disposeEntrySequence()
       useEditorStore.getState().setXrActive(false)
       useEditorStore.getState().setCameraOpMode(priorCameraOpMode)
