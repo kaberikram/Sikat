@@ -351,6 +351,10 @@ export function createCamcorderRig(
     // Graceful finish: the final transcript lands *after* release, so keep
     // handlers alive while it drains.
     if (!isVoiceListening()) {
+      // The press never opened a session (still connecting, or it failed). Say
+      // so rather than swallowing the gesture — an unacknowledged button is
+      // indistinguishable from a broken one.
+      missedBuzz()
       directorSlate.setListening(false)
       return
     }

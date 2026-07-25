@@ -60,6 +60,49 @@ const MAX_LOG = 40
 const COMMAND_INPUT_TIMEOUT_MS = 30_000
 let logCounter = 0
 
+/**
+ * The pod resizes because content arrived, not because anyone threw it — so it
+ * settles rather than bounces (damping ≈ critically damped at this stiffness).
+ */
+const SETTLE = { type: 'spring', stiffness: 420, damping: 41 } as const
+/** Rows inside the pod: same character, a touch quicker over a shorter distance. */
+const ROW_SETTLE = { type: 'spring', stiffness: 520, damping: 46 } as const
+/** Reveal/dismiss for a row that grows the pod downward. */
+const ROW_MOTION = {
+  initial: { opacity: 0, height: 0 },
+  animate: { opacity: 1, height: 'auto' },
+  exit: { opacity: 0, height: 0 },
+  transition: ROW_SETTLE,
+  className: 'overflow-hidden',
+} as const
+
+/**
+ * Press feedback for the pod's own controls. Feedback belongs on the way down —
+ * a control that only reacts to hover feels dead the moment you actually use it.
+ * `Button`/`buttonCn` carry this already; these are for the pod's inline chrome,
+ * whose shapes (full-bleed edges, square corners) don't fit the pill component.
+ */
+const PRESSABLE =
+  // `scale` is a standalone property in Tailwind v4, not part of `transform`.
+  'transition-[scale,background-color,color] duration-150 ease-[var(--ease-settle)] ' +
+  'active:scale-[var(--press-scale)] active:ease-[var(--ease-spring)]'
+
+const CHIP_CLASS =
+  `px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] ` +
+  `hover:bg-ink hover:text-white ${PRESSABLE}`
+
+const MENU_ROW_CLASS =
+  `block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] ` +
+  `hover:bg-candy-sun/60 ${PRESSABLE}`
+
+/**
+ * The form's controls sit flush against the pod's rounded edges, so they can't
+ * scale without tearing the seam. They depress by tone instead — same intent,
+ * same timing, no geometry change.
+ */
+const EDGE_PRESSABLE =
+  'transition-[filter,background-color,color] duration-150 ease-[var(--ease-settle)] active:brightness-90'
+
 const STATUS_COLORS: Record<SocketStatus, string> = {
   open: '#30d158',
   connecting: '#ffd60a',
@@ -505,29 +548,40 @@ export function DirectorPod() {
       <motion.div
         layout
         className="director-pod relative z-30 rounded-[var(--radius-panel)] ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)]"
-        transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+        transition={SETTLE}
       >
-        {menuOpen && (
-          <div className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1">
-            {OVERLAY_COMMANDS.map((cmd) => (
-              <button
-                key={cmd.key}
-                type="button"
-                className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
-                onClick={() => { setOverlay(cmd.key); setMenuOpen(false) }}
-              >
-                {cmd.label} ({cmd.hotkey.toUpperCase()})
-              </button>
-            ))}
-            <button
-              type="button"
-              className="block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] hover:bg-candy-sun/60 transition-colors"
-              onClick={() => { setSoundEnabled(!soundOn); setSoundOn(!soundOn) }}
+        <AnimatePresence>
+          {menuOpen && (
+            <motion.div
+              key="menu"
+              // Grows out of the + that summoned it, and collapses back into it.
+              style={{ transformOrigin: 'bottom left' }}
+              initial={{ opacity: 0, scale: 0.9, y: 6 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 6 }}
+              transition={ROW_SETTLE}
+              className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1"
             >
-              Sound {soundOn ? 'ON' : 'OFF'}
-            </button>
-          </div>
-        )}
+              {OVERLAY_COMMANDS.map((cmd) => (
+                <button
+                  key={cmd.key}
+                  type="button"
+                  className={MENU_ROW_CLASS}
+                  onClick={() => { setOverlay(cmd.key); setMenuOpen(false) }}
+                >
+                  {cmd.label} ({cmd.hotkey.toUpperCase()})
+                </button>
+              ))}
+              <button
+                type="button"
+                className={MENU_ROW_CLASS}
+                onClick={() => { setSoundEnabled(!soundOn); setSoundOn(!soundOn) }}
+              >
+                Sound {soundOn ? 'ON' : 'OFF'}
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col">
         <AnimatePresence initial={false}>
           {hasContext && (
@@ -536,7 +590,7 @@ export function DirectorPod() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+              transition={SETTLE}
               className="overflow-hidden border-b border-line"
             >
               <div className="px-3 py-2 bg-candy-pink/30">
@@ -545,7 +599,7 @@ export function DirectorPod() {
                   <button
                     type="button"
                     onClick={() => setSelected(null)}
-                    className="p-0.5 rounded-full hover:bg-[rgba(59,58,72,0.08)] transition-colors"
+                    className={`p-0.5 rounded-full hover:bg-[rgba(59,58,72,0.08)] ${PRESSABLE}`}
                     title="Deselect (Esc)"
                   >
                     <X size={12} />
@@ -589,106 +643,118 @@ export function DirectorPod() {
           <span className="opacity-60 uppercase">{offlineLocal ? 'LOCAL CREW' : status}</span>
         </div>
 
-        {planProgress && (
-          <div className="px-3 py-1.5 border-t border-line bg-candy-blue/30 text-[10px] font-mono">
-            <div className="flex items-center gap-1.5">
-              {activeAgentSessionId() === planProgress.commandId && (
-                <span className="px-1.5 rounded-full bg-ink text-white font-bold">AGENT</span>
-              )}
-              <span className="font-bold flex-1">{planProgress.say ?? 'planning the take…'}</span>
-              {activeAgentSessionId() === planProgress.commandId && (
-                <button
-                  type="button"
-                  className="px-2 rounded-full bg-white/80 font-bold shadow-[var(--shadow-chip)] hover:bg-rec hover:text-white transition-colors"
-                  onClick={() => {
-                    getDirectorSocket().sendAgentAbort(planProgress.commandId)
-                    clearAgentSession(planProgress.commandId)
-                    setPlanProgress(null)
-                    pushLog('DIRECTOR', 'agent stopped', 'info')
-                  }}
-                >
-                  STOP
-                </button>
-              )}
-            </div>
-            <div className="opacity-70 uppercase">
-              {planProgress.stepIndex ?? 0}/{planProgress.stepsTotal ?? '…'} · {planProgress.stepLabel ?? planProgress.status}
-            </div>
-          </div>
-        )}
+        <AnimatePresence initial={false}>
+          {planProgress && (
+            <motion.div key="plan" {...ROW_MOTION}>
+              <div className="px-3 py-1.5 border-t border-line bg-candy-blue/30 text-[10px] font-mono">
+                <div className="flex items-center gap-1.5">
+                  {activeAgentSessionId() === planProgress.commandId && (
+                    <span className="px-1.5 rounded-full bg-ink text-white font-bold">AGENT</span>
+                  )}
+                  <span className="font-bold flex-1">{planProgress.say ?? 'planning the take…'}</span>
+                  {activeAgentSessionId() === planProgress.commandId && (
+                    <button
+                      type="button"
+                      className={`px-2 rounded-full bg-white/80 font-bold shadow-[var(--shadow-chip)] hover:bg-rec hover:text-white ${PRESSABLE}`}
+                      onClick={() => {
+                        getDirectorSocket().sendAgentAbort(planProgress.commandId)
+                        clearAgentSession(planProgress.commandId)
+                        setPlanProgress(null)
+                        pushLog('DIRECTOR', 'agent stopped', 'info')
+                      }}
+                    >
+                      STOP
+                    </button>
+                  )}
+                </div>
+                <div className="opacity-70 uppercase">
+                  {planProgress.stepIndex ?? 0}/{planProgress.stepsTotal ?? '…'} · {planProgress.stepLabel ?? planProgress.status}
+                </div>
+              </div>
+            </motion.div>
+          )}
 
-        {pendingSuggestions.map((pendingSuggestion) => (
-          <div key={pendingSuggestion.suggestionId} className="px-3 py-2 border-t border-line bg-candy-sun/40">
-            <p className="text-[11px] font-semibold mb-1.5">
-              [{pendingSuggestion.agent}] {pendingSuggestion.text}
-            </p>
-            <div className="flex flex-wrap gap-1">
-              {pendingSuggestion.suggestedCommand && (
-                <button
-                  type="button"
-                  className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
-                  onClick={() => {
-                    const cmd = pendingSuggestion.suggestedCommand
-                    setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
-                    const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
-                    if (timer) clearTimeout(timer)
-                    suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
-                    if (cmd) void submit(cmd)
-                  }}
-                >
-                  DO IT
-                </button>
-              )}
-              <button
-                type="button"
-                className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
-                onClick={() => {
-                  setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
-                  const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
-                  if (timer) clearTimeout(timer)
-                  suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
-                }}
-              >
-                DISMISS
-              </button>
-            </div>
-          </div>
-        ))}
+          {pendingSuggestions.map((pendingSuggestion) => (
+            <motion.div key={pendingSuggestion.suggestionId} {...ROW_MOTION}>
+              <div className="px-3 py-2 border-t border-line bg-candy-sun/40">
+                <p className="text-[11px] font-semibold mb-1.5">
+                  [{pendingSuggestion.agent}] {pendingSuggestion.text}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {pendingSuggestion.suggestedCommand && (
+                    <button
+                      type="button"
+                      className={CHIP_CLASS}
+                      onClick={() => {
+                        const cmd = pendingSuggestion.suggestedCommand
+                        setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
+                        const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
+                        if (timer) clearTimeout(timer)
+                        suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
+                        if (cmd) void submit(cmd)
+                      }}
+                    >
+                      DO IT
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={CHIP_CLASS}
+                    onClick={() => {
+                      setPendingSuggestions((current) => current.filter((item) => item.suggestionId !== pendingSuggestion.suggestionId))
+                      const timer = suggestionExpiryRef.current.get(pendingSuggestion.suggestionId)
+                      if (timer) clearTimeout(timer)
+                      suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
+                    }}
+                  >
+                    DISMISS
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ))}
 
-        {pendingQuestion && (
-          <div className="px-3 py-2 border-t border-line bg-candy-sun/30">
-            <p className="text-[11px] font-semibold mb-1.5">
-              [{pendingQuestion.agent}] {pendingQuestion.question}
-            </p>
-            <div className="flex flex-wrap gap-1">
-              {pendingQuestion.options.map((opt) => (
-                <button
-                  key={opt}
-                  type="button"
-                  className="px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] hover:bg-ink hover:text-white transition-colors"
-                  onClick={() => {
-                    setPendingQuestion(null)
-                    void submit(opt, { commandId: pendingQuestion.commandId })
-                  }}
-                >
-                  {opt}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+          {pendingQuestion && (
+            <motion.div key="question" {...ROW_MOTION}>
+              <div className="px-3 py-2 border-t border-line bg-candy-sun/30">
+                <p className="text-[11px] font-semibold mb-1.5">
+                  [{pendingQuestion.agent}] {pendingQuestion.question}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {pendingQuestion.options.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      className={CHIP_CLASS}
+                      onClick={() => {
+                        setPendingQuestion(null)
+                        void submit(opt, { commandId: pendingQuestion.commandId })
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
 
-        {directorLine && !listening && (
-          <div className="flex items-center gap-2 px-3 py-1.5 border-t border-line text-[11px]">
-            <span
-              className="shrink-0 w-1.5 h-1.5 rounded-full"
-              style={{ background: directorLine.kind === 'miss' ? '#F27BAC' : '#57CFA0' }}
-            />
-            <span className={directorLine.kind === 'miss' ? 'text-ink-soft' : 'font-semibold'}>
-              {directorLine.text}
-            </span>
-          </div>
-        )}
+          {directorLine && !listening && (
+            // The crew's answer — keyed on the text so a new reply re-runs the
+            // reveal instead of silently swapping words in place.
+            <motion.div key={`line-${directorLine.text}`} {...ROW_MOTION}>
+              <div className="flex items-center gap-2 px-3 py-1.5 border-t border-line text-[11px]">
+                <span
+                  className="shrink-0 w-1.5 h-1.5 rounded-full"
+                  style={{ background: directorLine.kind === 'miss' ? '#F27BAC' : '#57CFA0' }}
+                />
+                <span className={directorLine.kind === 'miss' ? 'text-ink-soft' : 'font-semibold'}>
+                  {directorLine.text}
+                </span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <form
           className="flex items-stretch border-t border-line"
@@ -703,9 +769,15 @@ export function DirectorPod() {
             onClick={() => setMenuOpen((o) => !o)}
             title="Summon panels"
             aria-expanded={menuOpen}
-            className="shrink-0 px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep transition-colors"
+            className={`shrink-0 px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep ${EDGE_PRESSABLE}`}
           >
-            <Plus size={12} />
+            <motion.span
+              className="block"
+              animate={{ rotate: menuOpen ? 45 : 0 }}
+              transition={ROW_SETTLE}
+            >
+              <Plus size={12} />
+            </motion.span>
           </button>
           <input
             type="text"
@@ -727,7 +799,7 @@ export function DirectorPod() {
               onClick={(e) => toggleMic(e.shiftKey)}
               title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
               aria-pressed={listening}
-              className={`relative px-2.5 border-l border-line transition-colors ${listening ? 'bg-rec text-white' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
+              className={`relative px-2.5 border-l border-line ${EDGE_PRESSABLE} ${listening ? 'bg-rec text-white' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
             >
               {listening && (
                 // Breathes with your actual voice — the tell that it hears you.
@@ -743,7 +815,7 @@ export function DirectorPod() {
           )}
           <button
             type="submit"
-            className="px-4 py-1 bg-ink text-white text-[11px] font-semibold hover:bg-candy-sun-deep hover:text-ink border-l border-line transition-colors"
+            className={`px-4 py-1 bg-ink text-white text-[11px] font-semibold hover:bg-candy-sun-deep hover:text-ink border-l border-line ${EDGE_PRESSABLE}`}
           >
             SEND
           </button>

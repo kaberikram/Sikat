@@ -4,11 +4,16 @@ import { cn } from './cn'
 export type ButtonVariant = 'primary' | 'dark' | 'ghost' | 'danger' | 'pink'
 export type ButtonSize = 'sm' | 'md'
 
+// Hover settles, press springs back — overshoot is only for the release of an
+// actual press, never for a pointer drifting across the control.
 const BASE =
   'inline-flex items-center justify-center gap-1 rounded-full font-sans font-semibold cursor-pointer select-none ' +
   'shadow-[var(--shadow-chip)] border border-[rgba(59,58,72,0.06)] ' +
-  'transition-[transform,background-color,color,box-shadow] duration-150 ease-[cubic-bezier(0.34,1.56,0.64,1)] ' +
-  'hover:-translate-y-px hover:shadow-[var(--shadow-soft)] active:scale-95 active:translate-y-0 ' +
+  // scale/translate are standalone properties in Tailwind v4, not `transform` —
+  // they have to be named here or the press snaps instead of easing.
+  'transition-[scale,translate,background-color,color,box-shadow] duration-150 ease-[var(--ease-settle)] ' +
+  'hover:-translate-y-px hover:shadow-[var(--shadow-soft)] ' +
+  'active:scale-[var(--press-scale)] active:translate-y-0 active:ease-[var(--ease-spring)] ' +
   'disabled:opacity-50 disabled:pointer-events-none'
 
 const VARIANTS: Record<ButtonVariant, string> = {

@@ -54,8 +54,12 @@ function TimelineTrackRow({
   )
 }
 
-export function TimelineOverlay() {
-  const open = useEditorStore((s) => s.overlayTimeline)
+/**
+ * The body owns the per-frame `currentTime` subscription so it only ticks while
+ * the panel is actually mounted — same reason DirectorPod splits its transport
+ * readouts out.
+ */
+function TimelineBody() {
   const currentTime = useEditorStore((s) => s.currentTime)
   const duration = useEditorStore((s) => s.duration)
   const setTime = useEditorStore((s) => s.setTime)
@@ -64,10 +68,8 @@ export function TimelineOverlay() {
   const objects = useEditorStore((s) => s.objects)
   const virtualCamera = useEditorStore((s) => s.virtualCamera)
 
-  if (!open) return null
-
   return (
-    <OverlayPanel overlayKey="timeline" title="TIMELINE" className="overlay-timeline">
+    <>
       <div className="timeline-controls">
         <div className="flex gap-4 items-center">
           <Button variant="dark" size="sm" onClick={togglePlay}>
@@ -98,6 +100,16 @@ export function TimelineOverlay() {
           </div>
         ))}
       </div>
+    </>
+  )
+}
+
+export function TimelineOverlay() {
+  const open = useEditorStore((s) => s.overlayTimeline)
+
+  return (
+    <OverlayPanel overlayKey="timeline" title="TIMELINE" className="overlay-timeline" open={open}>
+      <TimelineBody />
     </OverlayPanel>
   )
 }

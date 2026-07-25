@@ -16,8 +16,6 @@ export function ObjectsOverlay() {
   const removeObject = useEditorStore((s) => s.removeObject)
   const addObject = useEditorStore((s) => s.addObject)
 
-  if (!open) return null
-
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -43,7 +41,7 @@ export function ObjectsOverlay() {
   }
 
   return (
-    <OverlayPanel overlayKey="objects" title="OBJECTS" className="overlay-objects">
+    <OverlayPanel overlayKey="objects" title="OBJECTS" className="overlay-objects" open={open}>
       <div className="flex flex-wrap gap-1.5 mb-3">
         <label className={buttonCn('primary', 'sm', 'cursor-pointer')}>
           IMPORT
