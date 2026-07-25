@@ -9,6 +9,7 @@ import { submitDirectorCommand } from '../../director/director-command'
 import { newCommandId } from '../../director/ids'
 import { getDirectorSocket } from '../../director/socket'
 import {
+  describeVoiceError,
   finishVoiceSession,
   isDeepgramConfigured,
   isSpeechAvailable,
@@ -278,13 +279,11 @@ export function createCamcorderRig(
       onError: (error) => {
         missedBuzz()
         directorSlate.setLastSent(
-          error === 'voice needs Deepgram key'
-            ? error
-            : error === 'not-allowed'
-              ? 'mic blocked — allow it on desktop, then re-enter XR'
-              : error === 'network'
-                ? 'voice needs internet — check the link'
-                : `voice error: ${error}`
+          // In-headset the mic prompt can't be shown, so denial needs its own
+          // line; everything else reads the same as on desktop.
+          error === 'not-allowed' || error === 'service-not-allowed'
+            ? 'mic blocked — allow it on desktop, then re-enter XR'
+            : describeVoiceError(error)
         )
       },
       onFinal: (transcript) => {

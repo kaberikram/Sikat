@@ -18,19 +18,22 @@ import {
 } from './agent-runtime'
 import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from './agent-tools'
 import { currentDemoHint } from './demo-shoot'
-import { PLACEHOLDERS } from './local-grammar'
-import { isSoundEnabled, setSoundEnabled } from './sound'
+import { OFFLINE_SUGGESTIONS, PLACEHOLDERS } from './local-grammar'
+import { isSoundEnabled, listenEnd, listenStart, missedBuzz, setSoundEnabled } from './sound'
 import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
 import { markFirstPacket, formatLatencySummary } from './latency'
 import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
 import {
+  describeVoiceError,
   finishVoiceSession,
   isSpeechAvailable,
   isVoiceListening,
   startVoiceSession,
   stopVoiceSession,
+  warmVoicePipeline,
+  type VoicePhase,
 } from './voice-session'
 import { useMountEffect } from '../hooks/useMountEffect'
 import { useEditorStore } from '../store'
@@ -134,6 +137,7 @@ export function DirectorPod() {
   const [log, setLog] = useState<LogEntry[]>([])
   const [input, setInput] = useState('')
   const [listening, setListening] = useState(false)
+  const [micPhase, setMicPhase] = useState<VoicePhase>('idle')
   const [interim, setInterim] = useState('')
   const [logHovered, setLogHovered] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -162,6 +166,13 @@ export function DirectorPod() {
   const setCameraOpMode = useEditorStore((s) => s.setCameraOpMode)
 
   const stopMicRef = useRef<() => void>(() => {})
+  /**
+   * Live mic level is written straight to a CSS variable on the anchor. It
+   * arrives ~60x a second; routing it through React state would reconcile the
+   * whole pod — including the log list — at that rate.
+   */
+  const anchorRef = useRef<HTMLDivElement | null>(null)
+  const levelRef = useRef(0)
 
   const speechAvailable = isSpeechAvailable()
   const hasContext = selectedId !== null
@@ -391,6 +402,15 @@ export function DirectorPod() {
         commandId,
         log: pushLog,
       })
+      if (result.offline) {
+        // Nothing in the offline grammar matched. Say so where the director is
+        // already looking, with a cue that definitely works, instead of
+        // leaving a warn line to scroll past in the log.
+        setDirectorLine({
+          text: `didn’t catch that — try “${OFFLINE_SUGGESTIONS[0]}” or “${OFFLINE_SUGGESTIONS[1]}”`,
+          kind: 'miss',
+        })
+      }
       if (!result.ok || result.local) completeCommand(commandId)
     } catch (error) {
       completeCommand(commandId)
@@ -402,25 +422,53 @@ export function DirectorPod() {
     }
   }, [completeCommand, pushLog, trackCommand])
 
+  const setMicLevel = useCallback((level: number) => {
+    // Speech RMS lives around 0.02–0.2; lift it into a 0–1 range and smooth
+    // the jitter so the pod breathes rather than flickers.
+    const target = Math.min(1, Math.max(0, level * 6))
+    levelRef.current += (target - levelRef.current) * 0.35
+    anchorRef.current?.style.setProperty('--mic-level', levelRef.current.toFixed(3))
+  }, [])
+
   const stopMic = useCallback(() => {
     stopVoiceSession()
     setListening(false)
+    setMicPhase('idle')
     setInterim('')
-  }, [])
+    setMicLevel(0)
+  }, [setMicLevel])
   stopMicRef.current = stopMic
 
   const voiceHandlers = useCallback(() => ({
     onInterim: setInterim,
     onListeningChange: setListening,
-    onError: (error: string) => pushLog('DIRECTOR', `voice error: ${error}`, 'error'),
+    onPhase: setMicPhase,
+    onLevel: setMicLevel,
+    onError: (error: string) => {
+      missedBuzz()
+      const message = describeVoiceError(error)
+      pushLog('DIRECTOR', message, 'warn')
+      setDirectorLine({ text: message, kind: 'miss' })
+    },
     onFinal: (transcript: string, opts: { forceVision: boolean }) => {
+      setMicLevel(0)
+      if (!transcript.trim()) {
+        // Held the mic, said nothing (or nothing intelligible). Nudge, don't
+        // scold, and don't clutter the log with it.
+        missedBuzz()
+        setDirectorLine({ text: 'didn’t catch that — hold the mic and say a cue', kind: 'miss' })
+        return
+      }
+      listenEnd()
       void submit(transcript, { forceVision: opts.forceVision })
     },
-  }), [submit, pushLog])
+  }), [submit, pushLog, setMicLevel])
 
   const startMic = useCallback((opts?: { forceVision?: boolean }) => {
+    setDirectorLine(null)
+    listenStart()
     void startVoiceSession(voiceHandlers(), opts).catch((error) => {
-      pushLog('DIRECTOR', `voice failed to start: ${error instanceof Error ? error.message : error}`, 'error')
+      pushLog('DIRECTOR', describeVoiceError(error instanceof Error ? error.message : String(error)), 'warn')
     })
   }, [voiceHandlers, pushLog])
 
@@ -429,8 +477,10 @@ export function DirectorPod() {
   const toggleMic = (forceVision = false) =>
     isVoiceListening() ? finishVoiceSession() : startMic({ forceVision })
 
+  const micActive = listening || micPhase !== 'idle'
+
   return (
-    <div className="director-pod-anchor">
+    <div ref={anchorRef} className="director-pod-anchor">
       {cameraOpMode && (
         <div className="transport-readout transport-readout--cam-op">
           CAM OP — WASD · Q/E · drag look · C off
@@ -470,9 +520,10 @@ export function DirectorPod() {
 
       <motion.div
         layout
-        className="director-pod relative z-30 rounded-[var(--radius-panel)] ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)]"
+        className={`director-pod relative z-30 rounded-[var(--radius-panel)] ring-1 ring-line shadow-[var(--shadow-soft)]${micActive ? ' director-pod--listening' : ''}`}
         transition={{ type: 'spring', stiffness: 420, damping: 36 }}
       >
+        {micActive && <span className="mic-aura" aria-hidden />}
         {menuOpen && (
           <div className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1">
             {OVERLAY_COMMANDS.map((cmd) => (
@@ -494,7 +545,9 @@ export function DirectorPod() {
             </button>
           </div>
         )}
-        <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col">
+        {/* The card surface lives here, not on the pod, so the listening aura
+            can sit behind it and still bleed past the pod's edges. */}
+        <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col bg-card/90 backdrop-blur-xl">
         <AnimatePresence initial={false}>
           {hasContext && (
             <motion.div
@@ -679,23 +732,35 @@ export function DirectorPod() {
             onChange={(e) => setInput(e.target.value)}
             placeholder={
               interim ||
-              (listening
-                ? 'listening…'
-                : isProcessingCommand
-                  ? 'crew is working…'
-                  : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
+              (micPhase === 'connecting'
+                ? 'opening the mic…'
+                : micActive
+                  ? 'listening — say a cue'
+                  : isProcessingCommand
+                    ? 'crew is working…'
+                    : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
             }
-            className="flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0"
+            className={`flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0${
+              micActive ? ' director-input--hearing' : ''
+            }`}
           />
           {speechAvailable && (
             <button
               type="button"
+              onPointerEnter={warmVoicePipeline}
               onClick={(e) => toggleMic(e.shiftKey)}
-              title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
-              aria-pressed={listening}
-              className={`px-2.5 border-l border-line transition-colors ${listening ? 'bg-rec text-white animate-pulse' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
+              title={
+                micActive
+                  ? 'Stop voice direction (Esc)'
+                  : 'Live voice direction (Shift+click to attach viewfinder)'
+              }
+              aria-pressed={micActive}
+              className={`mic-button px-2.5 border-l border-line transition-colors ${
+                micActive ? 'mic-button--live text-white' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'
+              }`}
             >
-              <Mic size={12} />
+              <span className="mic-button-ring" aria-hidden />
+              <Mic size={12} className="relative z-10" />
             </button>
           )}
           <button

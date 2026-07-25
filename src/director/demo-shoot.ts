@@ -14,6 +14,7 @@
 import { enqueuePacket } from './agent-runtime'
 import { parseOfflineClauses } from './local-grammar'
 import { getDirectorSocket } from './socket'
+import { utteranceCandidates } from './utterance'
 import { setRoomDim } from '../scene/xr/entry-sequence'
 import { beatTick, crewWhoosh, wrapChord } from './sound'
 import { presenceStore, agentMetaFor } from './presence'
@@ -108,13 +109,15 @@ export function currentDemoHint(): string | null {
 export function noteDemoUtterance(text: string): void {
   if (!state.active || state.beat < 1) return
   const beat = BEATS[state.beat - 1]
-  if (beat && beat.cue.test(text.toLowerCase())) {
+  const readings = utteranceCandidates(text)
+  if (beat && readings.some((reading) => beat.cue.test(reading.toLowerCase()))) {
     // No server? The demo still delivers the beat itself — unless the LOCAL
-    // CREW grammar already handles this exact cue (it runs on every submit).
+    // CREW grammar already handles this cue (it runs on every submit), which
+    // it may do through any reading of what was actually said.
     if (
       beat.offlineFallback &&
       getDirectorSocket().status !== 'open' &&
-      !parseOfflineClauses(text)
+      !readings.some((reading) => parseOfflineClauses(reading))
     ) {
       beat.offlineFallback()
     }

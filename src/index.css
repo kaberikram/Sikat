@@ -419,3 +419,101 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* ---------------------------------------------------------------- voice ---
+   The pod hears you. `--mic-level` (0–1) is written straight to the anchor
+   from the live mic RMS, so the aura, the ring and the caret all breathe with
+   the director's voice instead of running a canned animation. Everything here
+   is transform/opacity only — no layout, no paint of the log list. */
+
+.director-pod-anchor {
+  --mic-level: 0;
+}
+
+.director-pod {
+  position: relative;
+}
+
+/* A halo that swells with the voice. Two tinted glows at different radii read
+   as depth rather than a flat ring, and both are driven off --mic-level so the
+   pod is visibly hearing rather than merely switched on. */
+.mic-aura {
+  position: absolute;
+  inset: -1px;
+  border-radius: calc(var(--radius-panel) + 1px);
+  pointer-events: none;
+  z-index: -1;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 177, 206, 0.5),
+    rgba(94, 174, 242, 0.5) 45%,
+    rgba(185, 235, 211, 0.5)
+  );
+  box-shadow:
+    0 0 calc(22px + var(--mic-level) * 30px) calc(4px + var(--mic-level) * 10px)
+      rgba(94, 174, 242, calc(0.55 + var(--mic-level) * 0.3)),
+    0 0 calc(48px + var(--mic-level) * 70px) calc(12px + var(--mic-level) * 24px)
+      rgba(255, 177, 206, calc(0.34 + var(--mic-level) * 0.3));
+  transform: scale(calc(1 + var(--mic-level) * 0.012));
+  transition: box-shadow 0.1s linear, transform 0.1s ease-out;
+  animation: mic-aura-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes mic-aura-breathe {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+.director-pod--listening {
+  box-shadow: var(--shadow-lift);
+}
+
+/* The mic button doubles as the level meter. */
+.mic-button {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.mic-button--live {
+  background: var(--color-rec);
+}
+
+.mic-button-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.85), transparent 62%);
+  opacity: 0;
+  transform: scale(0.35);
+  transition: opacity 0.12s linear, transform 0.12s ease-out;
+}
+
+.mic-button--live .mic-button-ring {
+  opacity: calc(0.18 + var(--mic-level) * 0.6);
+  transform: scale(calc(0.45 + var(--mic-level) * 0.75));
+}
+
+/* A caret that keeps time with your voice while the transcript lands. */
+.director-input--hearing::placeholder {
+  color: var(--color-ink);
+  opacity: calc(0.55 + var(--mic-level) * 0.45);
+}
+
+.director-input--hearing {
+  border-right: 2px solid transparent;
+  animation: mic-caret 1.1s steps(1) infinite;
+}
+
+@keyframes mic-caret {
+  0%, 49% { border-right-color: var(--color-candy-blue-deep); }
+  50%, 100% { border-right-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-aura,
+  .director-input--hearing {
+    animation: none;
+  }
+}

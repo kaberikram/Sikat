@@ -45,10 +45,20 @@ interface SpeechRecognitionLike {
   stop: () => void
 }
 
+/**
+ * How far along the mic is. `connecting` matters: opening the mic and the
+ * Deepgram socket can take a beat on a cold first press, and a director who
+ * sees nothing assumes the button is broken and starts talking into a mic that
+ * isn't up yet.
+ */
+export type VoicePhase = 'idle' | 'connecting' | 'listening'
+
 export interface VoiceSessionHandlers {
   onInterim?: (text: string) => void
   onFinal?: (text: string, opts: { forceVision: boolean }) => void
   onListeningChange?: (listening: boolean) => void
+  /** Finer-grained than onListeningChange — drives "opening mic…" vs "listening". */
+  onPhase?: (phase: VoicePhase) => void
   /** Fatal recognition error ('not-allowed', 'network', …) — session already stopped. */
   onError?: (error: string) => void
   /** Live mic RMS level 0..~1, every ~50ms while capturing (Deepgram path only). */
@@ -86,6 +96,12 @@ let sessionGen = 0
  * clear, so a graceful finish that reads-then-stops is never raced.
  */
 let finalSegments: string[] = []
+/**
+ * Set between release and submit, while the engine flushes whatever it heard
+ * last. Whichever signal arrives first — the socket closing, an UtteranceEnd,
+ * the native engine's onend, or the backstop timer — settles it exactly once.
+ */
+let drain: { gen: number; forceVision: boolean } | null = null
 
 /** Minimal interface for the Deepgram SDK connection object. */
 interface DeepgramConnection {
@@ -220,16 +236,34 @@ function emitFinalAndReset(fv: boolean): void {
   handlers.onFinal?.(text, { forceVision: fv })
 }
 
+/**
+ * End a released session and submit what was heard. Idempotent and
+ * generation-guarded, so the four racing "the engine is done" signals can all
+ * call it and only the first one lands.
+ */
+function settleDrain(): void {
+  const pending = drain
+  if (!pending || pending.gen !== sessionGen) return
+  drain = null
+  clearFinishTimer()
+  stopVoiceSession()
+  emitFinalAndReset(pending.forceVision)
+}
+
 function failVoiceSession(error: string): void {
   // Invalidate stale callbacks first — a failed session must never fire
   // late finals/handlers after the error is reported.
   sessionGen += 1
   listening = false
   forceVision = false
+  drain = null
+  finalSegments = []
   clearFinishTimer()
+  stopLevelMeter()
   if (deepgramConnection) deepgramStop()
   detachNativeRecognition()
   handlers.onListeningChange?.(false)
+  handlers.onPhase?.('idle')
   handlers.onInterim?.('')
   handlers.onError?.(error)
 }
@@ -261,6 +295,12 @@ async function getMicStream(): Promise<MediaStream> {
 async function deepgramStart(gen: number): Promise<void> {
   const client = getOrCreateDeepgramClient()
   if (!client) return
+
+  // Announce the press immediately. Mic + socket can take a beat on a cold
+  // start; the caller lights its indicator now and swaps it to "listening"
+  // below, so the button never feels dead under the finger.
+  handlers.onListeningChange?.(true)
+  handlers.onPhase?.('connecting')
 
   const ctx = getSharedAudioContext()
 
@@ -327,30 +367,42 @@ async function deepgramStart(gen: number): Promise<void> {
         }
       }
       if (message.type === 'UtteranceEnd') {
-        // Speech ended. If the user already released push-to-talk (grace
-        // drain), close out now instead of waiting the full grace window.
-        if (!listening && finishTimer) {
-          const fv = forceVision
-          clearFinishTimer()
-          stopVoiceSession()
-          emitFinalAndReset(fv)
-        }
+        // Speech ended. If the user already released push-to-talk, close out
+        // now instead of waiting the full grace window.
+        settleDrain()
       }
       if (message.type === 'Error') {
         console.warn('[voice] Deepgram error:', message.description)
-        failVoiceSession('network')
+        // Mid-drain, whatever we already transcribed still deserves to run —
+        // losing the command is worse than losing the last half-word.
+        if (drain) settleDrain()
+        else failVoiceSession('network')
       }
     })
 
     connection.on('error', () => {
       if (gen !== sessionGen) return
       console.warn('[voice] Deepgram connection error')
-      failVoiceSession('network')
+      if (drain) settleDrain()
+      else failVoiceSession('network')
     })
 
     connection.on('close', () => {
       if (gen !== sessionGen) return
+      // Deepgram answers CloseStream by flushing its last finals and hanging
+      // up. That close IS the "engine is done" signal on the normal release
+      // path — UtteranceEnd only fires after a full silence window, which a
+      // director who releases the button the moment they stop talking never
+      // produces. Settling here is what keeps those commands from being
+      // dropped on the floor.
+      if (drain) {
+        settleDrain()
+        return
+      }
       if (connection === deepgramConnection) deepgramStop()
+      // Closed while still held: the mic is dead and nothing more will be
+      // heard, so say so rather than let the user keep talking to nothing.
+      if (listening) failVoiceSession('network')
     })
 
     const source = ctx.createMediaStreamSource(stream)
@@ -396,6 +448,7 @@ async function deepgramStart(gen: number): Promise<void> {
     }
 
     handlers.onListeningChange?.(true)
+    handlers.onPhase?.('listening')
   } catch (err) {
     console.warn('[voice] Deepgram session failed:', err)
     for (const track of (pendingStream as MediaStream | null)?.getTracks() ?? []) track.stop()
@@ -404,6 +457,65 @@ async function deepgramStart(gen: number): Promise<void> {
     const notAllowed = err instanceof DOMException &&
       (err.name === 'NotAllowedError' || err.name === 'SecurityError')
     failVoiceSession(notAllowed ? 'not-allowed' : 'network')
+  }
+}
+
+// ---- live level (native path) ----
+
+/**
+ * Chrome's SpeechRecognition owns its own capture and hands back no audio, so
+ * the UI would have nothing to react to on the desktop path. A parallel
+ * analyser tap gives both engines the same live level, which is what lets the
+ * pod visibly breathe with the director's voice instead of just sitting lit.
+ */
+let levelStream: MediaStream | null = null
+let levelSource: MediaStreamAudioSourceNode | null = null
+let levelRaf: number | null = null
+
+function stopLevelMeter(): void {
+  if (levelRaf !== null) {
+    cancelAnimationFrame(levelRaf)
+    levelRaf = null
+  }
+  try { levelSource?.disconnect() } catch { /* ignore */ }
+  levelSource = null
+  for (const track of levelStream?.getTracks() ?? []) track.stop()
+  levelStream = null
+}
+
+async function startLevelMeter(gen: number): Promise<void> {
+  if (!handlers.onLevel) return
+  try {
+    const stream = await getMicStream()
+    if (gen !== sessionGen) {
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    const ctx = getSharedAudioContext()
+    if (ctx.state === 'suspended') await ctx.resume()
+    if (gen !== sessionGen) {
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    levelStream = stream
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 512
+    analyser.smoothingTimeConstant = 0.6
+    const source = ctx.createMediaStreamSource(stream)
+    source.connect(analyser)
+    levelSource = source
+    const samples = new Float32Array(analyser.fftSize)
+    const tick = () => {
+      if (gen !== sessionGen) return
+      analyser.getFloatTimeDomainData(samples)
+      let sumSq = 0
+      for (let i = 0; i < samples.length; i++) sumSq += samples[i] * samples[i]
+      handlers.onLevel?.(Math.sqrt(sumSq / samples.length))
+      levelRaf = requestAnimationFrame(tick)
+    }
+    levelRaf = requestAnimationFrame(tick)
+  } catch {
+    // No level meter is a cosmetic loss — recognition itself is unaffected.
   }
 }
 
@@ -433,6 +545,26 @@ export function isSpeechAvailable(): boolean {
   return getNativeSpeechRecognitionCtor() !== null || isDeepgramAvailable()
 }
 
+/**
+ * Turn an engine error code into something a director can act on. Raw codes
+ * ('not-allowed', 'language-not-supported') tell the user nothing and read
+ * like a crash; every one of these has a next step in it instead.
+ */
+export function describeVoiceError(error: string): string {
+  switch (error) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'mic blocked — allow microphone access, then press the mic again'
+    case 'network':
+      return 'voice needs a connection — check the network and try again'
+    case 'language-not-supported':
+    case 'aborted':
+      return 'the mic needs a moment — press it again'
+    default:
+      return error.includes(' ') ? error : 'voice is unavailable right now — you can still type a cue'
+  }
+}
+
 export function isDeepgramConfigured(): boolean {
   return isDeepgramAvailable()
 }
@@ -456,58 +588,75 @@ export function isVoiceListening(): boolean {
   return listening
 }
 
+/**
+ * Pay the one-time costs of the Deepgram capture path — AudioContext startup
+ * and AudioWorklet module compile — ahead of the first press, so the mic opens
+ * on the beat instead of after it. Safe to call repeatedly; touches no mic and
+ * asks for no permission. Must run inside a user gesture for the context to
+ * actually resume.
+ */
+export function warmVoicePipeline(): void {
+  if (!isDeepgramAvailable()) return
+  try {
+    const ctx = getSharedAudioContext()
+    if (ctx.state === 'suspended') void ctx.resume()
+    void ensurePcmCaptureWorklet(ctx)
+  } catch {
+    // Warming is best-effort — a cold start still works, just slower.
+  }
+}
+
 export function stopVoiceSession(): void {
   listening = false
   forceVision = false
+  drain = null
   clearFinishTimer()
   sessionGen += 1
 
+  stopLevelMeter()
   if (deepgramConnection) deepgramStop()
   detachNativeRecognition()
 
   handlers.onListeningChange?.(false)
+  handlers.onPhase?.('idle')
   handlers.onInterim?.('')
 }
 
 export function finishVoiceSession(): void {
   if (!listening) return
-  const gen = sessionGen
-  const fv = forceVision
   listening = false
   handlers.onListeningChange?.(false)
+  handlers.onPhase?.('idle')
   // Keep the running transcript on screen through the drain — the words you
   // just said shouldn't vanish the instant you release the button.
   handlers.onInterim?.(runningTranscript(''))
 
   if (deepgramConnection) {
-    const conn = deepgramConnection
-    try { conn.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
+    drain = { gen: sessionGen, forceVision }
+    try { deepgramConnection.sendCloseStream({ type: 'CloseStream' }) } catch { /* ignore */ }
     clearFinishTimer()
-    finishTimer = setTimeout(() => {
-      if (gen !== sessionGen) return
-      if (deepgramConnection === conn) {
-        stopVoiceSession()
-        emitFinalAndReset(fv)
-      }
-    }, FINISH_GRACE_MS)
+    // Backstop only — the socket's close (or an UtteranceEnd) normally
+    // settles this within a few hundred ms.
+    finishTimer = setTimeout(settleDrain, FINISH_GRACE_MS)
     return
   }
 
   if (recognition) {
-    const rec = recognition
+    drain = { gen: sessionGen, forceVision }
     clearFinishTimer()
     // Ask the engine to stop WITHOUT detaching handlers first — Chrome
     // flushes one last final onresult (whatever you were mid-saying) before
-    // firing onend, and that handler (above) does the graceful submit. This
-    // backstop only covers onend never firing.
-    try { rec.stop() } catch { /* already stopped */ }
-    finishTimer = setTimeout(() => {
-      if (gen !== sessionGen) return
-      if (recognition === rec) detachNativeRecognition()
-      stopVoiceSession()
-      emitFinalAndReset(fv)
-    }, NATIVE_STOP_GRACE_MS)
+    // firing onend, and that handler settles the drain. This backstop only
+    // covers onend never firing.
+    try { recognition.stop() } catch { /* already stopped */ }
+    finishTimer = setTimeout(settleDrain, NATIVE_STOP_GRACE_MS)
+    return
   }
+
+  // Nothing was ever capturing — settle immediately rather than stranding the
+  // caller in a listening state that no engine will ever end.
+  drain = { gen: sessionGen, forceVision }
+  settleDrain()
 }
 
 export async function startVoiceSession(
@@ -523,8 +672,9 @@ export async function startVoiceSession(
   sessionGen += 1
   const gen = sessionGen
   handlers = next
-  if (opts?.forceVision) forceVision = true
+  forceVision = opts?.forceVision ?? false
   listening = true
+  drain = null
   finalSegments = []
 
   const xrActive = useEditorStore.getState().xrActive
@@ -583,10 +733,7 @@ export async function startVoiceSession(
         // Graceful finish: rec.stop() already flushed any trailing final
         // into finalSegments (onresult ran before onend) — submit now,
         // faster than waiting for the backstop timer.
-        const fv = forceVision
-        clearFinishTimer()
-        stopVoiceSession()
-        emitFinalAndReset(fv)
+        settleDrain()
         return
       }
       // Chrome auto-ends on silence — restart while the mic is held open.
@@ -595,7 +742,9 @@ export async function startVoiceSession(
 
     recognition = rec
     handlers.onListeningChange?.(true)
+    handlers.onPhase?.('listening')
     handlers.onInterim?.('')
+    void startLevelMeter(gen)
     try {
       rec.start()
     } catch {

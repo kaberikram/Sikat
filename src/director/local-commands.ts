@@ -9,6 +9,7 @@ import {
 import { runLocalPackets } from './local-packets'
 import { cutTick, wrapChord } from './sound'
 import { undoLast } from './undo'
+import { utteranceCandidates } from './utterance'
 import { endXrSession, placeStageAtUser, recallReviewScreen } from '../scene/xr/xr-bridge'
 import { noteCoachAction } from '../scene/xr/xr-coach'
 import { useEditorStore } from '../store'
@@ -102,7 +103,11 @@ function tryTakeCue(text: string): LocalCommandResult | null {
   return null
 }
 
-export function tryLocalCommand(text: string): LocalCommandResult {
+/**
+ * Resolve one reading of an utterance. `tryLocalCommand` feeds this every
+ * candidate reading in turn (verbatim first) and takes the first hit.
+ */
+function tryReading(text: string): LocalCommandResult {
   const t = text.trim().toLowerCase()
   if (!t) return { handled: false }
 
@@ -201,5 +206,19 @@ export function tryLocalCommand(text: string): LocalCommandResult {
     return { handled: true }
   }
 
+  return { handled: false }
+}
+
+/**
+ * Try every reading of what the director said — see `utterance.ts`. Spoken
+ * cues arrive punctuated, prefaced with fillers, and wrapped in politeness;
+ * typed ones sometimes do too. The verbatim text is always tried first, so
+ * literal-wording cues keep priority over any rewriting.
+ */
+export function tryLocalCommand(text: string): LocalCommandResult {
+  for (const reading of utteranceCandidates(text)) {
+    const result = tryReading(reading)
+    if (result.handled) return result
+  }
   return { handled: false }
 }

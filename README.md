@@ -102,6 +102,9 @@ The app runs on [http://localhost:3000](http://localhost:3000).
 - `npm run preview` — preview the production build
 - `npm run lint` — typecheck with `tsc --noEmit`
 - `npm run clean` — remove `dist/`
+- `npm test` — unit tests (grammar, utterance normalization, interpolation, presence)
+- `npm run smoke` — headless first-run walkthrough (needs `npm run dev` on :3000)
+- `npm run smoke:voice` — end-to-end voice pipeline test (see [Voice](#voice-what-you-say-vs-what-it-hears))
 
 ## Project Structure
 
@@ -210,6 +213,46 @@ v1 does **not** send headset telemetry to the server (local pose only) — avoid
 Desktop Chrome keeps using the native (Google-backed) SpeechRecognition API; Deepgram only kicks in where the native API is missing (Quest Browser, Firefox).
 
 **Forcing Deepgram on Desktop:** Chrome's native SpeechRecognition sometimes silently fails (starts but produces no transcripts, no error). Set `VITE_DISABLE_WEBSREECH=true` in your Vercel env to force Deepgram even on desktop.
+
+## Voice: what you say vs what it hears
+
+Speech recognition does not hand back the tidy strings a grammar wants. Deepgram's
+`smart_format` capitalizes and punctuates (`"Golden hour."`), people open with
+fillers (`"okay, golden hour"`), wrap cues in politeness (`"can you dim the lights?"`),
+address the crew (`"crew, golden hour"`), trail off (`"enable bloom, thanks"`),
+restart mid-sentence (`"add a, add a red box"`), and say numbers as words
+(`"up two over three seconds"`).
+
+`src/director/utterance.ts` turns one utterance into an ordered list of readings,
+**most faithful first**, and `tryLocalCommand` takes the first that resolves. The
+verbatim text is always reading 0, so cues whose literal wording matters (`"back to
+one"`, `"play once"`) keep priority and no rewriting can regress them. Loosening the
+individual grammar regexes instead would make near misses match the wrong command.
+
+**When adding a cue, phrase the test the way a person speaks it, not the way the docs
+write it.** `src/director/utterance.test.ts` guards both directions: dictated phrasings
+must land, and freeform direction (`"paint everything like a Monet"`) must still fall
+through to the crew rather than being bent into a local command.
+
+### Testing the pipeline
+
+Recognition itself can't run headless (no Google backend, no Deepgram key), so
+`scripts/voice-smoke.mjs` stands in an engine at each seam and runs everything
+downstream for real — the drain/settle state machine, normalization, the LOCAL CREW
+grammar, the packet pipeline, and the pod UI:
+
+```bash
+npm run dev                      # terminal A — :3000, native path
+VITE_DEEPGRAM_API_KEY=test-key VITE_DISABLE_WEBSREECH=true \
+  npx vite --port=3001           # terminal B — :3001, Deepgram path (optional)
+npm run smoke:voice              # terminal C
+```
+
+Part B intercepts `wss://api.deepgram.com` and replays the real release sequence:
+finals, then `CloseStream` answered by closing the socket with **no `UtteranceEnd`**.
+That is what happens when a director releases the button the instant they stop
+talking — the socket close, not `UtteranceEnd`, is the "engine is done" signal, and
+treating it as one is what keeps those commands from being dropped.
 
 **Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.
 

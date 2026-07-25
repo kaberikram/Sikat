@@ -237,16 +237,16 @@ function parseClause(t: string): LocalPacketSpec | null {
   return parseMood(t) ?? parseSpawn(t) ?? parseFx(t) ?? parseMove(t) ?? parseMotion(t)
 }
 
-/**
- * Parse a full cue, splitting "… then …" chains. Returns null unless EVERY
- * clause parses — a half-understood compound must fall through to the server.
- */
-export function parseOfflineClauses(text: string): LocalPacketSpec[] | null {
+const THEN_SPLIT = /\s*(?:,\s*then|then|,\s*and then|and then)\s+/
+/** Second-pass split: spoken compounds join with a bare "and" as often as "then". */
+const AND_SPLIT = /\s*(?:,\s*then|then|,\s*and then|and then|,\s*and|and|,)\s+/
+
+function parseWith(text: string, separator: RegExp): LocalPacketSpec[] | null {
   const clauses = text
     .trim()
     .toLowerCase()
     .replace(/[!.]+$/, '')
-    .split(/\s*(?:,\s*then|then|,\s*and then|and then)\s+/)
+    .split(separator)
     .map((c) => c.trim())
     .filter(Boolean)
   if (clauses.length === 0) return null
@@ -257,6 +257,23 @@ export function parseOfflineClauses(text: string): LocalPacketSpec[] | null {
     specs.push(spec)
   }
   return specs
+}
+
+/**
+ * Parse a full cue, splitting "… then …" chains. Returns null unless EVERY
+ * clause parses — a half-understood compound must fall through to the server.
+ *
+ * "then" is tried alone first: a clause that reads fine whole must not be
+ * chopped at an "and" it happens to contain. Only when the whole thing fails
+ * do we retry with "and"/"," as separators too.
+ */
+export function parseOfflineClauses(text: string): LocalPacketSpec[] | null {
+  const direct = parseWith(text, THEN_SPLIT)
+  if (direct) return direct
+  const joined = parseWith(text, AND_SPLIT)
+  // A single clause can't have needed the looser split — it means the first
+  // pass already saw the same string and rejected it.
+  return joined && joined.length > 1 ? joined : null
 }
 
 /**
