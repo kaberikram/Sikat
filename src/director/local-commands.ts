@@ -2,6 +2,7 @@ import { consumeLatestSuggestion } from './agent-runtime'
 import { startSetDay, strikeSet } from './demo-shoot'
 import {
   MONITOR_RECALL_RE,
+  normalizeUtterance,
   OFFLINE_SUGGESTIONS,
   parseOfflineClauses,
   WRAP_CUE_RE,
@@ -102,8 +103,11 @@ function tryTakeCue(text: string): LocalCommandResult | null {
   return null
 }
 
-export function tryLocalCommand(text: string): LocalCommandResult {
-  const t = text.trim().toLowerCase()
+export function tryLocalCommand(raw: string): LocalCommandResult {
+  // Spoken cues arrive punctuated and often prefixed ("Okay, cut.") — every
+  // matcher below is anchored, so normalize before anything tries to match.
+  const text = normalizeUtterance(raw)
+  const t = text.toLowerCase()
   if (!t) return { handled: false }
 
   const store = useEditorStore.getState()

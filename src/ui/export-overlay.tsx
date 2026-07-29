@@ -151,22 +151,18 @@ export function ExportOverlay() {
     URL.revokeObjectURL(url)
   }
 
-  if (!open && !mp4Open) return null
-
   return (
     <>
-      {open && (
-        <OverlayPanel overlayKey="export" title="EXPORT" className="overlay-export">
-          <div className="flex flex-col gap-2">
-            <Button variant="pink" onClick={handleExportJson} className="w-full">
-              EXPORT_JSON
-            </Button>
-            <Button variant="pink" onClick={() => setMp4Open(true)} className="w-full">
-              EXPORT_MP4
-            </Button>
-          </div>
-        </OverlayPanel>
-      )}
+      <OverlayPanel overlayKey="export" title="EXPORT" className="overlay-export" open={open}>
+        <div className="flex flex-col gap-2">
+          <Button variant="pink" onClick={handleExportJson} className="w-full">
+            EXPORT_JSON
+          </Button>
+          <Button variant="pink" onClick={() => setMp4Open(true)} className="w-full">
+            EXPORT_MP4
+          </Button>
+        </div>
+      </OverlayPanel>
       <ExportMp4Modal open={mp4Open} onClose={() => setMp4Open(false)} defaultDuration={duration} />
     </>
   )

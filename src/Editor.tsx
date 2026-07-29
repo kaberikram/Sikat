@@ -9,7 +9,7 @@ import { Toasts, pushToast } from './ui/toast'
 import { Button } from './ui/button'
 import { useMountEffect } from './hooks/useMountEffect'
 import { endXrSession, probeImmersiveArSupport, requestXrSession } from './scene/xr/xr-bridge'
-import { requestMicPermission } from './director/voice-session'
+import { primeVoiceCapture, requestMicPermission } from './director/voice-session'
 
 export const Editor: React.FC = () => {
   const [pipMountEl, setPipMountEl] = useState<HTMLDivElement | null>(null)
@@ -28,10 +28,16 @@ export const Editor: React.FC = () => {
       // Ask for mic access here, before going immersive: the permission
       // dialog can't render once inside the XR session on headset browsers
       // (e.g. Meta Quest Browser), so push-to-talk would otherwise silently
-      // fail with no trigger to grant it. Request unconditionally —
-      // getUserMedia is independent of SpeechRecognition feature detection.
-      // A denial never blocks XR entry; the slate guides the user instead.
-      st.setMicGranted(await requestMicPermission())
+      // fail with no trigger to grant it. A denial never blocks XR entry;
+      // the slate guides the user instead.
+      //
+      // This click is also the only reliable user gesture we get, so priming
+      // does double duty: it resumes the shared AudioContext (headset browsers
+      // leave it suspended, which mutes the set and starves mic capture) and
+      // leaves the capture graph warm so the first word of the first hold
+      // isn't lost to getUserMedia + worklet startup.
+      const primed = await primeVoiceCapture()
+      st.setMicGranted(primed || (await requestMicPermission()))
       await requestXrSession()
       st.setXrError(null)
     } catch (err) {

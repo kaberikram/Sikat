@@ -33,6 +33,36 @@ export const PLACEHOLDERS = [
 /** Shown when LOCAL CREW can't parse a cue — keep in sync with the grammar. */
 export const OFFLINE_SUGGESTIONS = ['add a red box', 'golden hour', 'make the sphere bounce']
 
+/**
+ * Words a person says before the actual cue. Stripped as a group so "okay, so
+ * cut" lands on `cut`. Deliberately excludes `yes`/`yeah`/`sure` — those are
+ * the suggestion-accept cue in local-commands.
+ */
+const LEADING_FILLERS = /^(?:(?:okay|ok|uh+|um+|erm|so|well|now|please|hey|alright|right)\b[,\s]+)+/i
+
+/**
+ * Speech engines punctuate. Deepgram runs with `punctuate` + `smart_format`, so
+ * a spoken "cut" arrives as "Cut." — and every cue regex in local-commands is
+ * anchored, so the trailing period alone kills the most-used cues on set.
+ * Normalize once, here, before anything tries to match or send.
+ *
+ * Pure and export-only so local-grammar.test.ts can cover it. Case is
+ * preserved — callers lowercase for matching, and the server's LLM reads better
+ * prose with it intact.
+ */
+export function normalizeUtterance(text: string): string {
+  const cleaned = text
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.!?]+$/, '')
+    .trim()
+  // Never normalize a cue out of existence — an all-filler utterance stays as-is.
+  const stripped = cleaned.replace(LEADING_FILLERS, '').trim()
+  return stripped || cleaned
+}
+
 const COLORS: Record<string, string> = {
   red: '#ff3b30',
   orange: '#ff9500',
@@ -258,6 +288,45 @@ export function parseOfflineClauses(text: string): LocalPacketSpec[] | null {
   }
   return specs
 }
+
+/**
+ * Vocabulary to boost in the speech engine (Deepgram keyterm prompting).
+ * Deliberately short: only the words a general model actually gets wrong on a
+ * set — FX names, motion jargon, and cues that mean nothing outside a shoot.
+ * Everyday words the grammar also accepts ("box", "cut", "take") are left off;
+ * they already transcribe fine, and padding the prompt dilutes it.
+ */
+export const DIRECTOR_KEYTERMS: string[] = [
+  // FX names — the worst offenders, and all of them are load-bearing.
+  'bloom',
+  'pixelate',
+  'glitch',
+  'dither',
+  'cell shading',
+  'toon',
+  // Motion words a general model doesn't expect as verbs.
+  'turnaround',
+  'wobble',
+  'squash',
+  'zigzag',
+  'spiral',
+  // Set nouns.
+  'pedestal',
+  'torus',
+  'sneaker',
+  'viewfinder',
+  'camcorder',
+  'gaffer',
+  'slate',
+  // Multi-word cues that only mean something on a set.
+  'golden hour',
+  'film noir',
+  'neon night',
+  'strike the set',
+  "that's a wrap",
+  'back to one',
+  'top of scene',
+]
 
 /**
  * In-headset session cues — kept here (pure) so tests can cover them.

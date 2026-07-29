@@ -26,7 +26,14 @@ const SLATE_H = 0.048
 const TEX_W = 896
 const TEX_H = 308
 
-export type SlateState = 'idle' | 'listening' | 'thinking' | 'replying' | 'misheard' | 'offline'
+export type SlateState =
+  | 'idle'
+  | 'listening'
+  | 'sending'
+  | 'thinking'
+  | 'replying'
+  | 'misheard'
+  | 'offline'
 
 export interface DirectorSlate {
   group: THREE.Group
@@ -35,7 +42,10 @@ export interface DirectorSlate {
   setLastSent: (text: string) => void
   setThinking: (on: boolean) => void
   setReply: (text: string) => void
-  setMisheard: () => void
+  /** `text` carries the crew's own words when the miss came from the server. */
+  setMisheard: (text?: string) => void
+  /** Released, tail still draining — keep the captured words on screen. */
+  setSending: (text: string) => void
   setOffline: (on: boolean) => void
   /** Sticky guidance line (e.g. "pick up the right controller") — cleared explicitly. */
   setNotice: (text: string | null) => void
@@ -48,6 +58,7 @@ export interface DirectorSlate {
 const STATE_ACCENT: Record<SlateState, string> = {
   idle: XR_UI.mint,
   listening: XR_UI.sun,
+  sending: XR_UI.blue,
   thinking: XR_UI.blue,
   replying: XR_UI.mint,
   misheard: XR_UI.pink,
@@ -57,18 +68,36 @@ const STATE_ACCENT: Record<SlateState, string> = {
 const STATE_LABEL: Record<SlateState, string> = {
   idle: 'DIRECTOR',
   listening: 'LISTENING',
+  sending: 'HEARD',
   thinking: 'THINKING',
   replying: 'DIRECTOR',
   misheard: 'DIRECTOR',
   offline: 'OFFLINE',
 }
 
+const DEFAULT_MISHEARD = 'didn’t catch that — name an object or a move'
+
 /** How long a reply stays up before easing back to idle. */
 const REPLY_HOLD_MS = 6000
 const MISHEARD_HOLD_MS = 3500
-/** Animated states repaint at ~12fps — enough for a calm pulse, cheap on Quest. */
-const ANIM_REPAINT_MS = 80
+/**
+ * Animated states repaint at ~24fps. At 12fps the breathing dot and the level
+ * bars advanced in visible steps at arm's length — smoothness is about what's
+ * in the frames, not just the rate. Still only 2 of 3 frames on a 72Hz headset;
+ * if frametime regresses on device, this is the first knob to turn back.
+ */
+const ANIM_REPAINT_MS = 40
 const LEVEL_BARS = 24
+
+/**
+ * State changes ease the card itself rather than cutting the texture: a quick
+ * dip in opacity and scale, then a settle. The slate is the surface you look at
+ * most in the headset, and it was the only one that never moved.
+ */
+const STATE_SETTLE_MS = 190
+/** How far the card recedes at the moment of the change. */
+const STATE_DIP_SCALE = 0.965
+const STATE_DIP_OPACITY = 0.55
 
 function wrapLines(
   ctx: CanvasRenderingContext2D,
@@ -105,6 +134,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let state: SlateState = 'idle'
   let interim = ''
   let bodyText = ''
+  let mishearBody = ''
   let notice: string | null = null
   let offline = false
   let smoothedLevel = 0
@@ -112,6 +142,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let holdUntil = 0
   let pulsePhase = 0
   let lastHint: string | null = null
+  /** Timestamp of the last state change — drives the re-form ease in update(). */
+  let stateChangedAt = -Infinity
+  let lastAnimatedState: SlateState | null = null
+  /** True once the re-form ease has landed, so it stops writing every frame. */
+  let settled = true
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
   const mat = new THREE.MeshBasicMaterial({
@@ -142,7 +177,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       const accent = STATE_ACCENT[st]
       ctx.fillStyle = accent
       ctx.beginPath()
-      if (st === 'thinking') {
+      if (st === 'thinking' || st === 'sending') {
         // Calm breathing dot.
         const r = 11 + Math.sin(pulsePhase) * 4
         ctx.arc(64, rowY, Math.max(r, 6), 0, Math.PI * 2)
@@ -160,7 +195,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       ctx.textAlign = 'right'
       ctx.font = '600 26px "Baloo 2", ui-rounded, system-ui, sans-serif'
       const hint =
-        st === 'listening' ? 'RELEASE TO SEND' : st === 'thinking' ? '' : 'HOLD A · TALK'
+        st === 'listening'
+          ? 'RELEASE TO SEND'
+          : st === 'thinking' || st === 'sending'
+            ? ''
+            : 'HOLD A · TALK'
       if (hint) ctx.fillText(hint, w - 56, rowY + 2)
 
       // Body — one open area, generous space; no inner well boxes.
@@ -197,11 +236,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
 
       let line = ''
       let ghost = false
-      if (st === 'thinking') {
+      if (st === 'sending' || st === 'thinking') {
         line = bodyText || ''
         ghost = true
       } else if (st === 'misheard') {
-        line = 'didn’t catch that — name an object or a move'
+        line = mishearBody || DEFAULT_MISHEARD
         ghost = false
       } else if (st === 'replying') {
         line = bodyText
@@ -241,6 +280,27 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     paint(now)
   }
 
+  /**
+   * Ease the card back from its dip after a state change. Cheap — a scale and
+   * an opacity on one mesh, no texture work — and a no-op once settled.
+   */
+  function applyStateSettle(now: number): void {
+    const t = (now - stateChangedAt) / STATE_SETTLE_MS
+    if (t >= 1) {
+      // Land exactly once, then stop touching the mesh every frame.
+      if (!settled) {
+        settled = true
+        mesh.scale.setScalar(1)
+        mat.opacity = 1
+      }
+      return
+    }
+    settled = false
+    const e = 1 - (1 - Math.max(t, 0)) ** 3
+    mesh.scale.setScalar(STATE_DIP_SCALE + (1 - STATE_DIP_SCALE) * e)
+    mat.opacity = STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e
+  }
+
   return {
     group,
     setListening: (on) => {
@@ -264,11 +324,18 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       holdUntil = performance.now() + REPLY_HOLD_MS
       repaint(true)
     },
+    setSending: (text) => {
+      // Release lands here immediately — the words you just said stay up while
+      // the engine's tail drains, instead of the slate going blank.
+      state = 'sending'
+      bodyText = text
+      interim = ''
+      repaint(true)
+    },
     setThinking: (on) => {
       if (on) {
         state = 'thinking'
-        pulsePhase = 0
-      } else if (state === 'thinking') {
+      } else if (state === 'thinking' || state === 'sending') {
         state = 'idle'
       }
       repaint(true)
@@ -279,8 +346,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       holdUntil = performance.now() + REPLY_HOLD_MS
       repaint(true)
     },
-    setMisheard: () => {
+    setMisheard: (text) => {
       state = 'misheard'
+      mishearBody = text?.trim() ?? ''
+      bodyText = ''
       holdUntil = performance.now() + MISHEARD_HOLD_MS
       repaint(true)
     },
@@ -298,14 +367,28 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       smoothedLevel = next > smoothedLevel ? next : smoothedLevel * 0.85 + next * 0.15
     },
     update: () => {
+      const now = performance.now()
       const st = effectiveState()
-      if (st === 'thinking' || st === 'listening') {
-        pulsePhase += 0.12
+
+      // Re-form on every state change: the card recedes a hair and settles back,
+      // so listening → sending → replying reads as one surface changing its mind
+      // rather than three textures swapped in place.
+      if (st !== lastAnimatedState) {
+        lastAnimatedState = st
+        stateChangedAt = now
+      }
+      applyStateSettle(now)
+
+      if (st === 'thinking' || st === 'listening' || st === 'sending') {
+        // Phase advances on wall time so the pulse rate doesn't ride the
+        // repaint cadence.
+        pulsePhase = (now / 1000) * 3
         repaint()
       } else if ((st === 'replying' || st === 'misheard') && holdUntil) {
-        if (performance.now() > holdUntil) {
+        if (now > holdUntil) {
           state = 'idle'
           bodyText = ''
+          mishearBody = ''
           holdUntil = 0
           repaint(true)
         }
@@ -313,7 +396,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
         // Repaint when the demo beat, aim lock, suggestion, or coach line changes.
         const aim = getAimedObject()
         const suggestion = getLatestSuggestion()
-        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}|${currentCoachHint(performance.now()) ?? ''}`
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}|${currentCoachHint(now) ?? ''}`
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)

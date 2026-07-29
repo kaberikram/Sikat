@@ -209,6 +209,15 @@ v1 does **not** send headset telemetry to the server (local pose only) — avoid
 
 Desktop Chrome keeps using the native (Google-backed) SpeechRecognition API; Deepgram only kicks in where the native API is missing (Quest Browser, Firefox).
 
+The mic graph is warmed on the **ENTER XR** click (a real user gesture — headset
+browsers leave an `AudioContext` suspended otherwise, which mutes the set's sound
+design *and* starves capture) and held for the session. Audio spoken before the
+Deepgram socket finishes connecting is buffered and flushed on open, so the first
+word of a hold isn't clipped by the handshake. Spoken transcripts arrive
+punctuated (`punctuate` + `smart_format`), so they're normalized once in
+`normalizeUtterance` (`src/director/local-grammar.ts`) before any cue matching —
+without it, `"Cut."` never matches `/^cut$/`.
+
 **Forcing Deepgram on Desktop:** Chrome's native SpeechRecognition sometimes silently fails (starts but produces no transcripts, no error). Set `VITE_DISABLE_WEBSREECH=true` in your Vercel env to force Deepgram even on desktop.
 
 **Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.

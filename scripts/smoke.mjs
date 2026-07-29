@@ -109,6 +109,29 @@ check(
 )
 await page.screenshot({ path: `${OUT}04-grammar.png` })
 
+// 5 — the shapes speech engines actually produce. Deepgram runs with
+// punctuate + smart_format, so a spoken "cut" arrives as "Cut." — and every
+// cue matcher is anchored. These fail without transcript normalization.
+console.log('spoken forms')
+await say('Show timeline.', 1200)
+check(
+  await store(() => window.__editorStore.getState().overlayTimeline),
+  'punctuated "Show timeline." opened the timeline'
+)
+await say('Okay, golden hour.', 2500)
+check(
+  await store(() => window.__editorStore.getState().lighting.key.color.toLowerCase() === '#ffb36b'),
+  'filler-prefixed "Okay, golden hour." relit the key light'
+)
+await say('Action.', 1200)
+check(await store(() => window.__editorStore.getState().isRolling), 'punctuated "Action." rolled a take')
+await say('Cut.', 1200)
+check(
+  await store(() => !window.__editorStore.getState().isRolling),
+  'punctuated "Cut." ended the take'
+)
+await page.screenshot({ path: `${OUT}05-spoken-forms.png` })
+
 await browser.close()
 
 if (failures.length) {
