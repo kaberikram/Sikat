@@ -35,6 +35,10 @@ let visibleFrom = 0
 let learned = new Set<CoachAction>()
 /** 0..1 from ambient-sense; 0 means "reads confident". */
 let hesitation = 0
+/** Monotonic line index, and when the current line began with what dwell. */
+let slot = 0
+let slotStartedAt = 0
+let slotMs = LINE_MS
 
 /**
  * How long each line holds, and how many times the set repeats itself.
@@ -81,6 +85,9 @@ export function startXrCoach(nowMs: number): void {
   active = true
   visibleFrom = nowMs + COACH_DELAY_MS
   learned = new Set()
+  slot = 0
+  slotStartedAt = 0
+  slotMs = LINE_MS
 }
 
 /** The line the slate should show right now, or null when coaching is over/idle. */
@@ -91,8 +98,26 @@ export function currentCoachHint(nowMs: number): string | null {
     markSeen()
     return null
   }
-  const { lineMs, cycles } = coachPacing(hesitation, learned.size)
-  const slot = Math.floor((nowMs - visibleFrom) / lineMs)
+
+  // Advance monotonically, latching the pacing when a line begins.
+  //
+  // This used to derive the slot fresh each frame as
+  // `floor((now - visibleFrom) / lineMs)` with `lineMs` recomputed from live
+  // hesitation. Hesitation drifts continuously, so `lineMs` moved between 4000
+  // and 7200 and the slot index jumped with it — including *backwards*. The
+  // coach could show its second line and then its first again. A line's dwell
+  // is decided when that line starts and does not change under it.
+  if (slotStartedAt === 0) {
+    slotStartedAt = visibleFrom
+    slotMs = coachPacing(hesitation, learned.size).lineMs
+  }
+  while (nowMs - slotStartedAt >= slotMs) {
+    slotStartedAt += slotMs
+    slot += 1
+    slotMs = coachPacing(hesitation, learned.size).lineMs
+  }
+
+  const { cycles } = coachPacing(hesitation, learned.size)
   if (slot >= remaining.length * cycles) {
     markSeen()
     return null
@@ -117,4 +142,7 @@ export function resetXrCoachForTest(): void {
   visibleFrom = 0
   learned = new Set()
   hesitation = 0
+  slot = 0
+  slotStartedAt = 0
+  slotMs = LINE_MS
 }

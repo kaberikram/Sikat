@@ -16,6 +16,7 @@
  * run through the offline grammar, turned into the same IntentPreviewMessage
  * shape the server sends, and handed to showGhost. No new rendering code.
  */
+import { respond } from '../scene/xr/ambient-channel'
 import { isGoodMomentToPropose } from '../scene/xr/ambient-sense'
 import { clearGhost, showGhost } from './ghost-preview'
 import { parseOfflineClauses } from './local-grammar'
@@ -127,6 +128,9 @@ export function showProposal(msg: AgentSuggestionMessage): ProposalOutcome {
   expiry = setTimeout(() => {
     liveProposalId = null
     expiry = null
+    // Ignored into expiry — the ghost dissolves on its own TTL, and the room's
+    // attribution goes with it.
+    respond({ kind: 'proposalEnded' })
   }, PROPOSAL_TTL_MS)
   return 'shown'
 }
@@ -145,4 +149,8 @@ export function clearProposal(): void {
     clearGhost(liveProposalId)
     liveProposalId = null
   }
+  // The room stops wearing the proposing member's colour when — and only when —
+  // the offer is actually over, so attribution lasts exactly as long as the
+  // thing it attributes.
+  respond({ kind: 'proposalEnded' })
 }

@@ -23,6 +23,7 @@ import { beatTick, cutTick, listenEnd, listenStart, missedBuzz, replyChime } fro
 import { useEditorStore } from '../../store'
 import { attendTo, clearAttention, pulseAttention } from './attention-field'
 import type { DirectorSlate } from './director-slate'
+import { resolveAccent, resolveRoomState, type AccentClaims, type AccentOwner } from './ambient-policy'
 import { setRoomAccent, setRoomLevel, setRoomState } from './room-response'
 
 export type Response =
@@ -56,17 +57,27 @@ export type Response =
    * when it's false there is nothing to look at and the offer needs saying.
    */
   | { kind: 'proposed'; text: string; color: string; spatial: boolean }
+  /** The offer was taken up, ignored into expiry, or superseded. */
+  | { kind: 'proposalEnded' }
+  /** The entry cinematic's mint wash. Weight 0 releases it. */
+  | { kind: 'entryAccent'; color: string; weight: number }
   /** Sticky guidance ("pick up the right controller"). Always text; null clears. */
   | { kind: 'notice'; text: string | null }
   /** Link state. */
   | { kind: 'offline'; on: boolean }
 
-/** How long a reply waits to see whether the scene answers for it. */
-const REPLY_GRACE_MS = 1200
+/**
+ * How long a reply waits to see whether the scene answers for it.
+ *
+ * This was 1200ms, which is how long you waited to read the crew's words after
+ * a command that changed nothing — a question, a refusal, chitchat. The wait
+ * only has to cover the gap between a reply arriving and the first packet
+ * arriving; anything longer is dead air. It is also now cut short the moment
+ * the answer is known (see `commandSettled`).
+ */
+const REPLY_GRACE_MS = 450
 /** Misses beyond this many in a row stop being ambient and become words. */
 const MISS_ESCALATE_AT = 2
-/** How long the room wears a proposing crew member's colour. */
-const PROPOSAL_ACCENT_MS = 2200
 const PROPOSAL_ACCENT_WEIGHT = 0.45
 
 let slate: DirectorSlate | null = null
@@ -74,14 +85,37 @@ let slate: DirectorSlate | null = null
 let consecutiveMisses = 0
 let lastLandedAt = 0
 let pendingReply: { text: string; at: number; timer: ReturnType<typeof setTimeout> } | null = null
-let proposalAccentTimer: ReturnType<typeof setTimeout> | null = null
 /** The object the aim is resting on — what a miss or a landing pulses. */
 let aimedId: string | null = null
+
+// ---- surface state, owned here and nowhere else ----
+
+let listening = false
+let working = false
+const accentClaims: AccentClaims = {}
+
+function applyRoomState(): void {
+  setRoomState(resolveRoomState(listening, working))
+}
+
+/**
+ * Claim or release the room's accent. The only path to `setRoomAccent` —
+ * `entry-sequence` goes through here too, so nothing writes that surface behind
+ * the channel's back.
+ */
+export function claimRoomAccent(owner: AccentOwner, claim: { color: string; weight: number } | null): void {
+  if (claim) accentClaims[owner] = claim
+  else delete accentClaims[owner]
+  const winner = resolveAccent(accentClaims)
+  setRoomAccent(winner?.color ?? null, winner?.weight ?? 0)
+}
 
 export function bindAmbientChannel(next: DirectorSlate | null): void {
   slate = next
   consecutiveMisses = 0
   lastLandedAt = 0
+  listening = false
+  working = false
   clearPendingReply()
 }
 
@@ -127,7 +161,8 @@ export function respond(r: Response): void {
     }
 
     case 'heard': {
-      setRoomState(r.on ? 'listening' : 'idle')
+      listening = r.on
+      applyRoomState()
       if (!r.silent) {
         if (r.on) listenStart()
         else listenEnd()
@@ -142,15 +177,20 @@ export function respond(r: Response): void {
     }
 
     case 'working': {
-      setRoomState(r.on ? 'working' : 'idle')
+      working = r.on
+      applyRoomState()
       toSlate((s) => s.setThinking(r.on))
+      // The command finished and the scene never changed — so the crew's words
+      // are the whole answer and there is nothing left to wait for.
+      if (!r.on) flushReply()
       return
     }
 
     case 'landed': {
       lastLandedAt = Date.now()
       consecutiveMisses = 0
-      setRoomState('idle')
+      working = false
+      applyRoomState()
       const id = r.objectId ?? aimedId
       if (id) pulseAttention(id, 'landed')
       else cutTick()
@@ -162,7 +202,8 @@ export function respond(r: Response): void {
 
     case 'missed': {
       consecutiveMisses += 1
-      setRoomState('idle')
+      working = false
+      applyRoomState()
       missedBuzz()
       if (aimedId) pulseAttention(aimedId, 'missed')
       // One miss reads fine as a pulse. Two in a row means the ambient channel
@@ -189,7 +230,8 @@ export function respond(r: Response): void {
     }
 
     case 'blocked': {
-      setRoomState('idle')
+      working = false
+      applyRoomState()
       toSlate((s) => s.setLastSent(r.text))
       return
     }
@@ -200,17 +242,26 @@ export function respond(r: Response): void {
     }
 
     case 'proposed': {
-      // Either way the room takes on the proposing crew member's colour for a
-      // moment, so an offer is attributable at a glance.
-      setRoomAccent(r.color, PROPOSAL_ACCENT_WEIGHT)
-      if (proposalAccentTimer) clearTimeout(proposalAccentTimer)
-      proposalAccentTimer = setTimeout(() => {
-        setRoomAccent(null)
-        proposalAccentTimer = null
-      }, PROPOSAL_ACCENT_MS)
+      // The room takes on the proposing crew member's colour so an offer is
+      // attributable at a glance — and holds it for as long as the offer
+      // actually stands. It used to run on its own 2.2s timer while the ghost
+      // breathed for 9s, so for most of an offer's life there was a silhouette
+      // on the set with nothing saying who put it there.
+      claimRoomAccent('proposal', { color: r.color, weight: PROPOSAL_ACCENT_WEIGHT })
       // A relight or an FX tweak has no silhouette to stand in for it, and
       // inventing one would be a lie — so those still need words.
       if (!r.spatial) toSlate((s) => s.setLastSent(`${r.text} — say “do it”`))
+      return
+    }
+
+    case 'proposalEnded': {
+      claimRoomAccent('proposal', null)
+      return
+    }
+
+    case 'entryAccent': {
+      // The entry cinematic used to write this surface directly, every frame.
+      claimRoomAccent('entry', r.weight > 0 ? { color: r.color, weight: r.weight } : null)
       return
     }
 
@@ -235,10 +286,10 @@ export function resetAmbientChannel(): void {
   consecutiveMisses = 0
   lastLandedAt = 0
   aimedId = null
+  listening = false
+  working = false
   clearPendingReply()
-  if (proposalAccentTimer) {
-    clearTimeout(proposalAccentTimer)
-    proposalAccentTimer = null
-    setRoomAccent(null)
-  }
+  for (const owner of Object.keys(accentClaims) as AccentOwner[]) delete accentClaims[owner]
+  setRoomAccent(null)
+  setRoomState('idle')
 }

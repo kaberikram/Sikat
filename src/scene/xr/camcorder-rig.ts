@@ -63,6 +63,10 @@ const AIM_OFFSET = new THREE.Quaternion().setFromEuler(
 /** Enter without a valid head pose after this long rather than waiting forever. */
 const ENTRY_POSE_TIMEOUT_SEC = 3
 
+/** Only learn a working distance from a director who has actually settled. */
+const WORKING_SAMPLE_STILLNESS = 0.75
+const WORKING_SAMPLE_INTERVAL_MS = 4000
+
 const LENS_FORWARD_M = 0.05
 const AIM_RAY_LEN = 2.5
 
@@ -247,6 +251,7 @@ export function createCamcorderRig(
    *  guardian center instead of in front of the user. */
   let pendingEntry = false
   let pendingEntrySec = 0
+  let lastDistanceSampleAt = 0
   /** Last frame's right pad — button handlers fire outside update()'s scope. */
   let padRef: ReturnType<typeof getRightPad> = null
   let padMissingSec = 0
@@ -277,6 +282,29 @@ export function createCamcorderRig(
     return preferredStandoff(getProfile(), STAGE_STANDOFF_M, STANDOFF_RANGE)
   }
 
+  /**
+   * Learn the director's working distance from where they actually stand.
+   *
+   * This used to record the distance we had *just computed* for the placement —
+   * so the profile only ever learned its own output. The blend
+   * `0.4 × default + 0.6 × median` has its fixed point at the default, so any
+   * real preference decayed straight back to 1.9m and the personalisation could
+   * never do anything. Sampling a settled director instead gives it something
+   * real to learn from: if they habitually back off to frame a wide, the set
+   * starts appearing there.
+   */
+  function sampleWorkingDistance(nowMs: number, stillness: number): void {
+    if (stillness < WORKING_SAMPLE_STILLNESS) return
+    if (nowMs - lastDistanceSampleAt < WORKING_SAMPLE_INTERVAL_MS) return
+    const { pos } = readHeadPose()
+    if (!isHeadPoseValid(pos)) return
+    const stage = useEditorStore.getState().stage.position
+    const d = standoffBetween(pos, stage)
+    if (d < STANDOFF_RANGE[0] || d > STANDOFF_RANGE[1]) return
+    lastDistanceSampleAt = nowMs
+    noteStandoff(d)
+  }
+
   /** Move the stage in front of the user (only after a real move) — the whole
    *  set, entry ripple, and crew stations follow the store's stage anchor. */
   function placeStageAtCurrentUser(): void {
@@ -287,7 +315,6 @@ export function createCamcorderRig(
     if (!shouldReplaceStage(pos, forward, st.stage.position, standoff)) return
     const position = computeStagePose(pos, forward, standoff).position
     st.updateStage({ position })
-    noteStandoff(standoffBetween(pos, position))
     playStageLockPulse()
     beatTick()
   }
@@ -521,7 +548,6 @@ export function createCamcorderRig(
         const position = computeStagePose(head, forward, standoff).position
         useEditorStore.getState().updateStage({ position })
         noteSessionStart()
-        if (valid) noteStandoff(standoffBetween(head, position))
         startEntrySequence()
         startXrCoach(timeSec * 1000)
         if (!valid) {
@@ -581,6 +607,7 @@ export function createCamcorderRig(
     updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, getAimedObject()?.id ?? null)
     const ambient = getAmbientSignals()
     setCoachHesitation(ambient.hesitation)
+    sampleWorkingDistance(nowMs, ambient.stillness)
     // The room breathes with you: settle and it deepens around the set; move
     // with intent and it lifts.
     setRoomStillness(ambient.stillness)

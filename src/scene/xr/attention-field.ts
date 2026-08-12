@@ -161,20 +161,47 @@ export function initAttentionField(scene: THREE.Scene): void {
 }
 
 /**
- * Attend to an object (or nothing). `tone` becomes the resting tone — the one
- * the field returns to after any one-shot pulse finishes.
+ * How long `addressed` holds before easing back to the resting look.
+ *
+ * It is a heads-up that the crew is about to touch this thing, not a state the
+ * object lives in. Making it the *resting* tone was a bug you could sit in
+ * forever: aim at an object a command addresses and it stayed at 0.45 with the
+ * faster breathe indefinitely after the change had landed, because the resting
+ * tone only changed on the next aim *change* — and looking straight at
+ * something is precisely when the aim does not change.
+ */
+const ADDRESSED_HOLD_MS = 2600
+
+/**
+ * Attend to an object (or nothing).
+ *
+ * `aimed` sets the resting look. `addressed` is transient: it shows for a beat
+ * and then decays back to whatever the resting look is.
  */
 export function attendTo(objectId: string | null, tone: AttentionTone = 'aimed'): void {
-  restTone = tone
+  const transient = tone === 'addressed'
+  if (!transient) restTone = tone
+
   if (objectId === targetId) {
-    if (pulseUntil === 0) activeTone = tone
+    if (transient) {
+      activeTone = tone
+      pulseFrom = performance.now()
+      pulseUntil = pulseFrom + ADDRESSED_HOLD_MS
+    } else if (pulseUntil === 0) {
+      activeTone = tone
+    }
     return
   }
   targetId = objectId
   targetMesh = null
   boundsScaleSig = 0
-  pulseUntil = 0
   activeTone = tone
+  if (transient) {
+    pulseFrom = performance.now()
+    pulseUntil = pulseFrom + ADDRESSED_HOLD_MS
+  } else {
+    pulseUntil = 0
+  }
   if (!objectId) return
   resolveTargetMesh()
 }
@@ -269,12 +296,15 @@ export function updateAttentionField(nowMs: number, delta: number): void {
   }
   group.visible = true
 
-  // One-shot envelope, then hand back to the resting tone.
+  // One-shot beats play an envelope; `addressed` is a hold that simply expires.
+  // Both hand back to the resting tone when they finish.
   let envelope = 1
   if (pulseUntil > 0) {
     const t = clamp01((nowMs - pulseFrom) / (pulseUntil - pulseFrom))
-    // Fast in, eased out — a beat, not a blink.
-    envelope = t < 0.25 ? t / 0.25 : easeOut(1 - (t - 0.25) / 0.75)
+    if (PULSE_MS[activeTone]) {
+      // Fast in, eased out — a beat, not a blink.
+      envelope = t < 0.25 ? t / 0.25 : easeOut(1 - (t - 0.25) / 0.75)
+    }
     if (t >= 1) {
       pulseUntil = 0
       activeTone = restTone
