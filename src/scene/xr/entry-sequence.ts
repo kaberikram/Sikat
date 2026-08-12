@@ -46,6 +46,13 @@ let running = false
 let startedAt = 0
 let dimTarget = 0
 let dimLevel = 0
+/**
+ * The set's intended resting ambience. `setRoomDim` moves this; the room's
+ * breathing rides on top via `setRoomDimOffset`. Keeping them apart is what
+ * stops a per-frame modulation from undoing the strike's hard zero.
+ */
+let dimBase = 0
+let dimOffset = 0
 
 // One-shot "stage locks in" ripple — fired when the stage re-places mid-session.
 let lockRipple: THREE.Mesh | null = null
@@ -183,13 +190,24 @@ export function startEntrySequence(): void {
   buildObjects()
   running = true
   startedAt = performance.now()
-  dimTarget = SET_DIM
+  setRoomDim(SET_DIM)
   entrySwell()
 }
 
 /** Ambient room dim (0..1). The demo's strike and session end set 0. */
 export function setRoomDim(level: number): void {
-  dimTarget = clamp01(level)
+  dimBase = clamp01(level)
+  dimTarget = clamp01(dimBase + dimOffset)
+}
+
+/**
+ * A small additive nudge on top of the resting dim — the room settling with a
+ * still director. Never moves the room off a hard zero, so a struck set stays
+ * struck.
+ */
+export function setRoomDimOffset(offset: number): void {
+  dimOffset = dimBase > 0 ? Math.max(0, offset) : 0
+  dimTarget = clamp01(dimBase + dimOffset)
 }
 
 /** "Stage locks in" — a quick ripple at the (re-)placed stage position. */
@@ -239,8 +257,8 @@ export function updateEntrySequence(now: number, delta: number): void {
 
   // Beat 1 (0–1.2s): the room dims — dome eases toward an entry-deep 0.45
   // before settling at SET_DIM (handled by the damp above once we lower it).
-  if (t < 0.24) dimTarget = 0.45 * easeOut(t / 0.24)
-  else dimTarget = SET_DIM
+  if (t < 0.24) setRoomDim(0.45 * easeOut(t / 0.24))
+  else setRoomDim(SET_DIM)
 
   // Beat 2 (0.8–2.2s): stage ring materializes + ripple.
   const w = clamp01((t - 0.16) / 0.28)
@@ -307,6 +325,8 @@ function disposeEntryObjects(): void {
 /** Full teardown on session end — room returns to passthrough instantly. */
 export function disposeEntrySequence(): void {
   running = false
+  dimBase = 0
+  dimOffset = 0
   dimTarget = 0
   dimLevel = 0
   disposeEntryObjects()

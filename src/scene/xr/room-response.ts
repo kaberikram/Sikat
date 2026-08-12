@@ -14,10 +14,17 @@
  *
  * Cost: two extra draw calls (ripple + arc), both hidden unless their state is
  * active, geometry and textures built once, no per-frame allocation.
+ *
+ * This module and `entry-sequence` import each other — the entry beat asks for
+ * a ring accent, the room's breathing nudges the entry dome's dim. Both calls
+ * happen inside update functions rather than at module scope, so the cycle
+ * resolves through hoisted function declarations and rollup bundles it without
+ * complaint. Keep it that way: no top-level work that reaches across.
  */
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import { setRoomDimOffset } from './entry-sequence'
 import { makeCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 export type RoomState = 'idle' | 'listening' | 'working'
@@ -62,6 +69,13 @@ let smoothedLevel = 0
 /** One-shot accent (the entry beat, a proposing agent's colour). */
 let accentColor: string | null = null
 let accentWeight = 0
+
+/** How settled the director is, 0..1 — drives the room's own breathing. */
+let stillness = 1
+let smoothedStillness = 1
+/** How far stillness may deepen the ambient dim beyond its resting level. */
+const STILLNESS_DIM_RANGE = 0.08
+const STILLNESS_DAMP = 1.5
 
 let tintOpacity = NEUTRAL_OPACITY
 const currentColor = new THREE.Color(NEUTRAL_COLOR)
@@ -173,9 +187,23 @@ export function setRoomAccent(color: string | null, weight = 1): void {
   accentWeight = color ? clamp01(weight) : 0
 }
 
+/**
+ * How settled the director is (0..1). A director who has stopped moving gets a
+ * slightly deeper room; one crossing the floor gets it back. It is a few
+ * percent of dome opacity — you should feel it and never catch it happening.
+ */
+export function setRoomStillness(next: number): void {
+  stillness = clamp01(next)
+}
+
 export function updateRoomResponse(nowMs: number, delta: number): void {
   smoothedLevel +=
     (level - smoothedLevel) * (level > smoothedLevel ? LEVEL_ATTACK : LEVEL_RELEASE)
+
+  // Room breathing. Slow on purpose — the set should feel like it settles with
+  // you, not like it is reacting to you.
+  smoothedStillness += (stillness - smoothedStillness) * Math.min(1, delta * STILLNESS_DAMP)
+  setRoomDimOffset(smoothedStillness * STILLNESS_DIM_RANGE)
 
   // --- the ring's own tint ---
   let wantOpacity = NEUTRAL_OPACITY
@@ -269,6 +297,8 @@ export function disposeRoomResponse(): void {
   smoothedLevel = 0
   accentColor = null
   accentWeight = 0
+  stillness = 1
+  smoothedStillness = 1
   tintOpacity = NEUTRAL_OPACITY
   currentColor.set(NEUTRAL_COLOR)
 }

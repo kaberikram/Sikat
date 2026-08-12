@@ -24,12 +24,20 @@ import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { clearAimPick, getAimedObject, setAimChangeListener, updateAimPick } from './aim-picker'
 import { bindAmbientChannel, resetAmbientChannel, respond } from './ambient-channel'
+import {
+  getAmbientSignals,
+  noteAmbientCommand,
+  noteAmbientTake,
+  resetAmbientSense,
+  updateAmbientSense,
+} from './ambient-sense'
 import { createDirectorSlate } from './director-slate'
+import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
 import { computeStagePose, isHeadPoseValid, shouldReplaceStage, type V3 } from './stage-placement'
 import { registerStagePlacer } from './xr-bridge'
-import { noteCoachAction, startXrCoach, stopXrCoach } from './xr-coach'
+import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
 /**
@@ -274,6 +282,7 @@ export function createCamcorderRig(
       st.endTake()
       doublePulse(padRef, 0.5, 40)
       const takeEnd = useEditorStore.getState().currentTime
+      noteAmbientTake(performance.now())
       onTakeEnded?.(takeStart, takeEnd, xrInput.xrOrigin.head)
       // The review monitor swinging into view is the answer; the line only
       // carries the part the monitor can't — where the take went.
@@ -340,6 +349,7 @@ export function createCamcorderRig(
           return
         }
         noteCoachAction('talk')
+        noteAmbientCommand(performance.now())
         const commandId = newCommandId()
         respond({ kind: 'working', on: true })
         thinkingLine = line
@@ -512,7 +522,17 @@ export function createCamcorderRig(
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
     worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
-    updateAimPick(worldPos, aimQuat, timeSec * 1000)
+    const nowMs = timeSec * 1000
+    updateAimPick(worldPos, aimQuat, nowMs)
+    // Read the director: settled or roaming, dwelling or sweeping, how long
+    // since they last said anything. Drives the coach's patience and when a
+    // proposal is allowed to surface.
+    updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, getAimedObject()?.id ?? null)
+    const ambient = getAmbientSignals()
+    setCoachHesitation(ambient.hesitation)
+    // The room breathes with you: settle and it deepens around the set; move
+    // with intent and it lifts.
+    setRoomStillness(ambient.stillness)
 
     euler.setFromQuaternion(aimQuat, 'XYZ')
     applyLiveCameraPose({
@@ -548,6 +568,7 @@ export function createCamcorderRig(
       setAimChangeListener(null)
       clearAimPick()
       resetAmbientChannel()
+      resetAmbientSense()
       bindAmbientChannel(null)
       stopVoiceSession()
       directorSlate.dispose()
