@@ -473,9 +473,13 @@ export function createCamcorderRig(
       return
     }
     pulse(padRef, 0.2, 20)
-    // The room stops listening the instant the button comes up; the captured
-    // words stay on the slate underneath while the engine's tail drains.
+    // The room stops listening the instant the button comes up — and starts
+    // working in the same beat, because it genuinely is: the transcript is
+    // draining. Without this the ring fell to neutral for the 150-500ms until
+    // the final landed and then lit blue, which reads as a flicker rather than
+    // as one surface changing what it is doing.
     respond({ kind: 'heard', on: false })
+    respond({ kind: 'working', on: true })
     directorSlate.setSending(lastInterim.trim())
     finishVoiceSession()
   }
