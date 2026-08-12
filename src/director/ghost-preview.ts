@@ -21,6 +21,11 @@ import type { IntentPreviewMessage, Vec3 } from './protocol'
 
 const GHOST_TTL_MS = 5000
 const GHOST_COLOR = '#57CFA0'
+const GHOST_OPACITY = 0.28
+/** Proposals breathe so they read as an offer rather than a done deal. */
+const BREATHE_LOW = 0.18
+const BREATHE_HIGH = 0.3
+const BREATHE_HZ = 0.4
 
 interface Ghost {
   root: THREE.Object3D
@@ -29,6 +34,15 @@ interface Ghost {
    *  the live object's geometry and must never dispose it. */
   ownsGeometry: boolean
   expireTimer: ReturnType<typeof setTimeout>
+  /** A proposal, not an understanding — it pulses and waits to be taken up. */
+  breathe: boolean
+}
+
+export interface GhostOptions {
+  /** Pulse the ghost: this is something the set is offering, not echoing. */
+  breathe?: boolean
+  /** Override the default 5s life. */
+  ttlMs?: number
 }
 
 const ghosts = new Map<string, Ghost>()
@@ -37,7 +51,7 @@ function makeGhostMaterial(): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({
     color: GHOST_COLOR,
     transparent: true,
-    opacity: 0.28,
+    opacity: GHOST_OPACITY,
     depthWrite: false,
   })
 }
@@ -61,7 +75,8 @@ function mountGhost(
   commandId: string,
   root: THREE.Object3D,
   material: THREE.MeshBasicMaterial,
-  ownsGeometry: boolean
+  ownsGeometry: boolean,
+  opts?: GhostOptions
 ): void {
   const scene = getSceneForExport()?.scene
   if (!scene) return
@@ -74,12 +89,26 @@ function mountGhost(
     root,
     material,
     ownsGeometry,
-    expireTimer: setTimeout(() => clearGhost(commandId), GHOST_TTL_MS),
+    expireTimer: setTimeout(() => clearGhost(commandId), opts?.ttlMs ?? GHOST_TTL_MS),
+    breathe: opts?.breathe === true,
   })
   beatTick()
 }
 
-export function showGhost(msg: IntentPreviewMessage): void {
+/**
+ * Breathing ghosts need a heartbeat. Cheap: a sine and one opacity write per
+ * live proposal, and there is rarely more than one.
+ */
+export function updateGhosts(nowMs: number): void {
+  if (ghosts.size === 0) return
+  const phase = Math.sin((nowMs / 1000) * BREATHE_HZ * Math.PI * 2) * 0.5 + 0.5
+  const breathing = BREATHE_LOW + (BREATHE_HIGH - BREATHE_LOW) * phase
+  for (const ghost of ghosts.values()) {
+    if (ghost.breathe) ghost.material.opacity = breathing
+  }
+}
+
+export function showGhost(msg: IntentPreviewMessage, opts?: GhostOptions): void {
   if (msg.action === 'spawn' && msg.primitive) {
     const material = makeGhostMaterial()
     const root = createPrimitiveMesh(msg.primitive, GHOST_COLOR)
@@ -94,7 +123,7 @@ export function showGhost(msg: IntentPreviewMessage): void {
       stage.position[2],
     ]
     root.position.set(pos[0], pos[1], pos[2])
-    mountGhost(msg.commandId, root, material, true)
+    mountGhost(msg.commandId, root, material, true, opts)
     return
   }
 
@@ -142,7 +171,7 @@ export function showGhost(msg: IntentPreviewMessage): void {
           ]
     }
     root.scale.set(scale[0], scale[1], scale[2])
-    mountGhost(msg.commandId, root, material, false)
+    mountGhost(msg.commandId, root, material, false, opts)
   }
 }
 

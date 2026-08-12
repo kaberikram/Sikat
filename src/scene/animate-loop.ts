@@ -2,10 +2,13 @@ import * as THREE from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
+import { updateGhosts } from '../director/ghost-preview'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCameraBase } from '../timeline-apply'
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
 import { updateStageMarker } from './stage-marker'
+import { updateAttentionField } from './xr/attention-field'
+import { updateRoomResponse } from './xr/room-response'
 import { updateEntrySequence } from './xr/entry-sequence'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
@@ -203,6 +206,9 @@ export function createAnimateLoop(ctx: {
       // IWSDK updates grip/ray spaces; camcorder pose + REC read from gripSpaces.right.
       ctx.camcorderRig.update(delta, now / 1000, ctx.mainRenderer.xr)
       updateEntrySequence(now, delta)
+      updateAttentionField(now, delta)
+      updateRoomResponse(now, delta)
+      updateGhosts(now)
 
       // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
       const XR_VF_W = 640

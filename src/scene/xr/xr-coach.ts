@@ -3,6 +3,11 @@
  * once per user (localStorage), after the entry cinematic settles. Each line
  * disappears forever the moment the user performs the action it teaches.
  *
+ * The coach also reads the room. A director who is clearly hesitating gets more
+ * time on each line; one who is moving with intent gets fewer cycles and is let
+ * go sooner. Onboarding that erases itself is the point — the pace it erases at
+ * should belong to the person, not the clock.
+ *
  * Pure time-driven state (nowMs in, string out) so it's node:test-able;
  * localStorage access is guarded for non-browser runtimes.
  */
@@ -14,6 +19,10 @@ const STORAGE_KEY = 'sikat.xr.coachSeen'
 const COACH_DELAY_MS = 5200
 const LINE_MS = 4000
 const CYCLES = 2
+/** How far hesitation may stretch a line's dwell (1 = none, 1.8 = nearly double). */
+const MAX_PATIENCE = 1.8
+/** Below this, a confident director only sees each line once. */
+const CONFIDENT_HESITATION = 0.2
 
 const LINES: Array<{ kind: CoachAction; text: string }> = [
   { kind: 'rec', text: 'TRIGGER · FILM' },
@@ -24,6 +33,30 @@ const LINES: Array<{ kind: CoachAction; text: string }> = [
 let active = false
 let visibleFrom = 0
 let learned = new Set<CoachAction>()
+/** 0..1 from ambient-sense; 0 means "reads confident". */
+let hesitation = 0
+
+/**
+ * How long each line holds, and how many times the set repeats itself.
+ *
+ * Hesitation stretches the dwell. Cutting the repeat short needs more than a
+ * low reading, though: at the first tracked frame nobody has hesitated yet,
+ * because nobody has done anything yet. So confidence has to be *demonstrated*
+ * — at least one control already used — before the coach lets go early.
+ */
+export function coachPacing(h: number, learnedCount: number): { lineMs: number; cycles: number } {
+  const eased = Math.min(1, Math.max(0, h))
+  const confident = eased < CONFIDENT_HESITATION && learnedCount > 0
+  return {
+    lineMs: Math.round(LINE_MS * (1 + (MAX_PATIENCE - 1) * eased)),
+    cycles: confident ? 1 : CYCLES,
+  }
+}
+
+/** Feed the coach the current read of the room. Safe to call every frame. */
+export function setCoachHesitation(next: number): void {
+  hesitation = next
+}
 
 function hasSeen(): boolean {
   try {
@@ -58,8 +91,9 @@ export function currentCoachHint(nowMs: number): string | null {
     markSeen()
     return null
   }
-  const slot = Math.floor((nowMs - visibleFrom) / LINE_MS)
-  if (slot >= remaining.length * CYCLES) {
+  const { lineMs, cycles } = coachPacing(hesitation, learned.size)
+  const slot = Math.floor((nowMs - visibleFrom) / lineMs)
+  if (slot >= remaining.length * cycles) {
     markSeen()
     return null
   }
@@ -82,4 +116,5 @@ export function resetXrCoachForTest(): void {
   active = false
   visibleFrom = 0
   learned = new Set()
+  hesitation = 0
 }

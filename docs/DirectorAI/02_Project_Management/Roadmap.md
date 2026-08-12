@@ -45,7 +45,10 @@ packet changes; chatter and telemetry ride the existing `agent_status.note` /
 Phased brief: `06_Implementation_Brief/Scene_Aware_Director.md`. All phases complete:
 
 - [x] **Phase A** — Rich scene context (heartbeat + full snapshot, sampled poses, `describe` intent)
-- [x] **Phase C** — Set radio (browser TTS ACKs on agent active)
+- [x] **Phase C** — Set radio. Shipped as browser TTS ACKs, then **reverted** by
+      the Phase 1 removal above; the ACK survives as a visual/earcon beat, not a
+      voice. The set does not speak — see
+      [Thesis/Ambient_Design_Principles](../../Thesis/Ambient_Design_Principles.md#1-the-set-never-talks-back--it-changes).
 - [x] **Phase B** — Vision on command (viewfinder JPEG; Anthropic multimodal)
 - [x] **Phase D** — Hold / Action / Cut (playback transport semantics)
 - [x] **Phase E** — Streaming partial intents (per-clause emit; LLM in parallel)

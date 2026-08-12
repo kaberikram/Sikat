@@ -6,7 +6,6 @@
  * that object — the hint rides the command to the server, no guessing.
  */
 import * as THREE from 'three'
-import { beatTick } from '../../director/sound'
 import { useEditorStore } from '../../store'
 
 const PICK_INTERVAL_MS = 100
@@ -66,7 +65,8 @@ export function updateAimPick(origin: THREE.Vector3, quat: THREE.Quaternion, now
   if (hitId !== aimedId) {
     aimedId = hitId
     aimedName = hitId ? (objects.find((o) => o.id === hitId)?.name ?? null) : null
-    if (aimedId) beatTick()
+    // Lock-on feedback (earcon + object halo) is the ambient channel's call —
+    // the listener routes there, so ringing it here too would double it.
     onChange?.(aimedId, aimedName)
   }
 }

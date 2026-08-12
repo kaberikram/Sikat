@@ -1,23 +1,24 @@
 /**
- * DIRECTOR_LINK slate under the grip viewfinder — the in-headset voice surface.
+ * DIRECTOR_LINK slate under the grip viewfinder — the in-headset exception
+ * surface.
  *
- * A small state machine renders one calm glass card:
- *   idle      — "hold A · talk" hint
- *   listening — live mic level bars + interim transcript
- *   thinking  — soft pulsing dot while the crew works
- *   replying  — the director's actual words, first-class
- *   misheard  — gentle "didn't catch that" nudge
- *   offline   — link state
+ * This used to be the system's voice: every acknowledgement, every reply, the
+ * mic meter and the thinking dot all landed here. They now land in the world
+ * (see `ambient-channel.ts`), and the slate carries only what the world cannot
+ * say — a blocked mic, a dropped link, a missing controller, the first-run
+ * coach lines, and the crew's own words when the scene didn't already answer.
+ *
+ * In ambient mode the card fades to nothing and **stops repainting entirely**
+ * for the states the world covers. That matters: repainting an 896×308 canvas
+ * and re-uploading the texture every 40ms sat on the XR frame path, and the
+ * common case now skips it.
  *
  * One canvas + one CanvasTexture for the slate's lifetime; repaints draw in
- * place (no per-update canvas/GPU realloc — this sits on the hot voice path
- * inside the XR render loop).
+ * place (no per-update canvas/GPU realloc).
  */
 import * as THREE from 'three'
-import { getLatestSuggestion } from '../../director/agent-runtime'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { setEditorLayer } from '../infrastructure'
-import { getAimedObject } from './aim-picker'
 import { currentCoachHint } from './xr-coach'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
@@ -50,6 +51,11 @@ export interface DirectorSlate {
   /** Sticky guidance line (e.g. "pick up the right controller") — cleared explicitly. */
   setNotice: (text: string | null) => void
   setLevel: (level: number) => void
+  /**
+   * Ambient mode (the default in XR): fade out and stop repainting for every
+   * state the world already carries. Turn it off to get the old always-on card.
+   */
+  setAmbient: (on: boolean) => void
   /** Per-frame tick from the rig — drives pulse/level animation repaints. */
   update: (nowMs: number) => void
   dispose: () => void
@@ -98,6 +104,9 @@ const STATE_SETTLE_MS = 190
 /** How far the card recedes at the moment of the change. */
 const STATE_DIP_SCALE = 0.965
 const STATE_DIP_OPACITY = 0.55
+/** Fade rate in/out of ambient hiding — slower out than in, so it never snaps away. */
+const VISIBILITY_DAMP_IN = 10
+const VISIBILITY_DAMP_OUT = 5
 
 function wrapLines(
   ctx: CanvasRenderingContext2D,
@@ -147,6 +156,15 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let lastAnimatedState: SlateState | null = null
   /** True once the re-form ease has landed, so it stops writing every frame. */
   let settled = true
+  /** Ambient mode is the default in XR — the world answers, this card doesn't. */
+  let ambient = true
+  /**
+   * Eased 0..1 presence of the card itself, independent of the state settle.
+   * Starts hidden so the card fades *in* when it has something to say, rather
+   * than flashing on at session start and easing back out.
+   */
+  let visibility = 0
+  let lastFrameAt = 0
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
   const mat = new THREE.MeshBasicMaterial({
@@ -164,6 +182,19 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   function effectiveState(): SlateState {
     if (offline) return 'offline'
     return state
+  }
+
+  /**
+   * Does the world already answer this? Anything that reaches `replying`,
+   * `misheard` or `offline` got here because the ambient channel decided words
+   * were needed, so those always show. Listening and thinking are the room's
+   * job now. Idle only hides when it has nothing sticky to say.
+   */
+  function worldCarries(st: SlateState, nowMs: number): boolean {
+    if (!ambient) return false
+    if (st === 'offline' || st === 'replying' || st === 'misheard') return false
+    if (st === 'listening' || st === 'thinking' || st === 'sending') return true
+    return !notice && !bodyText && !currentCoachHint(nowMs)
   }
 
   function paint(nowMs: number): void {
@@ -245,15 +276,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        // Idle priority: sticky notice > point lock-on > crew suggestion >
-        // first-run coach > shot list > onboarding fallback.
-        const aim = getAimedObject()
-        const suggestion = getLatestSuggestion()
+        // Idle priority: sticky notice > status echo > first-run coach > shot
+        // list > onboarding fallback. Point lock-on and crew suggestions used to
+        // sit in this ladder; they are the world's job now — the object lights
+        // up, and a proposal stands on the set as a ghost.
         const hint = bodyText ? null : currentDemoHint()
         line = notice
           || bodyText
-          || (aim ? `▸ ${aim.name} — say “make this…”` : null)
-          || (suggestion ? `💡 ${suggestion.text} — say “do it”` : null)
           || currentCoachHint(nowMs)
           || hint
           || 'say “crew, set the stage”'
@@ -291,14 +320,26 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       if (!settled) {
         settled = true
         mesh.scale.setScalar(1)
-        mat.opacity = 1
       }
+      mat.opacity = visibility
       return
     }
     settled = false
     const e = 1 - (1 - Math.max(t, 0)) ** 3
     mesh.scale.setScalar(STATE_DIP_SCALE + (1 - STATE_DIP_SCALE) * e)
-    mat.opacity = STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e
+    mat.opacity = (STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e) * visibility
+  }
+
+  /** Ease the card's presence toward hidden/shown; returns true while it's on screen. */
+  function applyVisibility(now: number): boolean {
+    const delta = lastFrameAt ? Math.min((now - lastFrameAt) / 1000, 0.1) : 0
+    lastFrameAt = now
+    const want = worldCarries(effectiveState(), now) ? 0 : 1
+    const rate = want > visibility ? VISIBILITY_DAMP_IN : VISIBILITY_DAMP_OUT
+    visibility += (want - visibility) * Math.min(1, delta * rate)
+    if (visibility < 0.004) visibility = 0
+    mesh.visible = visibility > 0
+    return mesh.visible
   }
 
   return {
@@ -366,6 +407,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       // Fast attack, slow release — bars feel alive without flicker.
       smoothedLevel = next > smoothedLevel ? next : smoothedLevel * 0.85 + next * 0.15
     },
+    setAmbient: (on) => {
+      if (on === ambient) return
+      ambient = on
+      repaint(true)
+    },
     update: () => {
       const now = performance.now()
       const st = effectiveState()
@@ -377,7 +423,22 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
         lastAnimatedState = st
         stateChangedAt = now
       }
+      const onScreen = applyVisibility(now)
       applyStateSettle(now)
+
+      // Fully faded out — no canvas work, no texture upload. This is the whole
+      // point of ambient mode on the XR frame path.
+      if (!onScreen) {
+        // Held states still need to expire, or a reply would be waiting on
+        // screen the next time the card comes back.
+        if ((st === 'replying' || st === 'misheard') && holdUntil && now > holdUntil) {
+          state = 'idle'
+          bodyText = ''
+          mishearBody = ''
+          holdUntil = 0
+        }
+        return
+      }
 
       if (st === 'thinking' || st === 'listening' || st === 'sending') {
         // Phase advances on wall time so the pulse rate doesn't ride the
@@ -393,10 +454,8 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           repaint(true)
         }
       } else if (st === 'idle') {
-        // Repaint when the demo beat, aim lock, suggestion, or coach line changes.
-        const aim = getAimedObject()
-        const suggestion = getLatestSuggestion()
-        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${aim?.id ?? ''}|${suggestion?.suggestionId ?? ''}|${currentCoachHint(now) ?? ''}`
+        // Repaint when the demo beat or the coach line changes.
+        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${currentCoachHint(now) ?? ''}`
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)

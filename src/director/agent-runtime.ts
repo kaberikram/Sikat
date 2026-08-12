@@ -7,11 +7,14 @@
  */
 import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
 import { clearGhost, showGhost } from './ghost-preview'
+import { clearProposal, showProposal } from './proposal-ghost'
+import { respond } from '../scene/xr/ambient-channel'
 import { liveTargetPosition, packetTargetPosition } from './cursor-targets'
 import { markFirstApply, markFirstCursorMove, markFirstPreview, markFirstRefinement } from './latency'
 import { crewWhoosh } from './sound'
 import {
   presenceStore,
+  agentMetaFor,
   stationFor,
   cursorVisible,
   pendingAnchorPosition,
@@ -493,6 +496,9 @@ export function getLatestSuggestion(): AgentSuggestionMessage | null {
 export function consumeLatestSuggestion(): AgentSuggestionMessage | null {
   const msg = getLatestSuggestion()
   latestSuggestion = null
+  // Taken up — drop the offer's ghost so the real change isn't racing its own
+  // silhouette.
+  clearProposal()
   return msg
 }
 
@@ -500,6 +506,22 @@ export function consumeLatestSuggestion(): AgentSuggestionMessage | null {
 export function reactToSuggestion(msg: AgentSuggestionMessage): void {
   if (msg.kind === 'suggestion' && msg.suggestedCommand) {
     latestSuggestion = { msg, at: Date.now() }
+    // In the headset the offer stands on the set as a breathing ghost of what
+    // it would do. Never auto-applied: a proposal is a ghost until a voice
+    // takes it up, which is what keeps proactive help reversible by default.
+    if (useEditorStore.getState().xrActive) {
+      const outcome = showProposal(msg)
+      // A bad moment stays silent entirely — the offer is still live for 25s,
+      // so "do it" picks it up whenever the director comes up for air.
+      if (outcome !== 'bad-moment') {
+        respond({
+          kind: 'proposed',
+          text: msg.text,
+          color: agentMetaFor(msg.agent).color,
+          spatial: outcome === 'shown',
+        })
+      }
+    }
   }
   if (!cursorVisible(msg.agent)) return
   const agent = msg.agent

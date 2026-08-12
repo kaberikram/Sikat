@@ -5,8 +5,10 @@ import {
   type XRInputManager as XRInputManagerType,
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
+import { resolveTarget } from '../../director/command-applier'
 import { submitDirectorCommand } from '../../director/director-command'
 import { newCommandId } from '../../director/ids'
+import type { CommandPacket, Target } from '../../director/protocol'
 import { getDirectorSocket } from '../../director/socket'
 import {
   finishVoiceSession,
@@ -17,16 +19,34 @@ import {
   startVoiceSession,
   stopVoiceSession,
 } from '../../director/voice-session'
-import { beatTick, listenEnd, listenStart, missedBuzz, replyChime } from '../../director/sound'
+import { beatTick, missedBuzz } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { clearAimPick, getAimedObject, setAimChangeListener, updateAimPick } from './aim-picker'
+import { bindAmbientChannel, resetAmbientChannel, respond } from './ambient-channel'
+import {
+  getAmbientSignals,
+  noteAmbientCommand,
+  noteAmbientTake,
+  resetAmbientSense,
+  updateAmbientSense,
+} from './ambient-sense'
 import { createDirectorSlate } from './director-slate'
+import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
-import { computeStagePose, isHeadPoseValid, shouldReplaceStage, type V3 } from './stage-placement'
+import {
+  computeStagePose,
+  isHeadPoseValid,
+  shouldReplaceStage,
+  standoffBetween,
+  STAGE_STANDOFF_M,
+  STANDOFF_RANGE,
+  type V3,
+} from './stage-placement'
+import { getProfile, noteSessionStart, noteStandoff, preferredStandoff } from './director-profile'
 import { registerStagePlacer } from './xr-bridge'
-import { noteCoachAction, startXrCoach, stopXrCoach } from './xr-coach'
+import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
 /**
@@ -41,6 +61,21 @@ const AIM_OFFSET = new THREE.Quaternion().setFromEuler(
 )
 const LENS_FORWARD_M = 0.05
 const AIM_RAY_LEN = 2.5
+
+/**
+ * Which object is this packet about? Used to send attention to the target
+ * before the change lands. Payload shapes differ per command, so this reads
+ * whichever target-ish field the packet happens to carry and hands it to the
+ * applier's own resolver, keeping name-matching (including "the ball") in one
+ * place. Scene-wide packets (lights, FX, playback) have no object — null.
+ */
+function resolvePacketTargetId(packet: CommandPacket): string | null {
+  const payload = packet.payload as { target?: Target | null; id?: string | null; name?: string | null }
+  if (!payload) return null
+  const target: Target | null = payload.target
+    ?? (payload.id || payload.name ? { id: payload.id, name: payload.name } : null)
+  return resolveTarget(target)?.id ?? null
+}
 
 export interface CamcorderRig {
   group: THREE.Group
@@ -89,6 +124,9 @@ export function createCamcorderRig(
   group.add(screenMesh)
 
   const directorSlate = createDirectorSlate(screenMesh)
+  // The world answers first; the slate is what's left when it can't.
+  directorSlate.setAmbient(true)
+  bindAmbientChannel(directorSlate)
 
   // Debug aim ray — matches virt cam forward (grip −Z pitched AIM_UP_DEG up).
   const aimRay = new THREE.Mesh(
@@ -123,10 +161,12 @@ export function createCamcorderRig(
 
   setEditorLayer(group)
 
-  // Point + speak lock-on feedback: tip swells mint while aiming at an object.
+  // Point + speak lock-on. The tip still shifts so the ray reads as armed, but
+  // the acknowledgement now belongs to the object: the ambient channel lights
+  // the thing you mean instead of printing its name on the slate.
   const aimRayMat = aimRay.material as THREE.MeshBasicMaterial
   const aimTipMat = aimTip.material as THREE.MeshBasicMaterial
-  setAimChangeListener((id) => {
+  setAimChangeListener((id, name) => {
     if (id) {
       aimRayMat.color.set(0x57cfa0)
       aimTipMat.color.set(0x57cfa0)
@@ -137,6 +177,7 @@ export function createCamcorderRig(
       aimTipMat.color.set(0xffee00)
       aimTip.scale.setScalar(1)
     }
+    respond({ kind: 'aimed', objectId: id, name })
   })
 
   xrInput.xrOrigin.gripSpaces.right.add(group)
@@ -152,17 +193,16 @@ export function createCamcorderRig(
   /** Last non-empty interim of the current hold — what to show on release. */
   let lastInterim = ''
 
-  // Route director replies / misses / first-work into the slate so the
-  // in-headset surface answers you, not just echoes you.
+  // Route director replies / misses / first-work through the ambient channel,
+  // which decides whether the set answers or the slate does.
   const socket = getDirectorSocket()
   const offSlateLog = socket.onLog((msg) => {
     if (!useEditorStore.getState().xrActive) return
     if (msg.kind === 'miss') {
       thinkingLine = null
-      missedBuzz()
-      // The crew writes its own redirect ("copy — give me a move on set");
-      // showing it beats a fixed string, and it varies like a person would.
-      directorSlate.setMisheard(msg.message)
+      // The crew writes its own redirect ("copy — give me a move on set"); the
+      // channel holds it back on a first miss and shows it on a second.
+      respond({ kind: 'missed', text: msg.message })
       return
     }
     if (
@@ -171,16 +211,18 @@ export function createCamcorderRig(
       msg.forCommandId
     ) {
       thinkingLine = null
-      replyChime()
-      directorSlate.setReply(msg.message)
+      respond({ kind: 'said', text: msg.message })
     }
   })
-  const offSlatePacket = socket.onPacket(() => {
+  const offSlatePacket = socket.onPacket((packet) => {
     if (!useEditorStore.getState().xrActive) return
-    // First evidence of crew work — stop "thinking", echo what was heard.
+    // First evidence of crew work — the set is about to change, so attention
+    // travels to the target before the change lands.
+    const targetId = resolvePacketTargetId(packet)
+    if (targetId) respond({ kind: 'addressed', objectId: targetId })
     if (thinkingLine) {
-      directorSlate.setLastSent(thinkingLine)
       thinkingLine = null
+      respond({ kind: 'landed', objectId: targetId })
     }
   })
 
@@ -221,14 +263,26 @@ export function createCamcorderRig(
     }
   }
 
+  /**
+   * How far ahead this director actually likes the set. A first-timer gets the
+   * house distance; someone who keeps backing off to frame a wide gets their
+   * own, blended rather than copied.
+   */
+  function standoffForThisDirector(): number {
+    return preferredStandoff(getProfile(), STAGE_STANDOFF_M, STANDOFF_RANGE)
+  }
+
   /** Move the stage in front of the user (only after a real move) — the whole
    *  set, entry ripple, and crew stations follow the store's stage anchor. */
   function placeStageAtCurrentUser(): void {
     const { pos, forward } = readHeadPose()
     if (!isHeadPoseValid(pos)) return
     const st = useEditorStore.getState()
-    if (!shouldReplaceStage(pos, forward, st.stage.position)) return
-    st.updateStage({ position: computeStagePose(pos, forward).position })
+    const standoff = standoffForThisDirector()
+    if (!shouldReplaceStage(pos, forward, st.stage.position, standoff)) return
+    const position = computeStagePose(pos, forward, standoff).position
+    st.updateStage({ position })
+    noteStandoff(standoffBetween(pos, position))
     playStageLockPulse()
     beatTick()
   }
@@ -239,7 +293,7 @@ export function createCamcorderRig(
       // The review monitor owns the trigger right now — say so, don't go mute.
       missedBuzz()
       pulse(padRef, 0.3, 40)
-      directorSlate.setLastSent('dismiss the monitor to roll again')
+      respond({ kind: 'blocked', text: 'dismiss the monitor to roll again' })
       return
     }
     const st = useEditorStore.getState()
@@ -249,8 +303,11 @@ export function createCamcorderRig(
       st.endTake()
       doublePulse(padRef, 0.5, 40)
       const takeEnd = useEditorStore.getState().currentTime
+      noteAmbientTake(performance.now())
       onTakeEnded?.(takeStart, takeEnd, xrInput.xrOrigin.head)
-      directorSlate.setLastSent(`take ${takeNumber} saved to the timeline — export on desktop`)
+      // The review monitor swinging into view is the answer; the line only
+      // carries the part the monitor can't — where the take went.
+      respond({ kind: 'status', text: `take ${takeNumber} saved to the timeline — export on desktop` })
       return
     }
     st.startTake()
@@ -261,11 +318,13 @@ export function createCamcorderRig(
   function beginTalk(): void {
     if (!isSpeechAvailable()) {
       missedBuzz()
-      directorSlate.setLastSent(
-        useEditorStore.getState().xrActive && !isDeepgramConfigured()
-          ? 'voice needs Deepgram key'
-          : 'mic unavailable'
-      )
+      respond({
+        kind: 'blocked',
+        text:
+          useEditorStore.getState().xrActive && !isDeepgramConfigured()
+            ? 'voice needs Deepgram key'
+            : 'mic unavailable',
+      })
       return
     }
     if (useEditorStore.getState().micGranted === false) {
@@ -275,75 +334,85 @@ export function createCamcorderRig(
       void primeVoiceCapture().then((ok) => useEditorStore.getState().setMicGranted(ok))
     }
     lastInterim = ''
-    listenStart()
     pulse(padRef, 0.3, 25)
-    directorSlate.setOffline(getDirectorSocket().status !== 'open')
+    // The room warms and starts breathing with your level — that is the mic
+    // indicator now, at stage scale rather than 3mm under your hand.
+    respond({ kind: 'heard', on: true })
+    respond({ kind: 'offline', on: getDirectorSocket().status !== 'open' })
     void startVoiceSession({
       onListeningChange: (on) => directorSlate.setListening(on),
       onInterim: (text) => {
         if (text) lastInterim = text
         directorSlate.setInterim(text)
       },
-      onLevel: (level) => directorSlate.setLevel(level),
+      onLevel: (level) => {
+        directorSlate.setLevel(level)
+        respond({ kind: 'level', rms: level })
+      },
       onError: (error) => {
         missedBuzz()
-        directorSlate.setLastSent(
-          error === 'voice needs Deepgram key'
-            ? error
-            : error === 'not-allowed' || error === 'service-not-allowed'
-              ? 'mic blocked — allow the microphone for this site, then hold A again'
-              : error === 'network'
-                ? 'lost the mic link — hold A to try again'
-                : `voice error: ${error}`
-        )
+        respond({
+          kind: 'blocked',
+          text:
+            error === 'voice needs Deepgram key'
+              ? error
+              : error === 'not-allowed' || error === 'service-not-allowed'
+                ? 'mic blocked — allow the microphone for this site, then hold A again'
+                : error === 'network'
+                  ? 'lost the mic link — hold A to try again'
+                  : `voice error: ${error}`,
+        })
       },
       onFinal: (transcript) => {
         const line = transcript.trim()
         if (!line) {
-          missedBuzz()
-          directorSlate.setMisheard()
+          respond({ kind: 'missed' })
           return
         }
         noteCoachAction('talk')
+        noteAmbientCommand(performance.now())
         const commandId = newCommandId()
-        directorSlate.setThinking(true)
+        respond({ kind: 'working', on: true })
         thinkingLine = line
         // Point + speak: "this/that/it" while aiming means THAT object.
         const aimed = /\b(this|that|it|there|these|those)\b/i.test(line) ? getAimedObject() : null
+        // You named it, so attention goes there now rather than when the crew
+        // gets round to it — the set shows what it thinks you meant.
+        if (aimed) respond({ kind: 'addressed', objectId: aimed.id })
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
           targetHint: aimed ?? undefined,
           onNoResponse: () => {
             thinkingLine = null
-            directorSlate.setThinking(false)
-            directorSlate.setLastSent('no response')
+            respond({ kind: 'working', on: false })
+            respond({ kind: 'blocked', text: 'no response' })
           },
         }).then((result) => {
           if (result.offline) {
             thinkingLine = null
-            directorSlate.setOffline(true)
-            directorSlate.setThinking(false)
-            directorSlate.setLastSent(line || 'offline')
+            respond({ kind: 'working', on: false })
+            respond({ kind: 'offline', on: true })
+            respond({ kind: 'status', text: line || 'offline' })
           } else if (result.ok && result.local) {
-            // Local commands apply instantly — no crew round-trip to wait on.
+            // Local commands apply instantly — no crew round-trip to wait on,
+            // so the change itself is the acknowledgement.
             thinkingLine = null
-            directorSlate.setThinking(false)
-            directorSlate.setLastSent(line)
+            respond({ kind: 'landed', objectId: aimed?.id ?? null })
           } else if (result.ok) {
-            directorSlate.setOffline(false)
-            // Stay in thinking until the first crew packet or reply lands
+            respond({ kind: 'offline', on: false })
+            // Stay working until the first crew packet or reply lands
             // (routed via the socket listeners above).
           }
         }).catch(() => {
           thinkingLine = null
-          directorSlate.setThinking(false)
-          directorSlate.setLastSent('command failed')
+          respond({ kind: 'working', on: false })
+          respond({ kind: 'blocked', text: 'command failed' })
         })
       },
     }).catch((e) => {
       console.warn('[xr] voice session failed to start:', e)
-      directorSlate.setLastSent('voice error')
+      respond({ kind: 'blocked', text: 'voice error' })
     })
   }
 
@@ -354,14 +423,15 @@ export function createCamcorderRig(
       // The press never opened a session (still connecting, or it failed). Say
       // so rather than swallowing the gesture — an unacknowledged button is
       // indistinguishable from a broken one.
+      // Nothing was captured, so no send whoosh — the buzz is the whole answer.
       missedBuzz()
-      directorSlate.setListening(false)
+      respond({ kind: 'heard', on: false, silent: true })
       return
     }
-    listenEnd()
     pulse(padRef, 0.2, 20)
-    // Show the captured words the instant the button comes up. Clearing the
-    // slate here (as this used to) left a blank card for the whole drain.
+    // The room stops listening the instant the button comes up; the captured
+    // words stay on the slate underneath while the engine's tail drains.
+    respond({ kind: 'heard', on: false })
     directorSlate.setSending(lastInterim.trim())
     finishVoiceSession()
   }
@@ -422,13 +492,15 @@ export function createCamcorderRig(
       const { pos, forward } = readHeadPose()
       if (isHeadPoseValid(pos)) {
         pendingEntry = false
-        useEditorStore.getState().updateStage({
-          position: computeStagePose(pos, forward).position,
-        })
+        const standoff = standoffForThisDirector()
+        const position = computeStagePose(pos, forward, standoff).position
+        useEditorStore.getState().updateStage({ position })
+        noteSessionStart()
+        noteStandoff(standoffBetween(pos, position))
         startEntrySequence()
         startXrCoach(timeSec * 1000)
         if (useEditorStore.getState().xrBlendOpaque) {
-          directorSlate.setLastSent('VR mode — no passthrough here')
+          respond({ kind: 'status', text: 'VR mode — no passthrough here' })
         }
       }
     }
@@ -442,13 +514,13 @@ export function createCamcorderRig(
       padMissingSec += delta
       if (padMissingSec > 1.5 && !controllerNoticeShown) {
         controllerNoticeShown = true
-        directorSlate.setNotice('pick up the right controller')
+        respond({ kind: 'notice', text: 'pick up the right controller' })
       }
     } else {
       padMissingSec = 0
       if (controllerNoticeShown) {
         controllerNoticeShown = false
-        directorSlate.setNotice(null)
+        respond({ kind: 'notice', text: null })
         beatTick()
       }
     }
@@ -474,7 +546,17 @@ export function createCamcorderRig(
     aimQuat.copy(worldQuat).multiply(AIM_OFFSET)
     worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
-    updateAimPick(worldPos, aimQuat, timeSec * 1000)
+    const nowMs = timeSec * 1000
+    updateAimPick(worldPos, aimQuat, nowMs)
+    // Read the director: settled or roaming, dwelling or sweeping, how long
+    // since they last said anything. Drives the coach's patience and when a
+    // proposal is allowed to surface.
+    updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, getAimedObject()?.id ?? null)
+    const ambient = getAmbientSignals()
+    setCoachHesitation(ambient.hesitation)
+    // The room breathes with you: settle and it deepens around the set; move
+    // with intent and it lifts.
+    setRoomStillness(ambient.stillness)
 
     euler.setFromQuaternion(aimQuat, 'XYZ')
     applyLiveCameraPose({
@@ -509,6 +591,9 @@ export function createCamcorderRig(
       stopXrCoach()
       setAimChangeListener(null)
       clearAimPick()
+      resetAmbientChannel()
+      resetAmbientSense()
+      bindAmbientChannel(null)
       stopVoiceSession()
       directorSlate.dispose()
       group.removeFromParent()

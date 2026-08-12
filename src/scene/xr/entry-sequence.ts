@@ -14,6 +14,7 @@ import * as THREE from 'three'
 import { entrySwell } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import { setRoomAccent } from './room-response'
 import { XR_UI, makeTitleTexture } from './xr-ui-chrome'
 
 const PARTICLES = 250
@@ -24,10 +25,12 @@ const SET_DIM = 0.3
 interface EntryRefs {
   scene: THREE.Scene
   head: THREE.Object3D
-  stageMarker: THREE.Group
 }
 
 let refs: EntryRefs | null = null
+
+/** True while this module is holding a room accent, so teardown releases it once. */
+let holdingAccent = false
 
 let dome: THREE.Mesh | null = null
 let domeMat: THREE.MeshBasicMaterial | null = null
@@ -43,6 +46,13 @@ let running = false
 let startedAt = 0
 let dimTarget = 0
 let dimLevel = 0
+/**
+ * The set's intended resting ambience. `setRoomDim` moves this; the room's
+ * breathing rides on top via `setRoomDimOffset`. Keeping them apart is what
+ * stops a per-frame modulation from undoing the strike's hard zero.
+ */
+let dimBase = 0
+let dimOffset = 0
 
 // One-shot "stage locks in" ripple — fired when the stage re-places mid-session.
 let lockRipple: THREE.Mesh | null = null
@@ -59,13 +69,24 @@ function windowEnv(t: number, a: number, b: number, edge = 0.25): number {
   return clamp01(Math.min(u / edge, (1 - u) / edge, 1))
 }
 
-export function initEntrySequence(scene: THREE.Scene, head: THREE.Object3D, stageMarker: THREE.Group): void {
-  refs = { scene, head, stageMarker }
+export function initEntrySequence(scene: THREE.Scene, head: THREE.Object3D): void {
+  refs = { scene, head }
 }
 
-function markerMaterial(): THREE.MeshBasicMaterial | null {
-  const mesh = refs?.stageMarker.children[0] as THREE.Mesh | undefined
-  return (mesh?.material as THREE.MeshBasicMaterial) ?? null
+/**
+ * The stage ring belongs to room-response. The entry beat asks it for a mint
+ * accent rather than writing the material, so nothing is left tinted when the
+ * cinematic tears down mid-flight.
+ */
+function holdAccent(weight: number): void {
+  holdingAccent = true
+  setRoomAccent(XR_UI.mintDeep, weight)
+}
+
+function releaseAccent(): void {
+  if (!holdingAccent) return
+  holdingAccent = false
+  setRoomAccent(null)
 }
 
 function buildObjects(): void {
@@ -169,13 +190,24 @@ export function startEntrySequence(): void {
   buildObjects()
   running = true
   startedAt = performance.now()
-  dimTarget = SET_DIM
+  setRoomDim(SET_DIM)
   entrySwell()
 }
 
 /** Ambient room dim (0..1). The demo's strike and session end set 0. */
 export function setRoomDim(level: number): void {
-  dimTarget = clamp01(level)
+  dimBase = clamp01(level)
+  dimTarget = clamp01(dimBase + dimOffset)
+}
+
+/**
+ * A small additive nudge on top of the resting dim — the room settling with a
+ * still director. Never moves the room off a hard zero, so a struck set stays
+ * struck.
+ */
+export function setRoomDimOffset(offset: number): void {
+  dimOffset = dimBase > 0 ? Math.max(0, offset) : 0
+  dimTarget = clamp01(dimBase + dimOffset)
 }
 
 /** "Stage locks in" — a quick ripple at the (re-)placed stage position. */
@@ -225,21 +257,13 @@ export function updateEntrySequence(now: number, delta: number): void {
 
   // Beat 1 (0–1.2s): the room dims — dome eases toward an entry-deep 0.45
   // before settling at SET_DIM (handled by the damp above once we lower it).
-  if (t < 0.24) dimTarget = 0.45 * easeOut(t / 0.24)
-  else dimTarget = SET_DIM
+  if (t < 0.24) setRoomDim(0.45 * easeOut(t / 0.24))
+  else setRoomDim(SET_DIM)
 
   // Beat 2 (0.8–2.2s): stage ring materializes + ripple.
-  const mat = markerMaterial()
-  if (mat) {
-    const w = clamp01((t - 0.16) / 0.28)
-    if (w > 0 && t < 0.9) {
-      mat.color.set(XR_UI.mintDeep)
-      mat.opacity = 0.18 + 0.32 * easeOut(w)
-    } else if (t >= 0.9) {
-      mat.color.set(0x888888)
-      mat.opacity = 0.18
-    }
-  }
+  const w = clamp01((t - 0.16) / 0.28)
+  if (w > 0 && t < 0.9) holdAccent(easeOut(w))
+  else if (t >= 0.9) releaseAccent()
   if (ripple && rippleMat) {
     const w = clamp01((t - 0.16) / 0.4)
     const s = 1 + easeOut(w) * 2.2
@@ -295,16 +319,14 @@ function disposeEntryObjects(): void {
   disposeMesh(title)
   title = null
   titleMat = null
-  const mat = markerMaterial()
-  if (mat) {
-    mat.color.set(0x888888)
-    mat.opacity = 0.18
-  }
+  releaseAccent()
 }
 
 /** Full teardown on session end — room returns to passthrough instantly. */
 export function disposeEntrySequence(): void {
   running = false
+  dimBase = 0
+  dimOffset = 0
   dimTarget = 0
   dimLevel = 0
   disposeEntryObjects()
