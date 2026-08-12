@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { useEditorStore } from '../../store'
 import { releaseVoiceCapture, stopVoiceSession } from '../../director/voice-session'
+import { retireAllCursors } from '../../director/agent-runtime'
+import { clearAllGhosts } from '../../director/ghost-preview'
 import { EDITOR_LAYER } from '../infrastructure'
 import { disposeEntrySequence } from './entry-sequence'
 import { registerXrSessionEntry, registerXrSessionExit } from './xr-bridge'
@@ -84,6 +86,10 @@ export function initXrSession(
       // indicator outlive it.
       releaseVoiceCapture()
       disposeEntrySequence()
+      // A choreography interrupted by taking the headset off has no way to
+      // finish, and a cursor left mid-flight would still be there on re-entry.
+      retireAllCursors()
+      clearAllGhosts()
       useEditorStore.getState().setXrActive(false)
       useEditorStore.getState().setCameraOpMode(priorCameraOpMode)
     })

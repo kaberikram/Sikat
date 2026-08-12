@@ -14,6 +14,7 @@
  * Both meshes live on EDITOR_LAYER: the director sees them, the film never does.
  */
 import * as THREE from 'three'
+import { presenceStore } from '../../director/presence'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { makeCanvasTexture, XR_UI } from './xr-ui-chrome'
@@ -210,6 +211,26 @@ function resolveTargetMesh(): void {
   if (targetMesh) measureTarget()
 }
 
+/**
+ * Is a crew member currently working this object?
+ *
+ * One mark per object: while a named cursor owns something, the pool yields it.
+ * Two marks on one thing reads as the set being confused about who is acting,
+ * and the cursor is the more specific claim — it says *who*.
+ *
+ * Read live from presence rather than plumbed through a claim/release pair, so
+ * it can't desynchronise: when a cursor retires, its claim is gone by
+ * construction. Costs a walk of at most four agents per frame.
+ */
+function crewIsWorking(objectId: string): boolean {
+  const agents = presenceStore.getState().agents
+  for (const agent in agents) {
+    const p = agents[agent]
+    if (p.active && p.followObjectId === objectId) return true
+  }
+  return false
+}
+
 /** Bounds are measured on target change and on a real scale change — never per frame. */
 function measureTarget(): void {
   if (!targetMesh) return
@@ -237,8 +258,11 @@ export function updateAttentionField(nowMs: number, delta: number): void {
   }
   if (targetId && !targetMesh) resolveTargetMesh()
 
-  const wanted = targetMesh ? 1 : 0
-  if (!targetMesh && opacity < 0.002) {
+  // Yield to a crew cursor that has taken this object. The pool marks *what*;
+  // a cursor marks *who*, which is the stronger claim, so only one shows.
+  const yielded = targetId !== null && crewIsWorking(targetId)
+  const wanted = targetMesh && !yielded ? 1 : 0
+  if (wanted === 0 && opacity < 0.002) {
     if (group.visible) group.visible = false
     opacity = 0
     return

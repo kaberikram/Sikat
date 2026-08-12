@@ -6,6 +6,7 @@
  * No fake path-tracing or trail drawing.
  */
 import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
+import { classifyCursorHome, idleDecision, watchdogExpired } from './cursor-lifecycle'
 import { clearGhost, showGhost } from './ghost-preview'
 import { clearProposal, showProposal } from './proposal-ghost'
 import { respond } from '../scene/xr/ambient-channel'
@@ -17,7 +18,6 @@ import {
   agentMetaFor,
   stationFor,
   cursorVisible,
-  pendingAnchorPosition,
   CURSOR_ANNOUNCE_MS,
   CURSOR_FLIGHT_MS,
   CURSOR_INTENT_MS,
@@ -25,7 +25,6 @@ import {
   CURSOR_SETTLE_MS,
   CURSOR_MOTION_FADE_MS,
   CURSOR_FADE_MS,
-  PENDING_SHOW_DELAY_MS,
   PENDING_RESPONSE_TIMEOUT_MS,
 } from './presence'
 import { useEditorStore } from '../store'
@@ -69,14 +68,17 @@ const running = new Set<string>()
 const pendingIdle = new Set<string>()
 const inFlight = new Map<string, AbortController>()
 const fadeTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const suggestionGlance = new Set<string>()
 const commandSteering = new Map<string, CommandSteering>()
 const lastAgentByCommand = new Map<string, string>()
 const responseTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const pendingShowTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const pendingTimeoutHandlers = new Map<string, (() => void) | undefined>()
-/** Anchor captured at submit — used if the named agent appears before pending shows. */
-const pendingAnchors = new Map<string, ReturnType<typeof pendingAnchorPosition>>()
+/**
+ * `performance.now()` of each visible cursor's last real work beat. The
+ * watchdog reads this; nothing else may make a cursor visible without writing
+ * it, which is what makes a stuck cursor structurally impossible rather than
+ * something every exit path has to remember to prevent.
+ */
+const lastWorkBeat = new Map<string, number>()
 
 function clearFadeTimer(agent: string): void {
   const t = fadeTimers.get(agent)
@@ -84,10 +86,72 @@ function clearFadeTimer(agent: string): void {
   fadeTimers.delete(agent)
 }
 
-function clearPendingShowTimer(commandId: string): void {
-  const timer = pendingShowTimers.get(commandId)
-  if (timer) clearTimeout(timer)
-  pendingShowTimers.delete(commandId)
+/**
+ * Record that this agent did something real. Every path that keeps a cursor on
+ * stage must call this — the watchdog treats silence as a stuck cursor.
+ */
+function noteWorkBeat(agent: string): void {
+  lastWorkBeat.set(agent, performance.now())
+}
+
+/**
+ * The backstop. Any cursor that hasn't had a work beat inside the budget is
+ * retired, whatever any other path believes about who owns its choreography.
+ *
+ * The bug this exists to make impossible: a drain that dies mid-flight (throw,
+ * cancel, dropped socket, session end) leaves the cursor lit and nothing ever
+ * schedules its fade. Rather than patching each of those paths and hoping the
+ * list is complete, one sweep collects them all.
+ */
+function sweepStuckCursors(): void {
+  if (lastWorkBeat.size === 0) return
+  const now = performance.now()
+  const agents = presenceStore.getState().agents
+  for (const [agent, beat] of [...lastWorkBeat]) {
+    if (!agents[agent]?.active) {
+      lastWorkBeat.delete(agent)
+      continue
+    }
+    if (running.has(agent) || (queues.get(agent)?.length ?? 0) > 0) continue
+    if (!watchdogExpired(beat, now)) continue
+    logger(agent, 'cursor retired (no work beat)', 'warn')
+    lastWorkBeat.delete(agent)
+    clearFadeTimer(agent)
+    presenceStore.getState().fadeOut(agent)
+  }
+}
+
+let watchdogInterval: ReturnType<typeof setInterval> | null = null
+
+function ensureWatchdog(): void {
+  if (watchdogInterval !== null || typeof setInterval === 'undefined') return
+  // Coarse on purpose — this is a safety net, not an animation.
+  watchdogInterval = setInterval(sweepStuckCursors, 2000)
+}
+
+/**
+ * Drop every cursor and every timer. Called on XR session end, rig dispose,
+ * socket close, and scene teardown — the four places a choreography can be
+ * abandoned mid-flight.
+ */
+export function retireAllCursors(): void {
+  for (const t of fadeTimers.values()) clearTimeout(t)
+  fadeTimers.clear()
+  for (const t of responseTimers.values()) clearTimeout(t)
+  responseTimers.clear()
+  pendingTimeoutHandlers.clear()
+  lastWorkBeat.clear()
+  commandSteering.clear()
+  lastAgentByCommand.clear()
+  pendingIdle.clear()
+  for (const abort of inFlight.values()) abort.abort()
+  inFlight.clear()
+  const presence = presenceStore.getState()
+  for (const agent of Object.keys(presence.agents)) presence.fadeOut(agent)
+  if (watchdogInterval !== null) {
+    clearInterval(watchdogInterval)
+    watchdogInterval = null
+  }
 }
 
 function clearResponseTimer(commandId: string): void {
@@ -95,7 +159,6 @@ function clearResponseTimer(commandId: string): void {
   if (timer) clearTimeout(timer)
   responseTimers.delete(commandId)
   pendingTimeoutHandlers.delete(commandId)
-  clearPendingShowTimer(commandId)
 }
 
 function clearResponseTimersForAgent(agent: string): void {
@@ -104,40 +167,33 @@ function clearResponseTimersForAgent(agent: string): void {
   }
 }
 
-function resolvePending(commandId: string | null | undefined, agent: string): void {
+/**
+ * The server named an agent for this command. That is not work yet, so it no
+ * longer draws anything — it only closes the no-response watch. A cursor turns
+ * on in exactly one place: `enqueuePacket`, once a packet with a real home
+ * exists.
+ */
+function resolvePending(commandId: string | null | undefined, _agent: string): void {
   if (!commandId) return
   clearResponseTimer(commandId)
-  const presence = presenceStore.getState()
-  const pos =
-    presence.pendingPosition(commandId) ??
-    pendingAnchors.get(commandId) ??
-    pendingAnchorPosition()
-  pendingAnchors.delete(commandId)
-  const wasVisible = Boolean(presence.agents[agent]?.active)
-  presence.appearAt(agent, pos)
-  presence.clearPending(commandId)
-  if (!wasVisible && cursorVisible(agent)) crewWhoosh(pos[0])
 }
 
-/** Arm pending tracking. The anonymous cursor only appears after a short delay
- *  so fast chitchat / describe-only replies never flash a stage cursor. */
+/**
+ * Arm the no-response watch for a submitted command.
+ *
+ * This used to also schedule an anonymous cursor to fade in above the middle of
+ * the set after a short delay, on the theory that it made the set feel
+ * responsive during the round-trip. It pointed at nothing, and when the command
+ * turned out to be chitchat or a failure it had already flown in for no reason.
+ * The round-trip is now carried by the room's travelling arc, which is honest
+ * about being a state rather than a place.
+ */
 export function beginPendingCommand(
   commandId: string,
   opts?: { onTimeout?: () => void }
 ): void {
   clearResponseTimer(commandId)
-  const anchor = pendingAnchorPosition()
-  pendingAnchors.set(commandId, anchor)
   pendingTimeoutHandlers.set(commandId, opts?.onTimeout)
-
-  pendingShowTimers.set(
-    commandId,
-    setTimeout(() => {
-      pendingShowTimers.delete(commandId)
-      if (!pendingAnchors.has(commandId)) return
-      presenceStore.getState().showPending(commandId, anchor)
-    }, PENDING_SHOW_DELAY_MS)
-  )
 
   responseTimers.set(
     commandId,
@@ -145,20 +201,15 @@ export function beginPendingCommand(
       responseTimers.delete(commandId)
       const onTimeout = pendingTimeoutHandlers.get(commandId)
       pendingTimeoutHandlers.delete(commandId)
-      clearPendingShowTimer(commandId)
-      pendingAnchors.delete(commandId)
-      presenceStore.getState().clearPending(commandId)
-      logger('SYSTEM', 'no response — check the Director server', 'warn')
+          logger('SYSTEM', 'no response — check the Director server', 'warn')
       onTimeout?.()
     }, PENDING_RESPONSE_TIMEOUT_MS)
   )
 }
 
-/** Drop pending cursor / timers without touching a named agent's choreography. */
+/** Drop a command's timers without touching a named agent's choreography. */
 export function clearPendingCommand(commandId: string): void {
   clearResponseTimer(commandId)
-  pendingAnchors.delete(commandId)
-  presenceStore.getState().clearPending(commandId)
 }
 
 const sleepAbortable = (ms: number, signal: AbortSignal): Promise<void> =>
@@ -236,11 +287,15 @@ function commitSteering(
   if (!cursorVisible(agent)) return
 
   const presence = presenceStore.getState()
-  presence.setActive(agent, true)
+  // An intent preview is a guess about a command still being parsed. It records
+  // who is likely to act and steers a cursor that is *already* on stage, but it
+  // never summons one — what the system understood is shown by the ghost
+  // preview, which can be wrong without a crew member appearing to own it.
+  const onStage = Boolean(presence.agents[agent]?.active)
 
   if (!commandId) {
     presence.setNote(agent, note, true)
-    presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
+    if (onStage) presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
     return
   }
 
@@ -264,7 +319,7 @@ function commitSteering(
   commandSteering.set(commandId, { agent, confidenceRank: rank })
   lastAgentByCommand.set(commandId, agent)
   presence.setNote(agent, note, true)
-  presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
+  if (onStage) presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
 }
 
 function handoffSteeringToPacket(commandId: string | null | undefined, agent: string): void {
@@ -279,6 +334,25 @@ function handoffSteeringToPacket(commandId: string | null | undefined, agent: st
   resolvePending(commandId, agent)
   commandSteering.set(commandId, { agent, confidenceRank: PACKET_CONFIDENCE_RANK })
   lastAgentByCommand.set(commandId, agent)
+}
+
+/**
+ * The target a packet's cursor should resolve against. Mirrors the subjects
+ * `packetTargetPosition` understands, but returns the Target rather than a
+ * position so the caller can tell "unresolved" from "scene-global".
+ */
+function packetSubjectTarget(packet: CommandPacket): Target | null {
+  switch (packet.command) {
+    case 'REMOVE_OBJECT':
+    case 'TRANSFORM_OBJECT':
+    case 'ANIMATE_OBJECT':
+    case 'SET_MATERIAL':
+      return packet.payload.target
+    case 'SET_KEYFRAMES':
+      return packet.payload.target ?? null
+    default:
+      return null
+  }
 }
 
 /** Object id this packet addresses, for barge-in supersede matching. Only
@@ -354,8 +428,34 @@ export function enqueuePacket(packet: CommandPacket): void {
   handoffSteeringToPacket(packet.commandId ?? null, agent)
   clearFadeTimer(agent)
   const presence = presenceStore.getState()
-  presence.setActive(agent, true)
   pendingIdle.delete(agent)
+
+  // The single place a cursor turns on. A packet is about to change something,
+  // so there is finally a real claim to make and a real place to make it from.
+  if (!presence.agents[agent]?.active) {
+    const subject = packetSubjectTarget(packet)
+    const home = classifyCursorHome(subject ? liveTargetPosition(subject) : null, subject !== null)
+    if (home.kind === 'none') {
+      // The packet named a subject and it didn't resolve. There is nowhere
+      // honest to stand — the packet still applies, it just does so
+      // unattributed rather than sending a cursor somewhere unrelated.
+      logger(agent, `${packet.command}: no cursor (unresolved target)`, 'info')
+    } else {
+      // Scene-wide work uses packetTargetPosition, which knows the truthful
+      // spot per command (the spawn point, the camera, the station).
+      const at = home.kind === 'object' ? home.position : packetTargetPosition(packet)
+      // Settle in place at the thing it's about to touch rather than swooping
+      // across the room from a station nobody was looking at. Flights are for
+      // subsequent moves, where they read as choreography instead of a glitch.
+      presence.appearAt(agent, at)
+      noteWorkBeat(agent)
+      ensureWatchdog()
+      crewWhoosh(at[0])
+    }
+  } else {
+    noteWorkBeat(agent)
+  }
+
   const queue = queues.get(agent) ?? []
 
   // Barge-in v1: a newer command for the same object + command type
@@ -386,12 +486,19 @@ export function enqueuePacket(packet: CommandPacket): void {
   }
 }
 
+/**
+ * The server says this agent picked up the command ("copy", "on it"). That is a
+ * status line, not work — it no longer turns a cursor on. If the agent already
+ * has one, the note updates it; otherwise this is silent and the cursor arrives
+ * with the first packet.
+ */
 export function markAgentActive(agent: string, note?: string | null, commandId?: string | null): void {
   if (!cursorVisible(agent)) return
   if (commandId) resolvePending(commandId, agent)
   const presence = presenceStore.getState()
-  presence.setActive(agent, true)
   clearResponseTimersForAgent(agent)
+  if (!presence.agents[agent]?.active) return
+  noteWorkBeat(agent)
   presence.setPhase(agent, 'intent')
   if (note != null) presence.setNote(agent, note, true)
 }
@@ -423,47 +530,56 @@ export function releaseCommandPresence(commandId: string): void {
 
 export function markAgentIdle(agent: string): void {
   if (!cursorVisible(agent)) return
-  if (suggestionGlance.has(agent)) return
   clearResponseTimersForAgent(agent)
   const queued = queues.get(agent)?.length ?? 0
-  if (running.has(agent) || queued > 0) {
-    // Local packet queue still owns flying → work → settle → check.
+  const decision = idleDecision({
+    phase: presenceStore.getState().agents[agent]?.phase,
+    busy: running.has(agent) || queued > 0,
+    hasFadeTimer: fadeTimers.has(agent),
+  })
+  if (decision === 'already-scheduled') return
+  if (decision === 'defer') {
+    // The drain owns flying → work → settle → check, and Producer idle must not
+    // shorten an in-progress settle. But the fade is now *owed*: pendingIdle
+    // records that, and the watchdog collects if the drain never finishes.
     pendingIdle.add(agent)
     return
   }
-  const phase = presenceStore.getState().agents[agent]?.phase
-  // Producer idle must not restart/shorten an in-progress settle or soft exit.
-  if (phase === 'settling' || phase === 'done' || fadeTimers.has(agent)) return
   scheduleAgentFadeOut(agent)
 }
 
-/** Keep the cursor on stage with a spinner while the command is still open
- *  (grammar finished a batch; LLM motion may still be coming). */
+/**
+ * Keep an already-visible cursor on stage with a spinner while the command is
+ * still open (grammar finished a batch; LLM motion may still be coming).
+ *
+ * Keep-alive only. This used to call `setActive(agent, true)` and could
+ * therefore summon a cursor to spin over nothing at all — and when there was no
+ * object to park on it fell back to an anchor floating above the middle of the
+ * set. If no cursor is up, waiting is silent and the cursor arrives with the
+ * first packet.
+ */
 export function markAgentWaiting(agent: string): void {
   if (!cursorVisible(agent)) return
-  if (suggestionGlance.has(agent)) return
-  clearFadeTimer(agent)
-  pendingIdle.delete(agent)
   const presence = presenceStore.getState()
   const prev = presence.agents[agent]
-  presence.setActive(agent, true)
+  if (!prev?.active) return
+
+  clearFadeTimer(agent)
+  pendingIdle.delete(agent)
+  noteWorkBeat(agent)
   presence.setPhase(agent, 'intent')
   // Clear note so status rules show spinner, not a stale bubble.
   presence.setNote(agent, null)
 
-  // Park on the last touched object (or director anchor) — never leave the
-  // cursor stranded at a far crew station while waiting.
-  const touchId = prev?.followObjectId ?? prev?.lastTouchedObjectId
-  if (touchId) {
-    const live = liveTargetPosition({ id: touchId })
-    if (live) {
-      presence.followObject(agent, touchId)
-      presence.flyTo(agent, live, 'intent', CURSOR_INTENT_MS)
-      return
-    }
-  }
-  const anchor = pendingAnchorPosition()
-  presence.flyTo(agent, anchor, 'intent', CURSOR_INTENT_MS)
+  // Park on the last touched object so the cursor isn't stranded at a far crew
+  // station while waiting. With no object to park on it simply holds position —
+  // staying put is honest, and better than drifting somewhere meaningless.
+  const touchId = prev.followObjectId ?? prev.lastTouchedObjectId
+  if (!touchId) return
+  const live = liveTargetPosition({ id: touchId })
+  if (!live) return
+  presence.followObject(agent, touchId)
+  presence.flyTo(agent, live, 'intent', CURSOR_INTENT_MS)
 }
 
 /** Fade agents left spinning after the command fully completes (Producer idle). */
@@ -502,7 +618,18 @@ export function consumeLatestSuggestion(): AgentSuggestionMessage | null {
   return msg
 }
 
-/** Proactive crew suggestion — cursor glance without packet queue (Phase A4). */
+/**
+ * Proactive crew suggestion.
+ *
+ * This used to fly a cursor over for a three-second "glance" — a crew member
+ * appearing on stage to point at something they had merely *thought about*.
+ * Suggesting is not work, and the glance also carried its own retirement timer
+ * that could race the real one and strand the cursor.
+ *
+ * Attribution for an offer is now the proposal ghost standing on the set plus
+ * the room briefly wearing the proposing member's colour, neither of which
+ * claims anyone is doing anything.
+ */
 export function reactToSuggestion(msg: AgentSuggestionMessage): void {
   if (msg.kind === 'suggestion' && msg.suggestedCommand) {
     latestSuggestion = { msg, at: Date.now() }
@@ -524,28 +651,12 @@ export function reactToSuggestion(msg: AgentSuggestionMessage): void {
     }
   }
   if (!cursorVisible(msg.agent)) return
-  const agent = msg.agent
-  suggestionGlance.add(agent)
-  markAgentActive(agent, msg.text)
-  let target: Vec3 = stationFor(agent)
-  if (msg.subjectObject) {
-    target = liveTargetPosition({ name: msg.subjectObject }) ?? target
-  }
-  const presence = presenceStore.getState()
-  presence.flyTo(agent, target, 'intent', CURSOR_INTENT_MS)
+  // Remember the subject so that if this offer *is* taken up, the resulting
+  // packets already know which object this member was talking about.
   if (msg.subjectObject) {
     const id = resolveTarget({ name: msg.subjectObject })?.id
-    if (id) {
-      presence.followObject(agent, id)
-      presence.touchLastObject(agent, id)
-    }
+    if (id) presenceStore.getState().touchLastObject(msg.agent, id)
   }
-  setTimeout(() => {
-    suggestionGlance.delete(agent)
-    if (!running.has(agent) && (queues.get(agent)?.length ?? 0) === 0) {
-      scheduleAgentFadeOut(agent)
-    }
-  }, 3000)
 }
 
 /** Fade the cursor out after work — no long wander/playback tail. */
@@ -704,17 +815,5 @@ async function drainAgentQueue(agent: string): Promise<void> {
 export function resetAgentRuntime(): void {
   queues.clear()
   running.clear()
-  pendingIdle.clear()
-  inFlight.clear()
-  commandSteering.clear()
-  lastAgentByCommand.clear()
-  for (const t of fadeTimers.values()) clearTimeout(t)
-  fadeTimers.clear()
-  for (const t of responseTimers.values()) clearTimeout(t)
-  responseTimers.clear()
-  for (const t of pendingShowTimers.values()) clearTimeout(t)
-  pendingShowTimers.clear()
-  pendingTimeoutHandlers.clear()
-  pendingAnchors.clear()
-  presenceStore.setState({ pending: {} })
+  retireAllCursors()
 }

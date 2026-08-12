@@ -42,7 +42,6 @@ function displayNameFor(agent: string): string {
 const HOVER_HEIGHT = 0.22
 const STATUS_SLOT_Y = 0.18
 const LABEL_Y = 0.3
-const PENDING_COLOR = '#888888'
 const flightEase = getEaseFn('easeOut')
 
 /** Named cursor fade-in time constant (slower than the old 0.22/frame snap). */
@@ -50,7 +49,6 @@ const CURSOR_FADE_IN_TAU_MS = 320
 /** Named cursor soft exit — deliberately longer than entrance. */
 const CURSOR_FADE_OUT_TAU_MS = 720
 /** Pending exits faster so the named replacement can crossfade without a pop. */
-const PENDING_FADE_OUT_TAU_MS = 260
 
 const REDUCE_MOTION =
   typeof window !== 'undefined' &&
@@ -331,55 +329,6 @@ function buildCursor(agent: string, seed: number): Cursor {
   }
 }
 
-function buildPendingCursor(seed: number): Cursor {
-  // Not a cursor at all — a small "listening dot" that breathes above the
-  // anchor. Reads as "the set heard you", never as a broken gray ghost.
-  const group = new THREE.Group()
-  const coneMat = new THREE.MeshBasicMaterial({
-    color: XR_UI.mint,
-    transparent: true,
-    depthTest: false,
-  })
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), coneMat)
-  group.add(dot)
-  const coneOutlineMat = new THREE.MeshBasicMaterial({
-    color: '#ffffff',
-    transparent: true,
-    opacity: 0.35,
-    depthTest: false,
-  })
-  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.024, 16, 16), coneOutlineMat)
-  group.add(halo)
-
-  const { spinnerMat, arcTex, checkTex, spinner } = makeSpinner(PENDING_COLOR)
-  spinner.visible = false
-  group.add(spinner)
-
-  group.renderOrder = 999
-  setEditorLayer(group)
-  tagSceneInfrastructure(group)
-  group.visible = false
-
-  return {
-    group,
-    coneMat,
-    coneOutlineMat,
-    labelMat: null,
-    base: new THREE.Vector3(0, 0, 0),
-    from: new THREE.Vector3(0, 0, 0),
-    moveStartedAt: 0,
-    seed,
-    opacity: 0,
-    wasVisible: false,
-    noteMat: null,
-    noteSprite: null,
-    noteText: '',
-    spinnerMat,
-    arcTex,
-    checkTex,
-    spinnerPhase: undefined,
-  }
-}
 
 function disposeCursorGroup(scene: THREE.Scene, cursor: Cursor): void {
   scene.remove(cursor.group)
@@ -431,7 +380,6 @@ export interface AgentCursors {
 
 export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const cursors = new Map<string, Cursor>()
-  const pendingCursors = new Map<string, Cursor>()
   let cursorSeed = 0
   let lastNow = 0
 
@@ -444,15 +392,6 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
     return cursor
   }
 
-  function ensurePending(commandId: string): Cursor {
-    let cursor = pendingCursors.get(commandId)
-    if (cursor) return cursor
-    cursor = buildPendingCursor(cursorSeed++)
-    pendingCursors.set(commandId, cursor)
-    scene.add(cursor.group)
-    return cursor
-  }
-
   CURSOR_AGENT_ORDER.forEach((agent) => {
     ensureCursor(agent)
   })
@@ -460,55 +399,12 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const update = (now: number) => {
     const state = presenceStore.getState()
     const agents = state.agents
-    const pending = state.pending
     const editor = useEditorStore.getState()
     const dtMs = lastNow > 0 ? Math.min(50, Math.max(0, now - lastNow)) : 1000 / 60
     lastNow = now
 
     for (const agent of Object.keys(agents)) {
       if (cursorVisible(agent)) ensureCursor(agent)
-    }
-
-    for (const commandId of Object.keys(pending)) {
-      ensurePending(commandId)
-    }
-
-    for (const [commandId, cursor] of pendingCursors) {
-      const entry = pending[commandId]
-      const wantOpacity = entry ? 1 : 0
-      const tauMs = wantOpacity > cursor.opacity ? CURSOR_FADE_IN_TAU_MS : PENDING_FADE_OUT_TAU_MS
-      cursor.opacity = dampToward(cursor.opacity, wantOpacity, dtMs, tauMs)
-
-      if (!entry && cursor.opacity < 0.01) {
-        disposeCursorGroup(scene, cursor)
-        pendingCursors.delete(commandId)
-        continue
-      }
-      if (cursor.opacity < 0.01) {
-        cursor.group.visible = false
-        continue
-      }
-      cursor.group.visible = true
-      if (entry) {
-        if (!cursor.wasVisible) {
-          cursor.base.set(entry.position[0], entry.position[1], entry.position[2])
-          cursor.from.copy(cursor.base)
-          cursor.wasVisible = true
-        } else {
-          cursor.base.set(entry.position[0], entry.position[1], entry.position[2])
-        }
-      }
-      const bob = REDUCE_MOTION ? 0 : Math.sin(now / 320 + cursor.seed) * 0.02
-      cursor.group.position.set(
-        cursor.base.x,
-        cursor.base.y + HOVER_HEIGHT + bob,
-        cursor.base.z
-      )
-      // Breathing: gentle scale + opacity pulse, transform-only.
-      const breath = REDUCE_MOTION ? 1 : 1 + Math.sin(now / 420 + cursor.seed) * 0.25
-      cursor.group.scale.setScalar(breath)
-      cursor.coneMat.opacity = cursor.opacity * 0.9
-      cursor.coneOutlineMat.opacity = cursor.opacity * 0.3
     }
 
     for (const [agent, cursor] of cursors) {
@@ -526,14 +422,20 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
       }
       cursor.group.visible = true
 
-      // Snap from/base when a cursor goes invisible → visible (appearAt handoff).
+      // A cursor's first frame settles in place at the thing it is about to
+      // touch. `appearFrom` is written by appearAt and is the only legitimate
+      // start point — this used to fall back to `p.target`, which after a fade
+      // still held the previous command's destination, so the cursor popped
+      // there and flew in from a position it had never occupied.
       if (isVisible && !cursor.wasVisible && p) {
-        const start = p.appearFrom ?? p.target
-        cursor.base.set(start[0], start[1], start[2])
-        cursor.from.copy(cursor.base)
+        const start = p.appearFrom
+        if (start) {
+          cursor.base.set(start[0], start[1], start[2])
+          cursor.from.copy(cursor.base)
+          presenceStore.getState().clearAppearFrom(agent)
+        }
         cursor.moveStartedAt = p.moveStartedAt
         cursor.wasVisible = true
-        if (p.appearFrom) presenceStore.getState().clearAppearFrom(agent)
       } else if (!isVisible) {
         cursor.wasVisible = false
       }
@@ -596,8 +498,6 @@ export function createAgentCursors(scene: THREE.Scene): AgentCursors {
   const dispose = () => {
     for (const cursor of cursors.values()) disposeCursorGroup(scene, cursor)
     cursors.clear()
-    for (const cursor of pendingCursors.values()) disposeCursorGroup(scene, cursor)
-    pendingCursors.clear()
   }
 
   return { update, dispose }

@@ -10,7 +10,6 @@
  */
 import { create } from 'zustand'
 import { useEditorStore } from '../store'
-import { sampleObjectAtTime } from './scene-state-sync'
 import type { Vec3 } from './protocol'
 
 /** Choreography timings, shared so the runtime's paced apply and the scene's
@@ -23,9 +22,6 @@ export const CURSOR_WORK_MS = 250 // readable action-note / apply beat
 export const CURSOR_SETTLE_MS = 450 // check has time to register
 export const CURSOR_MOTION_FADE_MS = 1100 // post-motion hold before soft fade
 export const CURSOR_FADE_MS = 900 // post-work hold before soft fade
-/** Wait before showing the anonymous pending cursor — skips flash on fast
- *  chitchat / describe-only replies that never need a stage cursor. */
-export const PENDING_SHOW_DELAY_MS = 600
 export const PENDING_RESPONSE_TIMEOUT_MS = 10_000 // clear a silent server request
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling' | 'done'
@@ -104,20 +100,6 @@ export function stationFor(agent: string): Vec3 {
   return agentMetaFor(agent).station
 }
 
-/** Where an anonymous pending cursor appears before the server names an agent. */
-export function pendingAnchorPosition(): Vec3 {
-  const st = useEditorStore.getState()
-  if (st.selectedId) {
-    const obj = st.objects.find((o) => o.id === st.selectedId)
-    if (obj) {
-      const sampled = sampleObjectAtTime(obj, st.currentTime)
-      return [sampled.position[0], sampled.position[1], sampled.position[2]]
-    }
-  }
-  const stage = st.stage
-  return [stage.position[0], stage.position[1] + 0.6, stage.position[2]]
-}
-
 export interface AgentPresence {
   agent: string
   /** Cursor should be on stage (announced by the server, held until the
@@ -126,7 +108,12 @@ export interface AgentPresence {
   phase: CursorPhase
   /** Scene point the cursor is addressing. */
   target: Vec3
-  /** One-shot spawn point for pending→named handoff; renderer snaps here then clears. */
+  /**
+   * One-shot point where this cursor turns on — the renderer snaps here, then
+   * clears it. Set only by `appearAt`, and the renderer will not turn a cursor
+   * on without it, so a first appearance can never inherit a stale `target`
+   * from a previous command and fly in from a place it was never at.
+   */
   appearFrom: Vec3 | null
   /** `performance.now()` when `target` last changed — the scene reads this to
    *  start a fresh flight ease from wherever the cursor currently is. */
@@ -144,19 +131,19 @@ export interface AgentPresence {
   lastTouchedObjectId: string | null
 }
 
-export interface PendingCursor {
-  position: Vec3
-}
-
 interface PresenceState {
   agents: Record<string, AgentPresence>
-  pending: Record<string, PendingCursor>
   setActive: (agent: string, active: boolean) => void
   fadeOut: (agent: string) => void
   /** Point the cursor at a new target and (re)start its flight clock. The
    *  optional duration lets callers pace a hop (defaults to a full flight). */
   flyTo: (agent: string, target: Vec3, phase: CursorPhase, durationMs?: number) => void
-  /** Snap a newly-appearing agent cursor to a world point (pending handoff). */
+  /**
+   * Turn a cursor on at a world point it is about to work at. The only way a
+   * cursor becomes visible — and the position is required, so the renderer can
+   * never fall back to a stale target and fly in from somewhere the cursor was
+   * never at.
+   */
   appearAt: (agent: string, position: Vec3) => void
   /** Clear the one-shot appearFrom after the renderer has snapped. */
   clearAppearFrom: (agent: string) => void
@@ -164,9 +151,6 @@ interface PresenceState {
   setNote: (agent: string, note: string | null, confirmed?: boolean) => void
   followObject: (agent: string, objectId: string | null) => void
   touchLastObject: (agent: string, objectId: string | null) => void
-  showPending: (commandId: string, position: Vec3) => void
-  clearPending: (commandId: string) => void
-  pendingPosition: (commandId: string) => Vec3 | null
 }
 
 function seed(agent: string): AgentPresence {
@@ -195,9 +179,8 @@ function patch(
   return { agents: { ...state.agents, [agent]: { ...prev, ...updates } } }
 }
 
-export const presenceStore = create<PresenceState>((set, get) => ({
+export const presenceStore = create<PresenceState>((set) => ({
   agents: {},
-  pending: {},
   setActive: (agent, active) =>
     set((s) =>
       patch(s, agent, {
@@ -255,15 +238,4 @@ export const presenceStore = create<PresenceState>((set, get) => ({
   followObject: (agent, objectId) => set((s) => patch(s, agent, { followObjectId: objectId })),
   touchLastObject: (agent, objectId) =>
     set((s) => patch(s, agent, { lastTouchedObjectId: objectId })),
-  showPending: (commandId, position) =>
-    set((s) => ({
-      pending: { ...s.pending, [commandId]: { position } },
-    })),
-  clearPending: (commandId) =>
-    set((s) => {
-      if (!(commandId in s.pending)) return s
-      const { [commandId]: _, ...rest } = s.pending
-      return { pending: rest }
-    }),
-  pendingPosition: (commandId) => get().pending[commandId]?.position ?? null,
 }))

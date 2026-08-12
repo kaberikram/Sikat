@@ -5,6 +5,7 @@ import {
   type XRInputManager as XRInputManagerType,
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
+import { retireAllCursors } from '../../director/agent-runtime'
 import { resolveTarget } from '../../director/command-applier'
 import { submitDirectorCommand } from '../../director/director-command'
 import { newCommandId } from '../../director/ids'
@@ -593,6 +594,7 @@ export function createCamcorderRig(
       clearAimPick()
       resetAmbientChannel()
       resetAmbientSense()
+      retireAllCursors()
       bindAmbientChannel(null)
       stopVoiceSession()
       directorSlate.dispose()

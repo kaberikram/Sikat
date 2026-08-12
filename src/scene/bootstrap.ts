@@ -14,6 +14,7 @@ import { setupGizmo } from './setup-gizmo'
 import { setupPicking } from './setup-picking'
 import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
 import { createAgentCursors } from './agent-cursors'
+import { retireAllCursors } from '../director/agent-runtime'
 import { createStageMarker, disposeStageMarker } from './stage-marker'
 import { disposeAttentionField, initAttentionField } from './xr/attention-field'
 import { disposeRoomResponse, initRoomResponse } from './xr/room-response'
@@ -226,6 +227,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   return () => {
     teardownPicking()
     stopAnimate()
+    retireAllCursors()
     agentCursors.dispose()
     // Release the marker tint before the marker itself is disposed.
     disposeRoomResponse()
