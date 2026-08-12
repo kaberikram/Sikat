@@ -23,7 +23,7 @@ import { beatTick, cutTick, listenEnd, listenStart, missedBuzz, replyChime } fro
 import { useEditorStore } from '../../store'
 import { attendTo, clearAttention, pulseAttention } from './attention-field'
 import type { DirectorSlate } from './director-slate'
-import { setRoomLevel, setRoomState } from './room-response'
+import { setRoomAccent, setRoomLevel, setRoomState } from './room-response'
 
 export type Response =
   /** Aim moved. `objectId` null means the ray left everything. */
@@ -46,6 +46,12 @@ export type Response =
   | { kind: 'blocked'; text: string }
   /** Plain information the world has no way to carry ("export on desktop"). */
   | { kind: 'status'; text: string }
+  /**
+   * The crew is offering something unprompted. `spatial` means a ghost of the
+   * outcome is already standing on the set, so the words would be redundant;
+   * when it's false there is nothing to look at and the offer needs saying.
+   */
+  | { kind: 'proposed'; text: string; color: string; spatial: boolean }
   /** Sticky guidance ("pick up the right controller"). Always text; null clears. */
   | { kind: 'notice'; text: string | null }
   /** Link state. */
@@ -55,12 +61,16 @@ export type Response =
 const REPLY_GRACE_MS = 1200
 /** Misses beyond this many in a row stop being ambient and become words. */
 const MISS_ESCALATE_AT = 2
+/** How long the room wears a proposing crew member's colour. */
+const PROPOSAL_ACCENT_MS = 2200
+const PROPOSAL_ACCENT_WEIGHT = 0.45
 
 let slate: DirectorSlate | null = null
 
 let consecutiveMisses = 0
 let lastLandedAt = 0
 let pendingReply: { text: string; at: number; timer: ReturnType<typeof setTimeout> } | null = null
+let proposalAccentTimer: ReturnType<typeof setTimeout> | null = null
 /** The object the aim is resting on — what a miss or a landing pulses. */
 let aimedId: string | null = null
 
@@ -183,6 +193,21 @@ export function respond(r: Response): void {
       return
     }
 
+    case 'proposed': {
+      // Either way the room takes on the proposing crew member's colour for a
+      // moment, so an offer is attributable at a glance.
+      setRoomAccent(r.color, PROPOSAL_ACCENT_WEIGHT)
+      if (proposalAccentTimer) clearTimeout(proposalAccentTimer)
+      proposalAccentTimer = setTimeout(() => {
+        setRoomAccent(null)
+        proposalAccentTimer = null
+      }, PROPOSAL_ACCENT_MS)
+      // A relight or an FX tweak has no silhouette to stand in for it, and
+      // inventing one would be a lie — so those still need words.
+      if (!r.spatial) toSlate((s) => s.setLastSent(`${r.text} — say “do it”`))
+      return
+    }
+
     case 'notice': {
       toSlate((s) => s.setNotice(r.text))
       return
@@ -205,4 +230,9 @@ export function resetAmbientChannel(): void {
   lastLandedAt = 0
   aimedId = null
   clearPendingReply()
+  if (proposalAccentTimer) {
+    clearTimeout(proposalAccentTimer)
+    proposalAccentTimer = null
+    setRoomAccent(null)
+  }
 }

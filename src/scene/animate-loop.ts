@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
+import { updateGhosts } from '../director/ghost-preview'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCameraBase } from '../timeline-apply'
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
@@ -207,6 +208,7 @@ export function createAnimateLoop(ctx: {
       updateEntrySequence(now, delta)
       updateAttentionField(now, delta)
       updateRoomResponse(now, delta)
+      updateGhosts(now)
 
       // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
       const XR_VF_W = 640
