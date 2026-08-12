@@ -35,7 +35,16 @@ import { createDirectorSlate } from './director-slate'
 import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
-import { computeStagePose, isHeadPoseValid, shouldReplaceStage, type V3 } from './stage-placement'
+import {
+  computeStagePose,
+  isHeadPoseValid,
+  shouldReplaceStage,
+  standoffBetween,
+  STAGE_STANDOFF_M,
+  STANDOFF_RANGE,
+  type V3,
+} from './stage-placement'
+import { getProfile, noteSessionStart, noteStandoff, preferredStandoff } from './director-profile'
 import { registerStagePlacer } from './xr-bridge'
 import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
@@ -254,14 +263,26 @@ export function createCamcorderRig(
     }
   }
 
+  /**
+   * How far ahead this director actually likes the set. A first-timer gets the
+   * house distance; someone who keeps backing off to frame a wide gets their
+   * own, blended rather than copied.
+   */
+  function standoffForThisDirector(): number {
+    return preferredStandoff(getProfile(), STAGE_STANDOFF_M, STANDOFF_RANGE)
+  }
+
   /** Move the stage in front of the user (only after a real move) — the whole
    *  set, entry ripple, and crew stations follow the store's stage anchor. */
   function placeStageAtCurrentUser(): void {
     const { pos, forward } = readHeadPose()
     if (!isHeadPoseValid(pos)) return
     const st = useEditorStore.getState()
-    if (!shouldReplaceStage(pos, forward, st.stage.position)) return
-    st.updateStage({ position: computeStagePose(pos, forward).position })
+    const standoff = standoffForThisDirector()
+    if (!shouldReplaceStage(pos, forward, st.stage.position, standoff)) return
+    const position = computeStagePose(pos, forward, standoff).position
+    st.updateStage({ position })
+    noteStandoff(standoffBetween(pos, position))
     playStageLockPulse()
     beatTick()
   }
@@ -470,9 +491,11 @@ export function createCamcorderRig(
       const { pos, forward } = readHeadPose()
       if (isHeadPoseValid(pos)) {
         pendingEntry = false
-        useEditorStore.getState().updateStage({
-          position: computeStagePose(pos, forward).position,
-        })
+        const standoff = standoffForThisDirector()
+        const position = computeStagePose(pos, forward, standoff).position
+        useEditorStore.getState().updateStage({ position })
+        noteSessionStart()
+        noteStandoff(standoffBetween(pos, position))
         startEntrySequence()
         startXrCoach(timeSec * 1000)
         if (useEditorStore.getState().xrBlendOpaque) {
