@@ -30,8 +30,12 @@ export type Response =
   | { kind: 'aimed'; objectId: string | null; name?: string | null }
   /** A command is about to change this object — attention travels ahead of the act. */
   | { kind: 'addressed'; objectId: string }
-  /** Push-to-talk opened / closed. */
-  | { kind: 'heard'; on: boolean }
+  /**
+   * Push-to-talk opened / closed. `silent` skips the earcon for a press that
+   * never actually opened a session — the release whoosh means "that went to
+   * the crew", and playing it when nothing was sent is a small lie.
+   */
+  | { kind: 'heard'; on: boolean; silent?: boolean }
   /** Live mic RMS while listening. */
   | { kind: 'level'; rms: number }
   /** The crew is working on it. */
@@ -124,8 +128,10 @@ export function respond(r: Response): void {
 
     case 'heard': {
       setRoomState(r.on ? 'listening' : 'idle')
-      if (r.on) listenStart()
-      else listenEnd()
+      if (!r.silent) {
+        if (r.on) listenStart()
+        else listenEnd()
+      }
       toSlate((s) => s.setListening(r.on))
       return
     }

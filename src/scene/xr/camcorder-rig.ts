@@ -423,8 +423,9 @@ export function createCamcorderRig(
       // The press never opened a session (still connecting, or it failed). Say
       // so rather than swallowing the gesture — an unacknowledged button is
       // indistinguishable from a broken one.
+      // Nothing was captured, so no send whoosh — the buzz is the whole answer.
       missedBuzz()
-      respond({ kind: 'heard', on: false })
+      respond({ kind: 'heard', on: false, silent: true })
       return
     }
     pulse(padRef, 0.2, 20)

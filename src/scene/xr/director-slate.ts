@@ -158,8 +158,12 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let settled = true
   /** Ambient mode is the default in XR — the world answers, this card doesn't. */
   let ambient = true
-  /** Eased 0..1 presence of the card itself, independent of the state settle. */
-  let visibility = 1
+  /**
+   * Eased 0..1 presence of the card itself, independent of the state settle.
+   * Starts hidden so the card fades *in* when it has something to say, rather
+   * than flashing on at session start and easing back out.
+   */
+  let visibility = 0
   let lastFrameAt = 0
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
