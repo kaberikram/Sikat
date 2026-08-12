@@ -14,6 +14,7 @@ import * as THREE from 'three'
 import { entrySwell } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
+import { setRoomAccent } from './room-response'
 import { XR_UI, makeTitleTexture } from './xr-ui-chrome'
 
 const PARTICLES = 250
@@ -24,10 +25,12 @@ const SET_DIM = 0.3
 interface EntryRefs {
   scene: THREE.Scene
   head: THREE.Object3D
-  stageMarker: THREE.Group
 }
 
 let refs: EntryRefs | null = null
+
+/** True while this module is holding a room accent, so teardown releases it once. */
+let holdingAccent = false
 
 let dome: THREE.Mesh | null = null
 let domeMat: THREE.MeshBasicMaterial | null = null
@@ -59,13 +62,24 @@ function windowEnv(t: number, a: number, b: number, edge = 0.25): number {
   return clamp01(Math.min(u / edge, (1 - u) / edge, 1))
 }
 
-export function initEntrySequence(scene: THREE.Scene, head: THREE.Object3D, stageMarker: THREE.Group): void {
-  refs = { scene, head, stageMarker }
+export function initEntrySequence(scene: THREE.Scene, head: THREE.Object3D): void {
+  refs = { scene, head }
 }
 
-function markerMaterial(): THREE.MeshBasicMaterial | null {
-  const mesh = refs?.stageMarker.children[0] as THREE.Mesh | undefined
-  return (mesh?.material as THREE.MeshBasicMaterial) ?? null
+/**
+ * The stage ring belongs to room-response. The entry beat asks it for a mint
+ * accent rather than writing the material, so nothing is left tinted when the
+ * cinematic tears down mid-flight.
+ */
+function holdAccent(weight: number): void {
+  holdingAccent = true
+  setRoomAccent(XR_UI.mintDeep, weight)
+}
+
+function releaseAccent(): void {
+  if (!holdingAccent) return
+  holdingAccent = false
+  setRoomAccent(null)
 }
 
 function buildObjects(): void {
@@ -229,17 +243,9 @@ export function updateEntrySequence(now: number, delta: number): void {
   else dimTarget = SET_DIM
 
   // Beat 2 (0.8–2.2s): stage ring materializes + ripple.
-  const mat = markerMaterial()
-  if (mat) {
-    const w = clamp01((t - 0.16) / 0.28)
-    if (w > 0 && t < 0.9) {
-      mat.color.set(XR_UI.mintDeep)
-      mat.opacity = 0.18 + 0.32 * easeOut(w)
-    } else if (t >= 0.9) {
-      mat.color.set(0x888888)
-      mat.opacity = 0.18
-    }
-  }
+  const w = clamp01((t - 0.16) / 0.28)
+  if (w > 0 && t < 0.9) holdAccent(easeOut(w))
+  else if (t >= 0.9) releaseAccent()
   if (ripple && rippleMat) {
     const w = clamp01((t - 0.16) / 0.4)
     const s = 1 + easeOut(w) * 2.2
@@ -295,11 +301,7 @@ function disposeEntryObjects(): void {
   disposeMesh(title)
   title = null
   titleMat = null
-  const mat = markerMaterial()
-  if (mat) {
-    mat.color.set(0x888888)
-    mat.opacity = 0.18
-  }
+  releaseAccent()
 }
 
 /** Full teardown on session end — room returns to passthrough instantly. */

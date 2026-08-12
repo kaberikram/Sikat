@@ -15,6 +15,8 @@ import { setupPicking } from './setup-picking'
 import { createAnimateLoop, subscribeShadowSync } from './animate-loop'
 import { createAgentCursors } from './agent-cursors'
 import { createStageMarker, disposeStageMarker } from './stage-marker'
+import { disposeAttentionField, initAttentionField } from './xr/attention-field'
+import { disposeRoomResponse, initRoomResponse } from './xr/room-response'
 import { initEntrySequence } from './xr/entry-sequence'
 import { bindFlyControls } from './fly-controls'
 import { createCamcorderRig } from './xr/camcorder-rig'
@@ -154,6 +156,8 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
 
   const agentCursors = createAgentCursors(scene)
   const stageMarker = createStageMarker(scene)
+  initAttentionField(scene)
+  initRoomResponse(scene, stageMarker)
   const unbindFly = bindFlyControls(mainRenderer.domElement)
 
   const camcorderRig = createCamcorderRig(scene, userCamera, virtCamera)
@@ -169,7 +173,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     reviewScreen.showAfterTake(takeStart, takeEnd, head)
   })
   camcorderRig.setSuppressRec(() => reviewScreen.isOpen())
-  initEntrySequence(scene, camcorderRig.xrInput.xrOrigin.head, stageMarker)
+  initEntrySequence(scene, camcorderRig.xrInput.xrOrigin.head)
   const disposeXr = initXrSession(mainRenderer, camcorderRig)
 
   const stopAnimate = createAnimateLoop({
@@ -223,7 +227,10 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     teardownPicking()
     stopAnimate()
     agentCursors.dispose()
+    // Release the marker tint before the marker itself is disposed.
+    disposeRoomResponse()
     disposeStageMarker(stageMarker, scene)
+    disposeAttentionField()
     unbindFly()
     disposeXr()
     camcorderRig.dispose()

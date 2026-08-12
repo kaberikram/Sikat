@@ -6,6 +6,8 @@ import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCamer
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
 import { updateStageMarker } from './stage-marker'
+import { updateAttentionField } from './xr/attention-field'
+import { updateRoomResponse } from './xr/room-response'
 import { updateEntrySequence } from './xr/entry-sequence'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
@@ -203,6 +205,8 @@ export function createAnimateLoop(ctx: {
       // IWSDK updates grip/ray spaces; camcorder pose + REC read from gripSpaces.right.
       ctx.camcorderRig.update(delta, now / 1000, ctx.mainRenderer.xr)
       updateEntrySequence(now, delta)
+      updateAttentionField(now, delta)
+      updateRoomResponse(now, delta)
 
       // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
       const XR_VF_W = 640
