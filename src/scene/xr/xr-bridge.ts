@@ -2,6 +2,27 @@ let enterXrSession: (() => Promise<void>) | null = null
 let endXrSessionFn: (() => Promise<void>) | null = null
 let stagePlacer: (() => void) | null = null
 let reviewRecall: (() => boolean) | null = null
+let takeToggler: ((rolling: boolean) => boolean) | null = null
+
+/**
+ * The camcorder rig registers this so a spoken "action" / "cut" runs the exact
+ * same path as the trigger — haptics, the take timestamp, and above all the
+ * review monitor. They used to diverge: the voice cue called `endTake()` and
+ * nothing else, so a take ended by voice never reached the monitor the shot
+ * list had just promised it would.
+ */
+export function registerTakeToggler(fn: ((rolling: boolean) => boolean) | null): void {
+  takeToggler = fn
+}
+
+/**
+ * Start or stop a take through the rig. Returns false when the rig declined
+ * (not in XR, or the monitor currently owns the take controls), so the caller
+ * can fall back to a plain store toggle.
+ */
+export function toggleTakeInXr(rolling: boolean): boolean {
+  return takeToggler?.(rolling) ?? false
+}
 
 /** The camcorder rig registers this; places the stage in front of the user's head. */
 export function registerStagePlacer(fn: (() => void) | null): void {

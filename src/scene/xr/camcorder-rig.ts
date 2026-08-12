@@ -46,7 +46,7 @@ import {
   type V3,
 } from './stage-placement'
 import { getProfile, noteSessionStart, noteStandoff, preferredStandoff } from './director-profile'
-import { registerStagePlacer } from './xr-bridge'
+import { registerStagePlacer, registerTakeToggler } from './xr-bridge'
 import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
@@ -60,6 +60,9 @@ const AIM_UP_RAD = (AIM_UP_DEG * Math.PI) / 180
 const AIM_OFFSET = new THREE.Quaternion().setFromEuler(
   new THREE.Euler(-AIM_UP_RAD, 0, 0, 'XYZ')
 )
+/** Enter without a valid head pose after this long rather than waiting forever. */
+const ENTRY_POSE_TIMEOUT_SEC = 3
+
 const LENS_FORWARD_M = 0.05
 const AIM_RAY_LEN = 2.5
 
@@ -243,6 +246,7 @@ export function createCamcorderRig(
    *  (and the entry cinematic) from the identity pose puts everything at the
    *  guardian center instead of in front of the user. */
   let pendingEntry = false
+  let pendingEntrySec = 0
   /** Last frame's right pad — button handlers fire outside update()'s scope. */
   let padRef: ReturnType<typeof getRightPad> = null
   let padMissingSec = 0
@@ -289,13 +293,20 @@ export function createCamcorderRig(
   }
   registerStagePlacer(placeStageAtCurrentUser)
 
-  function toggleRecord(): void {
+  /**
+   * The one path a take starts or stops by, whether the trigger pulled it or a
+   * voice cue did. Returns false when the rig declined, so a voice caller can
+   * fall back rather than silently doing nothing.
+   */
+  function toggleRecord(): boolean {
     if (suppressRec?.()) {
-      // The review monitor owns the trigger right now — say so, don't go mute.
+      // The review monitor owns the take controls right now — say so, don't go
+      // mute. This used to gate the trigger only, so a spoken "action" could
+      // start a take over an open, playing monitor.
       missedBuzz()
       pulse(padRef, 0.3, 40)
       respond({ kind: 'blocked', text: 'dismiss the monitor to roll again' })
-      return
+      return false
     }
     const st = useEditorStore.getState()
     if (st.isRolling) {
@@ -309,12 +320,17 @@ export function createCamcorderRig(
       // The review monitor swinging into view is the answer; the line only
       // carries the part the monitor can't — where the take went.
       respond({ kind: 'status', text: `take ${takeNumber} saved to the timeline — export on desktop` })
-      return
+      return true
     }
     st.startTake()
     pulse(padRef, 0.8, 70)
     noteCoachAction('rec')
+    return true
   }
+
+  // "action" / "cut" by voice runs exactly this, so a spoken take gets the
+  // haptics, the take timestamp and the monitor the trigger has always given it.
+  registerTakeToggler(() => toggleRecord())
 
   function beginTalk(): void {
     if (!isSpeechAvailable()) {
@@ -491,16 +507,26 @@ export function createCamcorderRig(
     // then roll the cinematic (ripple/title read the freshly placed stage).
     if (pendingEntry) {
       const { pos, forward } = readHeadPose()
-      if (isHeadPoseValid(pos)) {
+      const valid = isHeadPoseValid(pos)
+      pendingEntrySec += delta
+      // Waiting on a head pose that may never come. Seated at the origin, or
+      // tracking lost at start, and this gate simply never opened: no stage, no
+      // cinematic, no coach, and — worst of all — no message. Enter anyway on a
+      // guessed forward, because a set placed imperfectly is recoverable ("crew,
+      // set the stage" re-places it) and a silent dead end is not.
+      if (valid || pendingEntrySec > ENTRY_POSE_TIMEOUT_SEC) {
         pendingEntry = false
         const standoff = standoffForThisDirector()
-        const position = computeStagePose(pos, forward, standoff).position
+        const head: V3 = valid ? pos : [0, 1.6, 0]
+        const position = computeStagePose(head, forward, standoff).position
         useEditorStore.getState().updateStage({ position })
         noteSessionStart()
-        noteStandoff(standoffBetween(pos, position))
+        if (valid) noteStandoff(standoffBetween(head, position))
         startEntrySequence()
         startXrCoach(timeSec * 1000)
-        if (useEditorStore.getState().xrBlendOpaque) {
+        if (!valid) {
+          respond({ kind: 'status', text: 'no head tracking yet — say “crew, set the stage” to place it' })
+        } else if (useEditorStore.getState().xrBlendOpaque) {
           respond({ kind: 'status', text: 'VR mode — no passthrough here' })
         }
       }
@@ -578,6 +604,7 @@ export function createCamcorderRig(
     // placement) wait for the first tracked head pose in update().
     bindSession: () => {
       pendingEntry = true
+      pendingEntrySec = 0
     },
     setTakeEndedHandler: (fn) => {
       onTakeEnded = fn

@@ -18,6 +18,7 @@
  */
 import * as THREE from 'three'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
+import { useEditorStore } from '../../store'
 import { setEditorLayer } from '../infrastructure'
 import { currentCoachHint } from './xr-coach'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
@@ -194,7 +195,32 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     if (!ambient) return false
     if (st === 'offline' || st === 'replying' || st === 'misheard') return false
     if (st === 'listening' || st === 'thinking' || st === 'sending') return true
-    return !notice && !bodyText && !currentCoachHint(nowMs)
+    // The idle ladder decides what an idle card would say; if it would say
+    // anything at all, the card has to be on screen to say it. Checking a
+    // hand-listed subset here is how the SET DAY shot list went invisible in
+    // XR: the hint was in the ladder but not in this gate, so the card faded
+    // out and stopped repainting, and the cue lines were never shown.
+    return idleLine(nowMs) === null
+  }
+
+  /**
+   * What an idle card would show, or null when it genuinely has nothing to say.
+   * Single source of truth for both the visibility gate and the paint.
+   */
+  function idleLine(nowMs: number): string | null {
+    const line =
+      notice
+      || bodyText
+      || currentCoachHint(nowMs)
+      || (isDemoActive() ? currentDemoHint() : null)
+    if (line) return line
+    // Way in for a director with nothing else on screen — including a returning
+    // one, who gets no coach (already seen) and no shot list (no demo running)
+    // and would otherwise face a dimmed room with no affordances at all. It
+    // retires the moment there is a set to work on, so it never nags someone
+    // who is clearly already going.
+    if (useEditorStore.getState().objects.length === 0) return 'say “crew, set the stage”'
+    return null
   }
 
   function paint(nowMs: number): void {
@@ -276,16 +302,9 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       } else if (st === 'replying') {
         line = bodyText
       } else {
-        // Idle priority: sticky notice > status echo > first-run coach > shot
-        // list > onboarding fallback. Point lock-on and crew suggestions used to
-        // sit in this ladder; they are the world's job now — the object lights
-        // up, and a proposal stands on the set as a ghost.
-        const hint = bodyText ? null : currentDemoHint()
-        line = notice
-          || bodyText
-          || currentCoachHint(nowMs)
-          || hint
-          || 'say “crew, set the stage”'
+        // Idle priority lives in idleLine so the visibility gate and the paint
+        // can never disagree about whether there is something to say.
+        line = idleLine(nowMs) ?? ''
         ghost = !bodyText && !notice
       }
 
@@ -328,6 +347,23 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     const e = 1 - (1 - Math.max(t, 0)) ** 3
     mesh.scale.setScalar(STATE_DIP_SCALE + (1 - STATE_DIP_SCALE) * e)
     mat.opacity = (STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e) * visibility
+  }
+
+  /**
+   * Drop held text once its hold has run out. Keyed on the hold itself rather
+   * than on the state: `setLastSent` writes body text while leaving the state
+   * `idle`, so a state-keyed expiry never fired for it and lines like
+   * "take 3 saved to the timeline" stayed on the card for the rest of the
+   * session — pinning it visible, since non-empty body text also blocks the
+   * ambient fade. Returns true when something was actually cleared.
+   */
+  function expireHold(now: number): boolean {
+    if (!holdUntil || now <= holdUntil) return false
+    state = 'idle'
+    bodyText = ''
+    mishearBody = ''
+    holdUntil = 0
+    return true
   }
 
   /** Ease the card's presence toward hidden/shown; returns true while it's on screen. */
@@ -429,14 +465,9 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       // Fully faded out — no canvas work, no texture upload. This is the whole
       // point of ambient mode on the XR frame path.
       if (!onScreen) {
-        // Held states still need to expire, or a reply would be waiting on
-        // screen the next time the card comes back.
-        if ((st === 'replying' || st === 'misheard') && holdUntil && now > holdUntil) {
-          state = 'idle'
-          bodyText = ''
-          mishearBody = ''
-          holdUntil = 0
-        }
+        // Held text still has to expire off-screen, or it would be sitting
+        // there waiting the next time the card comes back.
+        expireHold(now)
         return
       }
 
@@ -445,17 +476,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
         // repaint cadence.
         pulsePhase = (now / 1000) * 3
         repaint()
-      } else if ((st === 'replying' || st === 'misheard') && holdUntil) {
-        if (now > holdUntil) {
-          state = 'idle'
-          bodyText = ''
-          mishearBody = ''
-          holdUntil = 0
-          repaint(true)
-        }
+      } else if (expireHold(now)) {
+        repaint(true)
       } else if (st === 'idle') {
-        // Repaint when the demo beat or the coach line changes.
-        const hint = `${isDemoActive() ? currentDemoHint() : ''}|${currentCoachHint(now) ?? ''}`
+        // Repaint when the line an idle card would show changes.
+        const hint = idleLine(now) ?? ''
         if (hint !== lastHint) {
           lastHint = hint
           repaint(true)

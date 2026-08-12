@@ -2,8 +2,15 @@ import * as THREE from 'three'
 import { useEditorStore } from '../../store'
 import { releaseVoiceCapture, stopVoiceSession } from '../../director/voice-session'
 import { retireAllCursors } from '../../director/agent-runtime'
+import { abandonDemo } from '../../director/demo-shoot'
 import { clearAllGhosts } from '../../director/ghost-preview'
+import { clearProposal } from '../../director/proposal-ghost'
 import { EDITOR_LAYER } from '../infrastructure'
+import { clearAimPick } from './aim-picker'
+import { clearAttention } from './attention-field'
+import { resetAmbientChannel } from './ambient-channel'
+import { resetAmbientSense } from './ambient-sense'
+import { stopXrCoach } from './xr-coach'
 import { disposeEntrySequence } from './entry-sequence'
 import { registerXrSessionEntry, registerXrSessionExit } from './xr-bridge'
 import type { CamcorderRig } from './camcorder-rig'
@@ -86,12 +93,29 @@ export function initXrSession(
       // indicator outlive it.
       releaseVoiceCapture()
       disposeEntrySequence()
-      // A choreography interrupted by taking the headset off has no way to
-      // finish, and a cursor left mid-flight would still be there on re-entry.
+
+      // Everything below used to live only in `camcorderRig.dispose()`, which
+      // runs on scene teardown — not on session end. So a wrap left the next
+      // session inheriting this one's state: a miss count, a pending reply
+      // timer, a stale aimed object, a room possibly still lit as "listening"
+      // because the headset came off mid-hold, and a proposal id that made
+      // `hasLiveProposal()` lie. Ending a session now actually ends it.
+      const store = useEditorStore.getState()
+      // A take does not survive the headset coming off — nothing else stops it,
+      // and `duration` would keep growing on the desktop timeline forever.
+      if (store.isRolling) store.endTake()
+      abandonDemo()
       retireAllCursors()
       clearAllGhosts()
-      useEditorStore.getState().setXrActive(false)
-      useEditorStore.getState().setCameraOpMode(priorCameraOpMode)
+      clearProposal()
+      resetAmbientChannel()
+      resetAmbientSense()
+      clearAimPick()
+      clearAttention()
+      stopXrCoach()
+
+      store.setXrActive(false)
+      store.setCameraOpMode(priorCameraOpMode)
     })
   }
 

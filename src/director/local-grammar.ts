@@ -332,6 +332,26 @@ export const DIRECTOR_KEYTERMS: string[] = [
  * In-headset session cues — kept here (pure) so tests can cover them.
  * "that's a wrap" ends the XR session; the monitor cue recalls the take review.
  */
+/**
+ * Take cues. These live with the rest of the grammar rather than in
+ * local-commands so they are reachable from a node test — the asymmetry between
+ * them was a real bug (`and action` matched, `and cut` did not), and the SET DAY
+ * shot list coaches both phrasings, so they need to stay in step.
+ */
+export const START_CUES = [
+  /^(?:and\s+)?action$/,
+  /^camera'?s?\s+(?:is\s+)?rolling$/,
+  /^start\s+recording$/,
+  /^we'?re\s+rolling$/,
+  /^roll\s+(?:camera|sound|it)$/,
+]
+
+export const STOP_CUES = [
+  /^(?:and\s+)?cut$/,
+  /^that'?s\s+a\s+cut$/,
+  /^stop\s+recording$/,
+]
+
 export const WRAP_CUE_RE =
   /^(that'?s\s+a\s+wrap|wrap\s+it\s+up|wrap\s+for\s+today|exit\s+(?:xr|the\s+headset|headset|the\s+set)|leave\s+the\s+set)[!.]?$/
 
