@@ -4,7 +4,14 @@
 
 A "Zero-UI" virtual production stage: the director speaks (or types) and an AI
 crew executes — spawning props, relighting the set, dialing FX, moving the
-camera — while the human frames shots. The original PRD targeted Unity/OpenXR;
+camera — while the human frames shots.
+
+> Zero UI is the mechanism here, not the goal. What the product is actually
+> after, and the constraints that follow from it, are argued in
+> [Thesis/Letting_Go](../../Thesis/Letting_Go.md) and made checkable against the
+> code in [Thesis/Ambient_Design_Principles](../../Thesis/Ambient_Design_Principles.md).
+
+The original PRD targeted Unity/OpenXR;
 this adaptation keeps RADIO_EDIT.EXE's **Three.js/React** editor as the spatial
 client (the PRD's accepted WebXR alternative), so nothing was rewritten and the
 editor's existing timeline/virtual-camera model becomes the recording layer.

@@ -2,6 +2,37 @@
 
 Sikat uses **selective** Immersive Web SDK adoption: `@iwsdk/xr-input` for controller/hand spaces and visuals only.
 
+## Response invariants (read before adding feedback)
+
+The set answers by changing, not by captioning. Full argument in
+[`docs/Thesis/Ambient_Design_Principles.md`](../../../docs/Thesis/Ambient_Design_Principles.md);
+the rules that bind code in this directory:
+
+1. **No text-to-speech, ever.** Not optional, not behind a flag. Feedback is
+   change, synthesized earcons ([`sound.ts`](../../director/sound.ts)), and
+   haptics.
+2. **Route every system response through [`ambient-channel.ts`](./ambient-channel.ts).**
+   Do not call slate methods directly from new code — the routing policy lives in
+   one module so "slate as fallback" does not decay one call site at a time.
+3. **The slate is for what the world cannot say.** Blocked mic, dropped link,
+   missing controller, coach lines, a second consecutive miss, and words a person
+   wrote. That list is short on purpose.
+4. **Attention travels before action.** Anything that will change an object
+   lights that object first ([`attention-field.ts`](./attention-field.ts)).
+5. **Nothing proactive commits on its own.** Suggestions are ghosts until a voice
+   takes them up ([`proposal-ghost.ts`](../../director/proposal-ghost.ts)), and
+   they never interrupt a director mid-move
+   ([`ambient-sense.ts`](./ambient-sense.ts)).
+6. **Nothing autonomous happens without a visible author.** Crew cursors carry
+   attribution; `undo that` stays the net.
+7. **State draw calls and per-frame allocation for anything new.** 72Hz on a
+   standalone headset — an ambient layer that drops frames is not calm, it is
+   broken.
+
+**Ownership:** [`room-response.ts`](./room-response.ts) is the sole writer of the
+stage marker's tint. Two writers on one material is how a ring ends up stuck mint
+after a strike.
+
 ## Why not full IWSDK
 
 Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loop and makes ECS Transform the source of truth. That conflicts with:

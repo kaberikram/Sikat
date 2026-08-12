@@ -22,6 +22,30 @@ The **viewfinder** is the concept that unifies both modes. On desktop it's a PiP
 
 **Desktop first. XR when the editing model is solid.**
 
+### The thesis: letting go
+
+Every interface until now has been a way of holding on — a button is a thing you
+keep your hand on. Sikat's XR mode breaks that on purpose: you say what you want
+and the crew does it, and the felt experience is not efficiency but **release**.
+
+The industry terms nearest to this are **Zero UI** (voice, gesture and prediction
+instead of clicks and buttons) and **Ambient Intelligence** (Weiser's ubiquitous
+computing lineage — systems that anticipate needs and adapt to behaviour). Both
+describe the system. Neither describes what it is like to be the person in the
+room. Zero UI is the mechanism; letting go is the felt experience of it working.
+
+The practical consequence is that **the set answers by changing, not by
+captioning** — and that it never speaks. The object you named lights up before
+the change lands, the stage ring is the microphone indicator, crew suggestions
+stand on the set as ghosts you accept by voice or decline by ignoring, and the
+text card is demoted to what the world genuinely cannot say.
+
+- [`docs/Thesis/Letting_Go.md`](docs/Thesis/Letting_Go.md) — the argument, its
+  sources, and what would falsify it
+- [`docs/Thesis/Ambient_Design_Principles.md`](docs/Thesis/Ambient_Design_Principles.md)
+  — six principles, each paired with the file that implements it, plus the
+  checklist to apply them to new work
+
 ## Roadmap
 
 ### Phase 1 — Desktop MVP (current)
@@ -222,4 +246,8 @@ without it, `"Cut."` never matches `/^cut$/`.
 
 **Viewfinder check:** controller screen must show the **virtual cam** (studio bg + CG), not the headset passthrough. If it mirrors your head view, the XR-disable-during-RT path in `viewfinder-pass.ts` regressed.
 
-A full WebGPU migration checklist (with XR gating criteria) lives at the top of `src/Scene.tsx`.
+The WebGPU migration checklist that used to head `src/Scene.tsx` was lost when
+that file became a thin shell over `src/scene/bootstrap.ts`. The gating criteria
+that survive it are the two paragraphs above: WebGL while WebXR-on-WebGPU is
+immature on Quest browser, and `src/scene/` as the only renderer-aware area, so
+the swap stays confined when it is worth making.
