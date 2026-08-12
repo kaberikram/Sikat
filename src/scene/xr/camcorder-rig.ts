@@ -5,6 +5,7 @@ import {
   type XRInputManager as XRInputManagerType,
 } from '@iwsdk/xr-input'
 import { applyLiveCameraPose } from '../../director/camera-pose'
+import { retireAllCursors } from '../../director/agent-runtime'
 import { resolveTarget } from '../../director/command-applier'
 import { submitDirectorCommand } from '../../director/director-command'
 import { newCommandId } from '../../director/ids'
@@ -45,7 +46,7 @@ import {
   type V3,
 } from './stage-placement'
 import { getProfile, noteSessionStart, noteStandoff, preferredStandoff } from './director-profile'
-import { registerStagePlacer } from './xr-bridge'
+import { registerStagePlacer, registerTakeToggler } from './xr-bridge'
 import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
@@ -59,6 +60,13 @@ const AIM_UP_RAD = (AIM_UP_DEG * Math.PI) / 180
 const AIM_OFFSET = new THREE.Quaternion().setFromEuler(
   new THREE.Euler(-AIM_UP_RAD, 0, 0, 'XYZ')
 )
+/** Enter without a valid head pose after this long rather than waiting forever. */
+const ENTRY_POSE_TIMEOUT_SEC = 3
+
+/** Only learn a working distance from a director who has actually settled. */
+const WORKING_SAMPLE_STILLNESS = 0.75
+const WORKING_SAMPLE_INTERVAL_MS = 4000
+
 const LENS_FORWARD_M = 0.05
 const AIM_RAY_LEN = 2.5
 
@@ -242,6 +250,8 @@ export function createCamcorderRig(
    *  (and the entry cinematic) from the identity pose puts everything at the
    *  guardian center instead of in front of the user. */
   let pendingEntry = false
+  let pendingEntrySec = 0
+  let lastDistanceSampleAt = 0
   /** Last frame's right pad — button handlers fire outside update()'s scope. */
   let padRef: ReturnType<typeof getRightPad> = null
   let padMissingSec = 0
@@ -272,6 +282,29 @@ export function createCamcorderRig(
     return preferredStandoff(getProfile(), STAGE_STANDOFF_M, STANDOFF_RANGE)
   }
 
+  /**
+   * Learn the director's working distance from where they actually stand.
+   *
+   * This used to record the distance we had *just computed* for the placement —
+   * so the profile only ever learned its own output. The blend
+   * `0.4 × default + 0.6 × median` has its fixed point at the default, so any
+   * real preference decayed straight back to 1.9m and the personalisation could
+   * never do anything. Sampling a settled director instead gives it something
+   * real to learn from: if they habitually back off to frame a wide, the set
+   * starts appearing there.
+   */
+  function sampleWorkingDistance(nowMs: number, stillness: number): void {
+    if (stillness < WORKING_SAMPLE_STILLNESS) return
+    if (nowMs - lastDistanceSampleAt < WORKING_SAMPLE_INTERVAL_MS) return
+    const { pos } = readHeadPose()
+    if (!isHeadPoseValid(pos)) return
+    const stage = useEditorStore.getState().stage.position
+    const d = standoffBetween(pos, stage)
+    if (d < STANDOFF_RANGE[0] || d > STANDOFF_RANGE[1]) return
+    lastDistanceSampleAt = nowMs
+    noteStandoff(d)
+  }
+
   /** Move the stage in front of the user (only after a real move) — the whole
    *  set, entry ripple, and crew stations follow the store's stage anchor. */
   function placeStageAtCurrentUser(): void {
@@ -282,19 +315,25 @@ export function createCamcorderRig(
     if (!shouldReplaceStage(pos, forward, st.stage.position, standoff)) return
     const position = computeStagePose(pos, forward, standoff).position
     st.updateStage({ position })
-    noteStandoff(standoffBetween(pos, position))
     playStageLockPulse()
     beatTick()
   }
   registerStagePlacer(placeStageAtCurrentUser)
 
-  function toggleRecord(): void {
+  /**
+   * The one path a take starts or stops by, whether the trigger pulled it or a
+   * voice cue did. Returns false when the rig declined, so a voice caller can
+   * fall back rather than silently doing nothing.
+   */
+  function toggleRecord(): boolean {
     if (suppressRec?.()) {
-      // The review monitor owns the trigger right now — say so, don't go mute.
+      // The review monitor owns the take controls right now — say so, don't go
+      // mute. This used to gate the trigger only, so a spoken "action" could
+      // start a take over an open, playing monitor.
       missedBuzz()
       pulse(padRef, 0.3, 40)
       respond({ kind: 'blocked', text: 'dismiss the monitor to roll again' })
-      return
+      return false
     }
     const st = useEditorStore.getState()
     if (st.isRolling) {
@@ -308,12 +347,17 @@ export function createCamcorderRig(
       // The review monitor swinging into view is the answer; the line only
       // carries the part the monitor can't — where the take went.
       respond({ kind: 'status', text: `take ${takeNumber} saved to the timeline — export on desktop` })
-      return
+      return true
     }
     st.startTake()
     pulse(padRef, 0.8, 70)
     noteCoachAction('rec')
+    return true
   }
+
+  // "action" / "cut" by voice runs exactly this, so a spoken take gets the
+  // haptics, the take timestamp and the monitor the trigger has always given it.
+  registerTakeToggler(() => toggleRecord())
 
   function beginTalk(): void {
     if (!isSpeechAvailable()) {
@@ -429,9 +473,13 @@ export function createCamcorderRig(
       return
     }
     pulse(padRef, 0.2, 20)
-    // The room stops listening the instant the button comes up; the captured
-    // words stay on the slate underneath while the engine's tail drains.
+    // The room stops listening the instant the button comes up — and starts
+    // working in the same beat, because it genuinely is: the transcript is
+    // draining. Without this the ring fell to neutral for the 150-500ms until
+    // the final landed and then lit blue, which reads as a flicker rather than
+    // as one surface changing what it is doing.
     respond({ kind: 'heard', on: false })
+    respond({ kind: 'working', on: true })
     directorSlate.setSending(lastInterim.trim())
     finishVoiceSession()
   }
@@ -490,16 +538,25 @@ export function createCamcorderRig(
     // then roll the cinematic (ripple/title read the freshly placed stage).
     if (pendingEntry) {
       const { pos, forward } = readHeadPose()
-      if (isHeadPoseValid(pos)) {
+      const valid = isHeadPoseValid(pos)
+      pendingEntrySec += delta
+      // Waiting on a head pose that may never come. Seated at the origin, or
+      // tracking lost at start, and this gate simply never opened: no stage, no
+      // cinematic, no coach, and — worst of all — no message. Enter anyway on a
+      // guessed forward, because a set placed imperfectly is recoverable ("crew,
+      // set the stage" re-places it) and a silent dead end is not.
+      if (valid || pendingEntrySec > ENTRY_POSE_TIMEOUT_SEC) {
         pendingEntry = false
         const standoff = standoffForThisDirector()
-        const position = computeStagePose(pos, forward, standoff).position
+        const head: V3 = valid ? pos : [0, 1.6, 0]
+        const position = computeStagePose(head, forward, standoff).position
         useEditorStore.getState().updateStage({ position })
         noteSessionStart()
-        noteStandoff(standoffBetween(pos, position))
         startEntrySequence()
         startXrCoach(timeSec * 1000)
-        if (useEditorStore.getState().xrBlendOpaque) {
+        if (!valid) {
+          respond({ kind: 'status', text: 'no head tracking yet — say “crew, set the stage” to place it' })
+        } else if (useEditorStore.getState().xrBlendOpaque) {
           respond({ kind: 'status', text: 'VR mode — no passthrough here' })
         }
       }
@@ -554,6 +611,7 @@ export function createCamcorderRig(
     updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, getAimedObject()?.id ?? null)
     const ambient = getAmbientSignals()
     setCoachHesitation(ambient.hesitation)
+    sampleWorkingDistance(nowMs, ambient.stillness)
     // The room breathes with you: settle and it deepens around the set; move
     // with intent and it lifts.
     setRoomStillness(ambient.stillness)
@@ -577,6 +635,7 @@ export function createCamcorderRig(
     // placement) wait for the first tracked head pose in update().
     bindSession: () => {
       pendingEntry = true
+      pendingEntrySec = 0
     },
     setTakeEndedHandler: (fn) => {
       onTakeEnded = fn
@@ -593,6 +652,7 @@ export function createCamcorderRig(
       clearAimPick()
       resetAmbientChannel()
       resetAmbientSense()
+      retireAllCursors()
       bindAmbientChannel(null)
       stopVoiceSession()
       directorSlate.dispose()

@@ -14,7 +14,7 @@ import * as THREE from 'three'
 import { entrySwell } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
-import { setRoomAccent } from './room-response'
+import { respond } from './ambient-channel'
 import { XR_UI, makeTitleTexture } from './xr-ui-chrome'
 
 const PARTICLES = 250
@@ -74,19 +74,21 @@ export function initEntrySequence(scene: THREE.Scene, head: THREE.Object3D): voi
 }
 
 /**
- * The stage ring belongs to room-response. The entry beat asks it for a mint
- * accent rather than writing the material, so nothing is left tinted when the
- * cinematic tears down mid-flight.
+ * The stage ring belongs to room-response, and the *right* to tint it belongs to
+ * the ambient channel. The entry beat files a claim like everything else rather
+ * than writing the surface directly — it used to call setRoomAccent every frame
+ * for ~3.7s, which overwrote any proposal that arrived during the cinematic and
+ * then cleared that proposal's colour on release.
  */
 function holdAccent(weight: number): void {
   holdingAccent = true
-  setRoomAccent(XR_UI.mintDeep, weight)
+  respond({ kind: 'entryAccent', color: XR_UI.mintDeep, weight })
 }
 
 function releaseAccent(): void {
   if (!holdingAccent) return
   holdingAccent = false
-  setRoomAccent(null)
+  respond({ kind: 'entryAccent', color: XR_UI.mintDeep, weight: 0 })
 }
 
 function buildObjects(): void {

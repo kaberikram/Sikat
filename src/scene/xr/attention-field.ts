@@ -14,6 +14,7 @@
  * Both meshes live on EDITOR_LAYER: the director sees them, the film never does.
  */
 import * as THREE from 'three'
+import { presenceStore } from '../../director/presence'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { makeCanvasTexture, XR_UI } from './xr-ui-chrome'
@@ -160,20 +161,47 @@ export function initAttentionField(scene: THREE.Scene): void {
 }
 
 /**
- * Attend to an object (or nothing). `tone` becomes the resting tone — the one
- * the field returns to after any one-shot pulse finishes.
+ * How long `addressed` holds before easing back to the resting look.
+ *
+ * It is a heads-up that the crew is about to touch this thing, not a state the
+ * object lives in. Making it the *resting* tone was a bug you could sit in
+ * forever: aim at an object a command addresses and it stayed at 0.45 with the
+ * faster breathe indefinitely after the change had landed, because the resting
+ * tone only changed on the next aim *change* — and looking straight at
+ * something is precisely when the aim does not change.
+ */
+const ADDRESSED_HOLD_MS = 2600
+
+/**
+ * Attend to an object (or nothing).
+ *
+ * `aimed` sets the resting look. `addressed` is transient: it shows for a beat
+ * and then decays back to whatever the resting look is.
  */
 export function attendTo(objectId: string | null, tone: AttentionTone = 'aimed'): void {
-  restTone = tone
+  const transient = tone === 'addressed'
+  if (!transient) restTone = tone
+
   if (objectId === targetId) {
-    if (pulseUntil === 0) activeTone = tone
+    if (transient) {
+      activeTone = tone
+      pulseFrom = performance.now()
+      pulseUntil = pulseFrom + ADDRESSED_HOLD_MS
+    } else if (pulseUntil === 0) {
+      activeTone = tone
+    }
     return
   }
   targetId = objectId
   targetMesh = null
   boundsScaleSig = 0
-  pulseUntil = 0
   activeTone = tone
+  if (transient) {
+    pulseFrom = performance.now()
+    pulseUntil = pulseFrom + ADDRESSED_HOLD_MS
+  } else {
+    pulseUntil = 0
+  }
   if (!objectId) return
   resolveTargetMesh()
 }
@@ -210,6 +238,26 @@ function resolveTargetMesh(): void {
   if (targetMesh) measureTarget()
 }
 
+/**
+ * Is a crew member currently working this object?
+ *
+ * One mark per object: while a named cursor owns something, the pool yields it.
+ * Two marks on one thing reads as the set being confused about who is acting,
+ * and the cursor is the more specific claim — it says *who*.
+ *
+ * Read live from presence rather than plumbed through a claim/release pair, so
+ * it can't desynchronise: when a cursor retires, its claim is gone by
+ * construction. Costs a walk of at most four agents per frame.
+ */
+function crewIsWorking(objectId: string): boolean {
+  const agents = presenceStore.getState().agents
+  for (const agent in agents) {
+    const p = agents[agent]
+    if (p.active && p.followObjectId === objectId) return true
+  }
+  return false
+}
+
 /** Bounds are measured on target change and on a real scale change — never per frame. */
 function measureTarget(): void {
   if (!targetMesh) return
@@ -237,20 +285,26 @@ export function updateAttentionField(nowMs: number, delta: number): void {
   }
   if (targetId && !targetMesh) resolveTargetMesh()
 
-  const wanted = targetMesh ? 1 : 0
-  if (!targetMesh && opacity < 0.002) {
+  // Yield to a crew cursor that has taken this object. The pool marks *what*;
+  // a cursor marks *who*, which is the stronger claim, so only one shows.
+  const yielded = targetId !== null && crewIsWorking(targetId)
+  const wanted = targetMesh && !yielded ? 1 : 0
+  if (wanted === 0 && opacity < 0.002) {
     if (group.visible) group.visible = false
     opacity = 0
     return
   }
   group.visible = true
 
-  // One-shot envelope, then hand back to the resting tone.
+  // One-shot beats play an envelope; `addressed` is a hold that simply expires.
+  // Both hand back to the resting tone when they finish.
   let envelope = 1
   if (pulseUntil > 0) {
     const t = clamp01((nowMs - pulseFrom) / (pulseUntil - pulseFrom))
-    // Fast in, eased out — a beat, not a blink.
-    envelope = t < 0.25 ? t / 0.25 : easeOut(1 - (t - 0.25) / 0.75)
+    if (PULSE_MS[activeTone]) {
+      // Fast in, eased out — a beat, not a blink.
+      envelope = t < 0.25 ? t / 0.25 : easeOut(1 - (t - 0.25) / 0.75)
+    }
     if (t >= 1) {
       pulseUntil = 0
       activeTone = restTone

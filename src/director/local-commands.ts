@@ -5,12 +5,19 @@ import {
   normalizeUtterance,
   OFFLINE_SUGGESTIONS,
   parseOfflineClauses,
+  START_CUES,
+  STOP_CUES,
   WRAP_CUE_RE,
 } from './local-grammar'
 import { runLocalPackets } from './local-packets'
 import { cutTick, wrapChord } from './sound'
 import { undoLast } from './undo'
-import { endXrSession, placeStageAtUser, recallReviewScreen } from '../scene/xr/xr-bridge'
+import {
+  endXrSession,
+  placeStageAtUser,
+  recallReviewScreen,
+  toggleTakeInXr,
+} from '../scene/xr/xr-bridge'
 import { noteCoachAction } from '../scene/xr/xr-coach'
 import { useEditorStore } from '../store'
 import { OVERLAY_COMMANDS } from '../ui/overlay-commands'
@@ -25,20 +32,6 @@ export interface LocalCommandResult {
 function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
-
-const START_CUES = [
-  /^(?:and\s+)?action$/,
-  /^camera'?s?\s+(?:is\s+)?rolling$/,
-  /^start\s+recording$/,
-  /^we'?re\s+rolling$/,
-  /^roll\s+(?:camera|sound|it)$/,
-]
-
-const STOP_CUES = [
-  /^cut$/,
-  /^that'?s\s+a\s+cut$/,
-  /^stop\s+recording$/,
-]
 
 function tryTransport(text: string): LocalCommandResult | null {
   const t = text.trim().toLowerCase()
@@ -89,14 +82,27 @@ function tryTakeCue(text: string): LocalCommandResult | null {
   const store = useEditorStore.getState()
   for (const re of START_CUES) {
     if (re.test(t)) {
+      // In XR the rig owns takes, so a spoken cue gets the same haptics, take
+      // timestamp and monitor-conflict guard as the trigger. It used to call
+      // startTake() directly, which meant "action" could roll over an open
+      // monitor and never counted as learning the REC control.
+      if (store.xrActive && toggleTakeInXr(false)) {
+        return { handled: true, message: `rolling — take ${useEditorStore.getState().takeNumber}` }
+      }
+      if (store.xrActive) return { handled: true, message: 'dismiss the monitor to roll again' }
       store.startTake()
       return { handled: true, message: `rolling — take ${useEditorStore.getState().takeNumber}` }
     }
   }
   for (const re of STOP_CUES) {
     if (re.test(t)) {
-      if (store.isRolling) store.endTake()
-      else if (store.isPlaying) store.togglePlay()
+      if (store.isRolling) {
+        // Same path as the trigger, so the take actually reaches the review
+        // monitor the shot list promises at beat 5.
+        if (!(store.xrActive && toggleTakeInXr(true))) store.endTake()
+      } else if (store.isPlaying) {
+        store.togglePlay()
+      }
       return { handled: true, message: 'cut' }
     }
   }

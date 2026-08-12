@@ -19,6 +19,7 @@ import {
   type SceneSnapshot,
   parseServerMessage,
 } from './protocol'
+import { retireAllCursors } from './agent-runtime'
 import { newCommandId } from './ids'
 import { buildFullSnapshot } from './scene-state-sync'
 import { shouldAttachVision } from './vision-triggers'
@@ -123,6 +124,10 @@ export class DirectorSocket {
     this.ws.onclose = () => {
       this.ws = null
       this.setStatus('closed')
+      // Any crew choreography in flight is now orphaned — the packets that
+      // would have finished it are never arriving. Retire the cursors rather
+      // than leaving them lit over work that will not happen.
+      retireAllCursors()
       if (!this.closedByUser) this.scheduleReconnect()
     }
     this.ws.onerror = () => {

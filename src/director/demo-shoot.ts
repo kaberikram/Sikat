@@ -92,6 +92,20 @@ function clearTimers(): void {
   timers = []
 }
 
+/**
+ * Abandon a build in progress without striking the set.
+ *
+ * The scheduled beats are plain `setTimeout`s, and `strikeSet` used to be their
+ * only canceller — so wrapping the session mid-build left them running, and the
+ * pedestal, hero and sign would spawn into the desktop viewport minutes later
+ * with the demo still marked active.
+ */
+export function abandonDemo(): void {
+  clearTimers()
+  state.active = false
+  state.beat = -1
+}
+
 export function isDemoActive(): boolean {
   return state.active
 }
