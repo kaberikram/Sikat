@@ -14,30 +14,34 @@ import { renderViewfinderToTarget } from '../viewfinder-pass'
 import { pulse } from './haptics'
 import { registerReviewRecall } from './xr-bridge'
 import {
+  CARD_H,
+  CARD_W,
+  DOCK_Y,
+  FILM_H,
+  FILM_RADIUS,
+  FILM_W,
+  FILM_Y,
+  PLAY_H,
+  PLAY_W,
+  PLAY_X,
+  SCRUB_H,
+  SCRUB_W,
+  SCRUB_X,
+  THUMB_D,
+} from './review-layout'
+import {
   makeButtonTexture,
-  makeCanvasTexture,
   makePlayheadTexture,
   makeReviewCardTexture,
   makeScrubTrackTexture,
-  makeTitleTexture,
-  XR_FONT_MONO,
   XR_UI,
 } from './xr-ui-chrome'
 
-/** World sizes — card includes chrome; film is inset 16:9. */
-const CARD_W = 1.35
-const CARD_H = 1.01
-const FILM_W = 1.12
-const FILM_H = FILM_W * (9 / 16)
-const FILM_Y = 0.08
-const DOCK_Y = -CARD_H / 2 + 0.12
 const PLACE_DIST = 1.8
 const REVIEW_RT_W = 960
 const REVIEW_RT_H = 540
 const MIN_SCALE = 0.5
 const MAX_SCALE = 2.5
-const SCRUB_W = 0.72
-const SCRUB_H = 0.045
 const B_HOLD_MS = 400
 const STICK_DEADZONE = 0.15
 /** At full stick, scrub through one take-length per second (min 0.5s/s). */
@@ -80,19 +84,38 @@ function texturedPlane(
   return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat)
 }
 
-function makeDockLegendTexture(): THREE.CanvasTexture {
-  return makeCanvasTexture(1400, 120, (ctx, w, h) => {
-    ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = 'rgba(59, 58, 72, 0.55)'
-    ctx.beginPath()
-    ctx.roundRect(8, 8, w - 16, h - 16, (h - 16) / 2)
-    ctx.fill()
-    ctx.fillStyle = XR_UI.paper
-    ctx.font = XR_FONT_MONO
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('HOLD B CLOSE  ·  STICK SCRUB', w / 2, h / 2 + 2)
-  })
+/**
+ * A rounded-rect plane, so the film's corners follow the bezel behind it.
+ *
+ * `PlaneGeometry` gave square corners on a plate with 4cm rounded ones, which
+ * is what punched through the glass at each corner. `ShapeGeometry` UVs are the
+ * raw vertex coordinates rather than 0..1, so they're remapped here to match
+ * what `PlaneGeometry` would have produced — otherwise the render target
+ * samples off the edge and the picture is unusable.
+ */
+function roundedFilmGeometry(w: number, h: number, radius: number): THREE.ShapeGeometry {
+  const r = Math.min(radius, w / 2, h / 2)
+  const x = -w / 2
+  const y = -h / 2
+  const shape = new THREE.Shape()
+  shape.moveTo(x + r, y)
+  shape.lineTo(x + w - r, y)
+  shape.quadraticCurveTo(x + w, y, x + w, y + r)
+  shape.lineTo(x + w, y + h - r)
+  shape.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+  shape.lineTo(x + r, y + h)
+  shape.quadraticCurveTo(x, y + h, x, y + h - r)
+  shape.lineTo(x, y + r)
+  shape.quadraticCurveTo(x, y, x + r, y)
+
+  const geometry = new THREE.ShapeGeometry(shape, 12)
+  const pos = geometry.attributes.position
+  const uv = geometry.attributes.uv
+  for (let i = 0; i < pos.count; i++) {
+    uv.setXY(i, (pos.getX(i) + w / 2) / w, (pos.getY(i) + h / 2) / h)
+  }
+  uv.needsUpdate = true
+  return geometry
 }
 
 export function createReviewScreen(
@@ -127,24 +150,21 @@ export function createReviewScreen(
     depthBuffer: true,
   })
 
-  // Glass card — soft shadow + rounded screen bezel are baked into the texture.
+  // One glass card: shadow, header (title + hint), screen bezel and dock groove
+  // are all baked in. Nothing floats in front of it, which is what removes the
+  // square white tab the overlay planes used to show against passthrough.
   const cardTex = makeReviewCardTexture()
   const card = texturedPlane(CARD_W, CARD_H, cardTex)
   card.position.z = 0
   group.add(card)
-
-  // Title chip only here (not baked into cardTex — that caused double text).
-  const titleTex = makeTitleTexture('take review')
-  const titleChip = texturedPlane(0.48, 0.09, titleTex)
-  titleChip.position.set(-0.38, CARD_H / 2 - 0.1, 0.008)
-  group.add(titleChip)
 
   const screenMat = new THREE.MeshBasicMaterial({
     map: target.texture,
     toneMapped: false,
     side: THREE.FrontSide,
   })
-  const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(FILM_W, FILM_H), screenMat)
+  const screenGeo = roundedFilmGeometry(FILM_W, FILM_H, FILM_RADIUS)
+  const screenMesh = new THREE.Mesh(screenGeo, screenMat)
   screenMesh.position.set(0, FILM_Y, 0.01)
   group.add(screenMesh)
 
@@ -157,24 +177,21 @@ export function createReviewScreen(
     toneMapped: false,
     side: THREE.DoubleSide,
   })
-  const playBtn = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.112), playMat)
-  playBtn.position.set(-0.5, DOCK_Y, 0.02)
+  // Play and scrub share DOCK_Y, so the transport reads as one row. The hint
+  // that used to sit here lives in the header now.
+  const playBtn = new THREE.Mesh(new THREE.PlaneGeometry(PLAY_W, PLAY_H), playMat)
+  playBtn.position.set(PLAY_X, DOCK_Y, 0.02)
   group.add(playBtn)
 
   const scrubTex = makeScrubTrackTexture()
   const scrubTrack = texturedPlane(SCRUB_W, SCRUB_H, scrubTex)
-  scrubTrack.position.set(0.08, DOCK_Y, 0.02)
+  scrubTrack.position.set(SCRUB_X, DOCK_Y, 0.02)
   group.add(scrubTrack)
 
   const playheadTex = makePlayheadTexture()
-  const scrubThumb = texturedPlane(0.055, 0.055, playheadTex)
-  scrubThumb.position.set(0.08 - SCRUB_W / 2, DOCK_Y, 0.03)
+  const scrubThumb = texturedPlane(THUMB_D, THUMB_D, playheadTex)
+  scrubThumb.position.set(SCRUB_X - SCRUB_W / 2, DOCK_Y, 0.03)
   group.add(scrubThumb)
-
-  const legendTex = makeDockLegendTexture()
-  const legend = texturedPlane(0.7, 0.07, legendTex)
-  legend.position.set(0.3, CARD_H / 2 - 0.1, 0.02)
-  group.add(legend)
 
   setEditorLayer(group)
 
@@ -383,7 +400,6 @@ export function createReviewScreen(
     scene.remove(group)
     target.dispose()
     disposeMesh(card)
-    disposeMesh(titleChip)
     screenMesh.geometry.dispose()
     screenMat.dispose()
     playMat.map = null
@@ -392,7 +408,6 @@ export function createReviewScreen(
     pauseTex.dispose()
     disposeMesh(scrubTrack)
     disposeMesh(scrubThumb)
-    disposeMesh(legend)
     playbackBackdrop.geometry.dispose()
     ;(playbackBackdrop.material as THREE.Material).dispose()
     viewfinder.pixelatedPass.dispose()

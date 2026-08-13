@@ -5,6 +5,7 @@
  * painted soft shadow (no real backdrop blur — not worth it in XR).
  */
 import * as THREE from 'three'
+import * as L from './review-layout'
 
 export const XR_UI = {
   ink: '#17171a',
@@ -367,37 +368,74 @@ export function makeTitleTexture(
 }
 
 /**
- * Review card chrome only — glass body, rounded screen bezel, dock groove.
- * Title is a separate mesh (avoid double "TAKE REVIEW").
+ * The whole review card in one texture: glass body, header (title + hint),
+ * rounded screen bezel, dock groove.
+ *
+ * The header used to be two extra meshes floating in front of this — a title
+ * pill and a legend pill, each on its own transparent plane. Split out
+ * originally to avoid painting "take review" twice, but a transparent quad over
+ * passthrough is exactly what reads as a white square tab, and the two planes
+ * sat at a y the film had already claimed. Painting them into the card once
+ * solves the duplication *and* the halo: there is nothing in front of the glass
+ * to catch light.
+ *
+ * Every position comes from `review-layout.ts`, so the canvas and the world
+ * meshes cannot drift apart again.
  */
 export function makeReviewCardTexture(): THREE.CanvasTexture {
-  return makeCanvasTexture(2048, 1536, (ctx, w, h) => {
-    const glassPad = 48
-    drawGlassCard(ctx, w, h, { pad: glassPad, radius: 88 })
+  return makeCanvasTexture(L.CANVAS_W, L.CANVAS_H, (ctx, w, h) => {
+    drawGlassCard(ctx, w, h, { pad: L.GLASS_PAD_PX, radius: L.GLASS_RADIUS_PX })
 
-    // Bezel + dock positions mirror the mesh layout constants in
-    // review-screen.ts (card 1.35×1.01 world → 2048×1536 px):
-    // screen FILM_W×FILM_H (1.12×0.63) centered at y=FILM_Y (0.08),
-    // transport row at y=DOCK_Y (−0.385).
-    const bezelW = 1760 // FILM_W + 0.04 bezel reveal
-    const bezelH = 1019 // FILM_H + 0.04
-    const bezelCy = 646 // FILM_Y
+    // --- header: title pill left, hint right, both above the film ---
+    const titleW = L.pxX(L.TITLE_W)
+    const titleH = L.pxY(L.TITLE_H)
+    const titleX = L.canvasX(L.TITLE_X) - titleW / 2
+    const titleY = L.canvasY(L.HEADER_Y) - titleH / 2
+    drawPill(ctx, titleX, titleY, titleW, titleH, XR_UI.chip, { pad: 18 })
+    ctx.fillStyle = XR_UI.ink
+    ctx.font = SANS
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('take review', titleX + titleW / 2, titleY + titleH / 2 + 2)
+
+    // Bare text, no pill: the legend's translucent plate was the dark strip
+    // sitting over the video. On glass it reads fine without a backing.
+    ctx.fillStyle = XR_UI.inkSoft
+    ctx.font = XR_FONT_MONO
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('HOLD B CLOSE  ·  STICK SCRUB', L.canvasX(L.HINT_RIGHT_X), L.canvasY(L.HEADER_Y) + 2)
+
+    // --- screen bezel: the dark plate the film sits inside ---
+    const bezelW = L.pxX(L.BEZEL_W)
+    const bezelH = L.pxY(L.BEZEL_H)
     ctx.save()
-    ctx.shadowColor = 'rgba(10, 10, 23, 0.18)'
+    ctx.shadowColor = XR_UI.shadow
     ctx.shadowBlur = 24
     ctx.fillStyle = XR_UI.screen
     ctx.beginPath()
-    ctx.roundRect(w / 2 - bezelW / 2, bezelCy - bezelH / 2, bezelW, bezelH, 48)
+    ctx.roundRect(
+      L.canvasX(0) - bezelW / 2,
+      L.canvasY(L.FILM_Y) - bezelH / 2,
+      bezelW,
+      bezelH,
+      L.pxX(L.BEZEL_RADIUS)
+    )
     ctx.fill()
     ctx.restore()
 
-    // Dock groove behind the play/scrub/scale controls.
-    const dockW = 1880
-    const dockH = 152
-    const dockCy = 1354 // DOCK_Y
+    // --- dock groove behind the transport row ---
+    const dockW = L.pxX(L.DOCK_GROOVE_W)
+    const dockH = L.pxY(L.DOCK_H)
     ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
     ctx.beginPath()
-    ctx.roundRect(w / 2 - dockW / 2, dockCy - dockH / 2, dockW, dockH, dockH / 2)
+    ctx.roundRect(
+      L.canvasX(0) - dockW / 2,
+      L.canvasY(L.DOCK_Y) - dockH / 2,
+      dockW,
+      dockH,
+      dockH / 2
+    )
     ctx.fill()
   })
 }
