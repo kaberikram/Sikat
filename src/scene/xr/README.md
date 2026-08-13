@@ -102,6 +102,40 @@ After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto
 
 Trigger stays REC (still suppressed while the monitor is open). Hold A stays PTT. Voice `play` / `pause` / `where's the monitor` still work.
 
+## Review card layout
+
+The post-cut monitor is **three stacked bands** inside the glass pad — header,
+16:9 film, transport dock — and they must not overlap. Every number lives in
+[`review-layout.ts`](./review-layout.ts); nothing in `review-screen.ts` or
+`makeReviewCardTexture` may hardcode a position.
+
+World metres are the source of truth and the canvas is derived from them
+(`pxX` / `pxY` / `canvasX` / `canvasY`), because that is the direction that
+can't rot: a band that fits in metres cannot fail to fit in pixels. The two used
+to carry the same numbers independently behind a "keep these in sync" comment,
+and they drifted — the title chip and legend sat at y ≈ 0.405 while the film
+reached 0.395, so the header painted over the video.
+
+Rules that hold the fix in place:
+
+- **Size the film from the bezel inward.** The dark plate is what has to clear
+  the bands, so the reveal comes out of the budget *before* the 16:9 is derived.
+  Fitting the film first and painting a bezel around it is how the plate ends up
+  wider than the space it was measured for.
+- **Header and hint are baked into the card**, not separate meshes. A
+  transparent quad in front of the glass is what reads as a white square tab
+  against passthrough — and the legend's translucent plate was the dark strip
+  over the film.
+- **The film is a rounded `ShapeGeometry`**, radius `BEZEL_RADIUS − FILM_INSET`
+  so its corners are concentric with the bezel's. Square corners on a rounded
+  plate punch through the glass. `ShapeGeometry` UVs are raw vertex coords, so
+  they need remapping to 0..1 or the render target samples off the edge.
+- **Play and scrub share `DOCK_Y`** so the transport is one row; the hint stays
+  in the header.
+
+Guarded by [`review-layout.test.ts`](./review-layout.test.ts) — band order, gaps
+of at least `BAND_GAP`, controls inside the groove, and the canvas mapping.
+
 ## Peers / versions
 
 - `@iwsdk/xr-input@0.4.2` peer: `three >= 0.160` (Sikat: `three@^0.184`)
@@ -124,6 +158,7 @@ Trigger stays REC (still suppressed while the monitor is open). Hold A stays PTT
 - [ ] Viewfinder shows studio CG / white bg (not black, not passthrough)
 - [ ] Trigger toggles TAKE / REC — blinking red dot on LCD while rolling
 - [ ] Cut → floating review screen appears, plays camera path on studio bg
+- [ ] Review card is one rounded glass: no square tab, hint readable in the header, film corners follow the bezel, play + scrub on one line in the dock
 - [ ] Review: B play/pause, hold B close, stick scrub, squeeze move, squeeze+stick Y scale
 - [ ] Grip LCD stays live aim; review shows timeline playback
 - [ ] Hold A → larger slate stays up with live STT; release keeps the line, then finals reach crew when server up
