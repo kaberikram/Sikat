@@ -236,6 +236,15 @@ An anchor naming something not on set falls back to the normal placement rather
 than failing the packet. `position` remains the escape hatch for anything the
 relations do not express.
 
+Producing one: the LLM sets `anchor` on a spawn/transform `Intent`, which
+`AssetAnimator` copies straight onto the payload, and the rule grammar reads the
+placement phrases (`beside`, `next to`, `on top of`, `above`/`over`, `in front
+of`, `behind`) off spawn cues on both the server (`clause_handlers.py`) and the
+client's offline grammar (`local-grammar.ts`). When the director names a
+relationship the model ignored, the Producer fills it back in from the
+utterance before building. Nothing on the way computes a coordinate — a relation
+that fails to reach the payload is a prop at stage centre.
+
 Object *sizes* the crew reasons from come from `bounds`; the derived
 relationships in the brief (resting-on, neighbours, stage membership, camera
 bearing) are computed server-side in `server/app/spatial.py`.

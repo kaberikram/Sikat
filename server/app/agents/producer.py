@@ -19,6 +19,7 @@ from ..motion_policy import soften_default_motion
 from ..motion_floor import is_animation_seeking
 from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
+from ..clause_handlers import clause_names_primitive, find_placement_anchor
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..shine_presets import resolve_hero, shine_packets
@@ -29,6 +30,7 @@ from ..verify import check_apply, verify_enabled
 from ..schema import (
     CommandPacket,
     Intent,
+    PlacementAnchor,
     PlaybackPacket,
     PlaybackPayload,
     SceneFrame,
@@ -100,6 +102,31 @@ def _performer_action_summary(intent: Intent) -> str:
     if intent.scale:
         parts.append(f"scale={intent.scale}")
     return " ".join(parts)
+
+
+def _salvage_spawn_anchor(
+    intent: Intent, utterance: str, scene: SceneState | None
+) -> PlacementAnchor | None:
+    """Recover a placement the model dropped on its way to a spawn.
+
+    The prompt asks for `anchor`, but a model that answers "spawn a box beside
+    the cylinder" with a bare spawn — or a coordinate read off `STAGE: centre` —
+    puts the prop dead centre next to nothing. The director said where it goes,
+    so read it back off the line.
+
+    Scoped to the clause that asked for *this* prop: on a compound line the
+    placement in "…then put the sneaker on the pedestal" belongs to the sneaker,
+    not to a box spawned earlier in the same breath.
+    """
+    line = utterance.strip().lower()
+    clauses = split_clauses(line) or [line]
+    clause = line
+    if len(clauses) > 1:
+        named = [c for c in clauses if clause_names_primitive(c, intent.primitive)]
+        if len(named) != 1:
+            return None
+        clause = named[0]
+    return find_placement_anchor(clause, scene, allow_bare_name=False)
 
 
 async def _drain_llm_stream(agen, queue: asyncio.Queue) -> None:
@@ -231,6 +258,19 @@ class Producer:
         working = await self._resolve_working_target(working, scene, emit)
         if working is None:
             return []
+        if working.action == "spawn" and not working.anchor and utterance:
+            salvaged = _salvage_spawn_anchor(working, utterance, scene)
+            if salvaged:
+                # The director named a relationship and the model answered with
+                # a bare spawn (or a coordinate read off STAGE: centre). Either
+                # way the prop lands dead centre, so take the relationship —
+                # anchor outranks position on the client for the same reason.
+                working = working.model_copy(update={"anchor": salvaged})
+                await emit(
+                    self.name,
+                    f"placing it {salvaged.relation.replace('_', ' ')} {salvaged.target.name}",
+                    "info",
+                )
         built = specialist.build(working, scene) if specialist else []
         if built and specialist:
             await emit(
@@ -335,6 +375,7 @@ class Producer:
         emit_status: EmitStatus = _noop_status,
         command_id: str | None = None,
         scene: SceneState | None = None,
+        utterance: str | None = None,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
@@ -342,7 +383,7 @@ class Producer:
                 continue
             packets.extend(
                 await self._build_packets_for_intent(
-                    intent, emit, emit_status, command_id, scene
+                    intent, emit, emit_status, command_id, scene, utterance=utterance
                 )
             )
         return packets
@@ -612,7 +653,7 @@ class Producer:
             return [], True
 
         packets = await self._build_packets_for_intents(
-            mutating_intents, emit, emit_status, command_id, scene
+            mutating_intents, emit, emit_status, command_id, scene, utterance=text
         )
         for packet in packets:
             packet.commandId = command_id

@@ -55,6 +55,7 @@ class AssetAnimator:
                         color=intent.color,
                         text=intent.text,
                         position=intent.position,
+                        anchor=intent.anchor,
                         rotation=intent.rotation,
                         scale=intent.scale,
                     )
@@ -88,6 +89,7 @@ class AssetAnimator:
                         target=Target(name=intent.target),
                         mode=mode,
                         position=intent.position,
+                        anchor=intent.anchor,
                         rotation=intent.rotation,
                         scale=intent.scale,
                     ),

@@ -70,7 +70,7 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 |--------|----------|------------|
 | spawn | new primitive | primitive, color, name, text, position OR anchor |
 | remove | delete object | target (name) |
-| transform | move/rotate/scale | target, position/rotation/scale, mode (absolute\\|relative), transition |
+| transform | move/rotate/scale | target, position OR anchor, rotation/scale, mode (absolute\\|relative), transition |
 | animate | motion on object | target, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
 | move_camera | frame shot | position, rotation, look_at (ONLY when explicitly framing), fov, transition |
 

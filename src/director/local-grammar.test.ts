@@ -56,6 +56,58 @@ test('spawn parses color and primitive aliases', () => {
   assert.equal(parseOfflineClauses('add a giant box'), null, 'unknown modifier must fall through')
 })
 
+test('spawn carries a spatial anchor instead of landing centre stage', () => {
+  const beside = parseOfflineClauses('spawn a box beside the cylinder')
+  assert.ok(beside)
+  assert.deepEqual(beside[0].body.payload, {
+    primitive: 'box',
+    anchor: { target: { name: 'cylinder' }, relation: 'beside' },
+  })
+
+  const on = parseOfflineClauses('put a sphere on the pedestal')
+  assert.ok(on)
+  assert.deepEqual((on[0].body.payload as { anchor: unknown }).anchor, {
+    target: { name: 'pedestal' },
+    relation: 'on',
+  })
+
+  // The primitive comes from the half of the cue before the relation — a
+  // cylinder next to a box is not a box.
+  const ordering = parseOfflineClauses('add a red cylinder next to the box')
+  assert.ok(ordering)
+  assert.deepEqual(ordering[0].body.payload, {
+    primitive: 'cylinder',
+    color: '#ff3b30',
+    anchor: { target: { name: 'box' }, relation: 'beside' },
+  })
+})
+
+test('every placement phrase maps to a relation the client can resolve', () => {
+  const cases: [string, string][] = [
+    ['on top of the pedestal', 'on'],
+    ['above the pedestal', 'above'],
+    ['over the pedestal', 'above'],
+    ['alongside the pedestal', 'beside'],
+    ['in front of the pedestal', 'in_front_of'],
+    ['behind the pedestal', 'behind'],
+  ]
+  for (const [phrase, relation] of cases) {
+    const specs = parseOfflineClauses(`add a cone ${phrase}`)
+    assert.ok(specs, `placement fails: "${phrase}"`)
+    const { anchor } = specs[0].body.payload as { anchor: { relation: string } }
+    assert.equal(anchor.relation, relation, phrase)
+  }
+})
+
+test('placement cues that need session memory fall through to the server', () => {
+  // "beside it" needs the last-addressed target; parsing here is pure.
+  assert.equal(parseOfflineClauses('spawn a box beside it'), null)
+  // A definite article plus a destination is a move, not a spawn.
+  assert.equal(parseOfflineClauses('place the sphere on the pedestal'), null)
+  // Relations the anchor resolver has no answer for stay with the LLM.
+  assert.equal(parseOfflineClauses('add a box under the pedestal'), null)
+})
+
 test('motion cues resolve through motion-synth aliases', () => {
   const make = parseOfflineClauses('make the sneaker float')
   assert.ok(make)
