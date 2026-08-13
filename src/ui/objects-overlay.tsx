@@ -31,6 +31,7 @@ export function ObjectsOverlay() {
         addObject({
           name: file.name.toUpperCase(),
           type: 'group',
+          primitive: 'gltf',
           mesh: gltf.scene,
           scale: [2, 2, 2],
         })
@@ -54,21 +55,21 @@ export function ObjectsOverlay() {
         <Button
           variant="wash"
           size="sm"
-          onClick={() => addObject({ name: 'BOX_MDL_01', type: 'mesh', mesh: createBoxMesh() })}
+          onClick={() => addObject({ name: 'BOX_MDL_01', type: 'mesh', primitive: 'box', mesh: createBoxMesh() })}
         >
           box
         </Button>
         <Button
           variant="wash"
           size="sm"
-          onClick={() => addObject({ name: 'SPHERE_MDL_02', type: 'mesh', mesh: createSphereMesh() })}
+          onClick={() => addObject({ name: 'SPHERE_MDL_02', type: 'mesh', primitive: 'sphere', mesh: createSphereMesh() })}
         >
           sphere
         </Button>
         <Button
           variant="wash"
           size="sm"
-          onClick={() => addObject({ name: 'TAG_PLANE_00', type: 'mesh', mesh: createTextTagMesh() })}
+          onClick={() => addObject({ name: 'TAG_PLANE_00', type: 'mesh', primitive: 'text', mesh: createTextTagMesh() })}
         >
           tag
         </Button>

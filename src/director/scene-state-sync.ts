@@ -3,9 +3,11 @@
  * parsing in real object names/transforms. Sent on socket open and whenever
  * the relevant slice of the store changes (300 ms debounce).
  */
+import * as THREE from 'three'
 import { interpolateKeyframes } from '../keyframe-interpolation'
 import { useEditorStore, type MotionObject, type PostProcessingStack, type VirtualCamera } from '../store'
 import type {
+  BoundsSnapshot,
   FxSection,
   FxSummary,
   KeyframeTrack,
@@ -85,6 +87,32 @@ function buildFxSummary(stack: PostProcessingStack): FxSummary {
   }
 }
 
+/** Reused across every object in a snapshot — same reason `attention-field.ts`
+ *  keeps a module-scope scratch box rather than allocating one per measurement. */
+const scratchBox = new THREE.Box3()
+
+/**
+ * World-space bounds from the live mesh.
+ *
+ * `setFromObject` walks children and honours the current world matrix, so a
+ * scaled or animated object measures as it currently stands — which is the
+ * whole point, since the crew reasons about where a surface *is* right now.
+ * Null for an object with no mesh yet, and for an empty box (a group whose
+ * children have not loaded), because reporting a degenerate point as bounds
+ * would read as a zero-sized object.
+ */
+function buildBounds(obj: MotionObject): BoundsSnapshot | null {
+  if (!obj.mesh) return null
+  scratchBox.setFromObject(obj.mesh)
+  if (scratchBox.isEmpty()) return null
+  const { min, max } = scratchBox
+  const round = (n: number) => Math.round(n * 1000) / 1000
+  return {
+    min: [round(min.x), round(min.y), round(min.z)],
+    max: [round(max.x), round(max.y), round(max.z)],
+  }
+}
+
 function buildObjectSnapshot(
   obj: MotionObject,
   currentTime: number,
@@ -105,6 +133,11 @@ function buildObjectSnapshot(
     keyframedProperties: properties,
     tracks,
     materialOverride: obj.materialOverride ?? null,
+    primitive: obj.primitive ?? null,
+    bounds: buildBounds(obj),
+    motion: obj.motion ?? null,
+    motionParams: obj.motionParams ?? null,
+    motionLoop: obj.motionLoop ?? null,
   }
 }
 
@@ -153,6 +186,9 @@ function buildCoreSnapshot(mode: 'heartbeat' | 'full'): Omit<SceneSnapshot, 'typ
     duration: st.duration,
     isPlaying: st.isPlaying,
     isRolling: st.isRolling,
+    playbackLoop: st.playbackLoop,
+    clipLoopEnd: st.clipLoopEnd,
+    playOnceEnd: st.playOnceEnd,
     takeStartTime: st.takeStartTime,
     selectedId: st.selectedId,
     stage: { position: st.stage.position, radius: st.stage.radius },
@@ -208,3 +244,14 @@ export function startSceneStateSync(socket: DirectorSocket): void {
     send()
   }, DEBOUNCE_MS)
 }
+
+// Debug/smoke-test hook, mirroring `window.__editorStore`. Exposing the built
+// snapshot rather than raw meshes lets an E2E run assert on exactly what the
+// crew receives — bounds included — instead of recomputing geometry and hoping
+// the two agree.
+declare global {
+  interface Window {
+    __sceneSnapshot?: typeof buildHeartbeatSnapshot
+  }
+}
+if (typeof window !== 'undefined') window.__sceneSnapshot = buildHeartbeatSnapshot

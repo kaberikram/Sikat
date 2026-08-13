@@ -80,6 +80,23 @@ class Target(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+AnchorRelation = Literal["on", "above", "beside", "in_front_of", "behind"]
+
+
+class PlacementAnchor(BaseModel):
+    """Where to put something, said as a relationship instead of a coordinate.
+
+    The crew cannot work out "the top of the pedestal" from a scale multiplier,
+    and any Y computed here is stale the moment the anchor animates, rescales,
+    or the stage relocates under the director in XR. So the crew names the
+    relationship and `anchor-placement.ts` resolves it against the live mesh.
+    """
+
+    target: Target
+    relation: AnchorRelation
+    offset: Vec3 | None = None
+
+
 class SpawnObjectPayload(BaseModel):
     primitive: Primitive
     id: str | None = None
@@ -89,6 +106,8 @@ class SpawnObjectPayload(BaseModel):
     position: Vec3 | None = None
     rotation: Vec3 | None = None
     scale: Vec3 | None = None
+    anchor: PlacementAnchor | None = None
+    """Relative placement. Outranks `position` when both are present."""
 
 
 class RemoveObjectPayload(BaseModel):
@@ -101,6 +120,8 @@ class TransformObjectPayload(BaseModel):
     position: Vec3 | None = None
     rotation: Vec3 | None = None
     scale: Vec3 | None = None
+    anchor: PlacementAnchor | None = None
+    """Relative placement. Outranks `position`; always resolves as absolute."""
 
 
 class AnimateObjectPayload(BaseModel):
@@ -389,12 +410,29 @@ class SampledTransform(BaseModel):
     scale: Vec3
 
 
+class BoundsSnapshot(BaseModel):
+    """World-space AABB, measured from the live mesh at snapshot time.
+
+    Without it the brief reports a scale multiplier against an unknown base
+    geometry, so "on top of the pedestal" cannot be answered — see
+    `spatial.py`, which turns these into surfaces and footprints.
+    """
+
+    min: Vec3
+    max: Vec3
+
+
 class ObjectSnapshot(BaseModel):
     id: str
     name: str
     position: Vec3 = (0.0, 0.0, 0.0)
     rotation: Vec3 = (0.0, 0.0, 0.0)
     scale: Vec3 = (1.0, 1.0, 1.0)
+    primitive: str | None = None
+    bounds: BoundsSnapshot | None = None
+    motion: str | None = None
+    motionParams: dict[str, float] | None = None
+    motionLoop: bool | None = None
     sampled: SampledTransform = Field(
         default_factory=lambda: SampledTransform(
             position=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)
@@ -463,6 +501,9 @@ class SceneState(BaseModel):
     duration: float = 10.0
     isPlaying: bool = False
     isRolling: bool = False
+    playbackLoop: bool = True
+    clipLoopEnd: float | None = None
+    playOnceEnd: float | None = None
     takeStartTime: float = 0.0
     selectedId: str | None = None
     stage: StageSnapshot = Field(default_factory=StageSnapshot)

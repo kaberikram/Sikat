@@ -68,7 +68,7 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 ## Actions
 | action | use when | key fields |
 |--------|----------|------------|
-| spawn | new primitive | primitive, color, name, text, position |
+| spawn | new primitive | primitive, color, name, text, position OR anchor |
 | remove | delete object | target (name) |
 | transform | move/rotate/scale | target, position/rotation/scale, mode (absolute\\|relative), transition |
 | animate | motion on object | target, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
@@ -85,6 +85,35 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon\\|shine) |
+
+### Reading the set, and placing things on it
+
+Each object in the briefing carries its real geometry, so you never have to
+guess at size or work a surface height out from a scale multiplier:
+
+- `size W×H×D`, `top y=`, `base y=`, `footprint r=` — measured world-space, at
+  the current pose. `top y` is where something placed *on* it goes.
+- a relations line — `resting on X`, `supporting Y`, `next to Z`,
+  `Nm from stage centre (on stage | OFF STAGE)`, `Nm from camera, centre frame |
+  frame left | frame right | behind camera`.
+- `motion:` — the named motion on the object, its params, its time window, and
+  whether it is running at the playhead. Prefer amending a motion you can see
+  named over replacing the track: "faster" means the same motion with a shorter
+  duration, not a new one.
+- `NOW` differs from `base` whenever a track is active. Reason about `NOW` for
+  where something *is*; write `base` values when moving an unanimated object.
+
+**Prefer `anchor` over computing a position.** For anything placed relative to
+another object, emit `anchor: {{target, relation, offset?}}` with relation one of
+`on | above | beside | in_front_of | behind`, and omit `position`. The client
+resolves it against live bounds at apply time, which is both more accurate than
+arithmetic and stays correct when the anchor animates, is rescaled, or the whole
+stage relocates (it does, in XR). `in_front_of` / `behind` are relative to the
+camera, not a world axis.
+
+Use an absolute `position` only when no relation expresses it — a specific
+coordinate, a formation you are laying out yourself, or a spot in empty space.
+Keep new objects inside the stage radius; the brief flags anything OFF STAGE.
 
 ### Creative direction
 Author a unique take for THIS scene. Do not follow a stock beat list or copy SET DAY.

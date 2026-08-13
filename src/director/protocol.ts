@@ -17,6 +17,25 @@ export interface Target {
   name?: string | null
 }
 
+/**
+ * Where to put something, said as a relationship instead of a coordinate.
+ *
+ * The crew cannot reliably compute "the top of the pedestal" — that needs the
+ * object's real bounds at the moment of placing, and any number the server
+ * works out is stale as soon as the anchor animates or is rescaled. So the crew
+ * names the relationship and the client resolves it against the live mesh.
+ *
+ * `position` remains the escape hatch for anything these relations don't cover.
+ */
+export type AnchorRelation = 'on' | 'above' | 'beside' | 'in_front_of' | 'behind'
+
+export interface PlacementAnchor {
+  target: Target
+  relation: AnchorRelation
+  /** Extra nudge applied after the relation resolves, in world metres. */
+  offset?: Vec3 | null
+}
+
 export interface SpawnObjectPayload {
   primitive: 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus' | 'plane' | 'text' | 'sneaker'
   id?: string | null
@@ -26,6 +45,8 @@ export interface SpawnObjectPayload {
   position?: Vec3 | null
   rotation?: Vec3 | null
   scale?: Vec3 | null
+  /** Placed relative to something already on set. Wins over `position`. */
+  anchor?: PlacementAnchor | null
 }
 
 export interface RemoveObjectPayload {
@@ -38,6 +59,8 @@ export interface TransformObjectPayload {
   position?: Vec3 | null
   rotation?: Vec3 | null
   scale?: Vec3 | null
+  /** Moved relative to something else on set. Wins over `position`. */
+  anchor?: PlacementAnchor | null
 }
 
 export interface AnimateObjectPayload {
@@ -155,6 +178,12 @@ export interface SampledTransform {
   scale: Vec3
 }
 
+/** World-space axis-aligned bounds, sampled at snapshot time. */
+export interface BoundsSnapshot {
+  min: Vec3
+  max: Vec3
+}
+
 export interface ObjectSnapshot {
   id: string
   name: string
@@ -165,6 +194,21 @@ export interface ObjectSnapshot {
   keyframedProperties: string[]
   tracks: KeyframeTrack[]
   materialOverride?: MaterialOverrideSnapshot | null
+  /** What it was created as — `box`, `sneaker`, `gltf`, … */
+  primitive?: string | null
+  /** The named motion authored on this object, when it came from the catalog. */
+  motion?: string | null
+  motionParams?: Record<string, number> | null
+  motionLoop?: boolean | null
+  /**
+   * How much room it actually takes up.
+   *
+   * Without this the crew reads `scale (1.8,2.8,1.8)` and cannot tell a
+   * cylinder from a box, how tall it stands, or where its top surface is — so
+   * "put it on the pedestal" is unanswerable. Measured from the live mesh, so
+   * it reflects the current pose rather than the base transform.
+   */
+  bounds?: BoundsSnapshot | null
 }
 
 export interface FxSummary {
@@ -203,6 +247,11 @@ export interface SceneSnapshot {
   duration: number
   isPlaying: boolean
   isRolling?: boolean
+  /** Transport the brief could not see at all before: whether playback wraps,
+   *  and where a clip ends. Without them "is it looping?" is unanswerable. */
+  playbackLoop?: boolean
+  clipLoopEnd?: number | null
+  playOnceEnd?: number | null
   takeStartTime?: number
   selectedId?: string | null
   stage?: StageSnapshot

@@ -16,6 +16,7 @@ import {
   type MotionObject,
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
+import { resolveAnchor, type AnchorBox } from './anchor-placement'
 import { bestMatch, primitiveForName } from './target-match'
 import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
 import { buildBounceScaleKeyframes, DEFAULT_BOUNCE_DECAY } from '../animation-presets'
@@ -35,6 +36,7 @@ import { applyLiveCameraPose } from './camera-pose'
 import type {
   CommandPacket,
   CommandCancelMessage,
+  PlacementAnchor,
   SpawnObjectPayload,
   Target,
   Transition,
@@ -130,6 +132,39 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
   return null
 }
 
+const anchorScratch = new THREE.Box3()
+
+/** Live world bounds for an object, or null when there's no mesh to measure. */
+function liveBounds(obj: MotionObject | null | undefined): AnchorBox | null {
+  if (!obj?.mesh) return null
+  anchorScratch.setFromObject(obj.mesh)
+  if (anchorScratch.isEmpty()) return null
+  const { min, max } = anchorScratch
+  return { min: [min.x, min.y, min.z], max: [max.x, max.y, max.z] }
+}
+
+/**
+ * Turn "on the pedestal" into a world position, measured now.
+ *
+ * Measuring here rather than server-side is the point: bounds change as objects
+ * animate, get rescaled, or the stage relocates under the director in XR. A
+ * coordinate computed a second ago on another machine would already be wrong.
+ *
+ * Null when the anchor names something not on set or too degenerate to measure.
+ * Callers fall back to their normal placement rather than throwing — a prop in
+ * the default spot is recoverable; a command that errors out is not.
+ */
+function resolvePlacement(
+  anchor: PlacementAnchor | null | undefined,
+  moving: MotionObject | null
+): Vec3 | null {
+  if (!anchor) return null
+  const anchorBox = liveBounds(resolveTarget(anchor.target))
+  if (!anchorBox) return null
+  const cam = useEditorStore.getState().virtualCamera.position
+  return resolveAnchor(anchor.relation, anchorBox, liveBounds(moving), cam, anchor.offset)
+}
+
 /**
  * Resolve a target, creating it when nothing on set answers to the name.
  *
@@ -154,6 +189,7 @@ function ensureTarget(target: Target | null | undefined): MotionObject | null {
   st.addObject({
     name: spawnedName,
     type: mesh instanceof THREE.Group ? 'group' : 'mesh',
+    primitive: primitiveForName(name),
     mesh,
     position: [stage.position[0], stage.position[1] + 0.5, stage.position[2]],
     rotation: [0, 0, 0],
@@ -308,16 +344,20 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const p = packet.payload
       const { mesh, name } = buildSpawnMesh(p)
       const stage = st.stage
-      const spawnPos: Vec3 = p.position ?? [
-        stage.position[0],
-        stage.position[1] + 0.5,
-        stage.position[2],
-      ]
+      // An anchor is the crew saying "on the pedestal" rather than guessing a
+      // coordinate, so it outranks an explicit position. The mesh exists but is
+      // not in the store yet, so there are no mover bounds to honour — the prop
+      // lands with its origin on the surface, which the entrance pop then
+      // settles from.
+      const anchored = resolvePlacement(p.anchor, null)
+      const spawnPos: Vec3 = anchored ??
+        p.position ?? [stage.position[0], stage.position[1] + 0.5, stage.position[2]]
       const targetScale: Vec3 = p.scale ?? [1, 1, 1]
       st.addObject({
         id: p.id ?? undefined,
         name,
         type: 'mesh',
+        primitive: p.primitive,
         mesh,
         position: spawnPos,
         rotation: p.rotation ?? [0, 0, 0],
@@ -353,7 +393,11 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const p = packet.payload
       const obj = ensureTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
-      if (p.position) applyObjectVector(obj, 'position', p.position, p.mode, packet.transition)
+      // Anchored moves are absolute by definition — "on the pedestal" is a
+      // destination, not a delta, whatever mode the packet claims.
+      const anchoredTo = resolvePlacement(p.anchor, obj)
+      if (anchoredTo) applyObjectVector(obj, 'position', anchoredTo, 'absolute', packet.transition)
+      else if (p.position) applyObjectVector(obj, 'position', p.position, p.mode, packet.transition)
       if (p.rotation) applyObjectVector(obj, 'rotation', p.rotation, p.mode, packet.transition)
       if (p.scale) applyObjectVector(obj, 'scale', p.scale, p.mode, packet.transition)
       return `transformed ${obj.name}`
@@ -428,6 +472,18 @@ export function applyCommandPacket(packet: CommandPacket): string {
         }
         beginClipPlayback(clipEnd, p.repeat === true, packet.commandId, obj.id)
       }
+      // Remember what this motion *is*. Without it the brief can only say
+      // "rotation×8, spin-like" and the crew cannot amend what it can't name.
+      // Numeric params only — `easing` is a name, and the point of carrying
+      // these is so "twice as many hops" has a number to work from.
+      const numericParams = Object.fromEntries(
+        Object.entries(params).filter(([, v]) => typeof v === 'number')
+      ) as Record<string, number>
+      st.updateObject(obj.id, {
+        motion: motionId,
+        motionParams: Object.keys(numericParams).length > 0 ? numericParams : undefined,
+        motionLoop: p.repeat === true,
+      })
       const mode = useComposite ? `${motion} along path` : motion
       const suffix = isRefinement ? ' (refined)' : ''
       return `${mode} on ${obj.name} (${duration.toFixed(1)}s${p.repeat ? ', loop' : ''})${suffix}`
@@ -521,6 +577,12 @@ export function applyCommandPacket(packet: CommandPacket): string {
       const obj = resolveTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       if (p.property === 'fov') throw new Error('fov keyframes only apply to the camera')
+      // An authored path replaces a catalog motion (same family per
+      // `motion-family.ts`), so the remembered name no longer describes what
+      // is on the track — keeping it would have the brief lie about the shot.
+      if (obj.motion) {
+        st.updateObject(obj.id, { motion: undefined, motionParams: undefined, motionLoop: undefined })
+      }
       const mapped = p.keyframes.map((k) => ({ time: k.time, value: k.value }))
       if (isRefinement) {
         st.mergeObjectPropertyKeyframes(obj.id, p.property, mapped, st.currentTime)

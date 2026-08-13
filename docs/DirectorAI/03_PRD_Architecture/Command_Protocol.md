@@ -29,7 +29,17 @@ Breaking change: `camera` → **`virtualCamera`**.
 | `virtualCamera` | sampled pose, fx summary, track counts | + full keyframe data |
 | `lighting` | `{ambient, key, background}` | ✓ |
 
-**ObjectSnapshot:** `id`, `name`, `position/rotation/scale` (base store values), `sampled {position, rotation, scale}` (interpolated at `currentTime`), `keyframedProperties[]`, `tracks[]`, `materialOverride?`
+**ObjectSnapshot:** `id`, `name`, `position/rotation/scale` (base store values), `sampled {position, rotation, scale}` (interpolated at `currentTime`), `keyframedProperties[]`, `tracks[]`, `materialOverride?`, `primitive?`, `bounds? {min, max}`, `motion?`, `motionParams?`, `motionLoop?`
+
+`bounds` is the world-space AABB measured from the live mesh at snapshot time —
+it reflects the current pose, not the base transform. Without it the crew reads
+a scale multiplier against unknown geometry and cannot answer "on top of".
+`motion` carries the named catalog motion through from `ANIMATE_OBJECT` (it used
+to be resolved and discarded), and is cleared when a `SET_KEYFRAMES` path
+overwrites the track — same motion family, so the old name would misdescribe it.
+
+Heartbeat and full snapshots also carry `playbackLoop`, `clipLoopEnd` and
+`playOnceEnd`, so "is it looping?" is answerable.
 
 **Track shapes:** heartbeat → `{property, keyframeCount}` · full → `{property, keyframes[] {time, value}}`
 
@@ -79,10 +89,22 @@ currently **12 s**. It bounds the client's pending-command timer, the pod's
 input state, the server's LLM drain, and — via `LLM_HTTP_TIMEOUT_SEC` — the
 provider SDK timeouts, which otherwise default to ten minutes.
 
-When it expires the client **improvises** from the local vocabulary rather than
-reporting a failure. Same on a `kind: "miss"` log (the server reached the end of
-a plan with no packets) and whenever the link is down. Change both constants
-together.
+When it expires the client says so and leaves the set alone. Same on a
+`kind: "miss"` log (the crew reached the end of a plan with no packets): an empty
+answer from a live crew is a real answer, and papering over it with something
+canned costs more trust than admitting the miss. Change both constants together.
+
+### Routing: the crew gets first refusal
+
+Reflexes — transport (`action`/`cut`/`play`), undo, overlays, XR session cues,
+SET DAY — are answered locally and instantly; a round-trip on "cut" would feel
+broken. **Everything else goes to the crew whenever the link is open.** The
+deterministic offline grammar (`local-grammar.ts`) runs *only* when the socket
+is not open, where it is the fallback rather than the front door.
+
+This was the other way round, and it is why the set felt like a lookup table:
+"golden hour" hit a canned rig and returned the identical result every time,
+never reaching an LLM that could interpret it or answer in its own voice.
 
 ### Progressive execution (Phase F)
 
@@ -148,9 +170,9 @@ time: id match → case-insensitive exact name → substring.
 
 | command | agent | payload |
 |---|---|---|
-| `SPAWN_OBJECT` | AssetAnimator | `primitive (box\|sphere\|cone\|cylinder\|torus\|plane\|text)`, `id?`, `name?`, `color?`, `text?`, `position?`, `rotation?`, `scale?` |
+| `SPAWN_OBJECT` | AssetAnimator | `primitive (box\|sphere\|cone\|cylinder\|torus\|plane\|text)`, `id?`, `name?`, `color?`, `text?`, `position?`, `rotation?`, `scale?`, `anchor?` |
 | `REMOVE_OBJECT` | AssetAnimator | `target` |
-| `TRANSFORM_OBJECT` | AssetAnimator | `target`, `mode (absolute\|relative)`, `position?`, `rotation?`, `scale?` — relative scale multiplies, relative position/rotation adds |
+| `TRANSFORM_OBJECT` | AssetAnimator | `target`, `mode (absolute\|relative)`, `position?`, `rotation?`, `scale?`, `anchor?` — relative scale multiplies, relative position/rotation adds |
 | `ANIMATE_OBJECT` | AssetAnimator | `target`, `preset (turnaround\|orbit\|bounce)`, `durationSec?` |
 | `MOVE_CAMERA` | AssetAnimator | `position?`, `rotation?`, `lookAt? (Vec3)`, `lookAtTarget? (Target)`, `fov? (5–120)` |
 | `UPDATE_LIGHTS` | LightingTech | `ambient? {color?, intensity? 0–4}`, `key? {color?, intensity? 0–8, position?}`, `background?` |
@@ -194,3 +216,26 @@ edits, …) it may emit `agent_suggestion` **to that socket only** (not multicas
 stale suggestions may be dropped (25 s auto-expire on client).
 
 Kill switch: `DIRECTOR_PROACTIVE=0` disables all proactive behavior server-side.
+
+## Placement anchors
+
+`SPAWN_OBJECT` and `TRANSFORM_OBJECT` accept an optional
+`anchor: {target, relation, offset?}` where `relation` is
+`on | above | beside | in_front_of | behind`. It **outranks `position`**, and on
+a transform it always resolves as absolute — "on the pedestal" is a destination,
+not a delta.
+
+Resolution is **client-side at apply time** (`src/director/anchor-placement.ts`,
+called from `command-applier.ts`), against the anchor's live bounds. That timing
+is the point: a Y computed server-side is stale the moment the anchor animates,
+is rescaled, or the stage relocates — which in XR it does, to wherever the
+director is standing. `in_front_of` / `behind` are relative to the virtual
+camera, not a world axis.
+
+An anchor naming something not on set falls back to the normal placement rather
+than failing the packet. `position` remains the escape hatch for anything the
+relations do not express.
+
+Object *sizes* the crew reasons from come from `bounds`; the derived
+relationships in the brief (resting-on, neighbours, stage membership, camera
+bearing) are computed server-side in `server/app/spatial.py`.

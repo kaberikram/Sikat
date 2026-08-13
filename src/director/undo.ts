@@ -43,12 +43,6 @@ export function noteCommandText(commandId: string, text: string): void {
   }
 }
 
-/** What the director actually said for a command — null once it has aged out. */
-export function commandTextFor(commandId: string | null | undefined): string | null {
-  if (!commandId) return null
-  return commandTexts.get(commandId) ?? null
-}
-
 function capturePaint(objects: MotionObject[]): Map<string, MaterialPaint> {
   const paint = new Map<string, MaterialPaint>()
   for (const obj of objects) {
