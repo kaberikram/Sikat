@@ -14,10 +14,19 @@
 import { resolveMotionId, type MotionId } from '../motion-synth.ts'
 import type { CommandPacket, UpdateLightsPayload, FxSection, Vec3 } from './protocol'
 
+/**
+ * Omit that distributes over a union.
+ *
+ * A plain `Omit<CommandPacket, …>` collapses the command/payload union into one
+ * object with every payload type on it, so `body.command === 'UPDATE_FX'` stops
+ * narrowing `body.payload`. Distributing keeps each arm intact.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+
 /** A packet body plus the crew member whose cursor performs it. */
 export interface LocalPacketSpec {
   agent: 'AssetAnimator' | 'LightingTech' | 'VFXOperator'
-  body: Omit<CommandPacket, 'timestamp' | 'commandId' | 'target_agent'>
+  body: DistributiveOmit<CommandPacket, 'timestamp' | 'commandId' | 'target_agent'>
 }
 
 /** Rotating pod input suggestions — every entry MUST work offline. */
@@ -63,7 +72,15 @@ export function normalizeUtterance(text: string): string {
   return stripped || cleaned
 }
 
-const COLORS: Record<string, string> = {
+/**
+ * Exported so the improviser can read the same words loosely.
+ *
+ * The matchers below are whole-string anchored on purpose — a grammar that
+ * half-matches is worse than one that declines. The improviser has the opposite
+ * job (answer *something* to anything), so it scans these same tables for words
+ * appearing anywhere in a sentence. One vocabulary, two reading strictnesses.
+ */
+export const COLORS: Record<string, string> = {
   red: '#ff3b30',
   orange: '#ff9500',
   yellow: '#ffd60a',
@@ -100,7 +117,7 @@ const PRIMITIVES: Record<string, 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus
   shoe: 'sneaker',
 }
 
-const FX_SECTIONS: Record<string, FxSection> = {
+export const FX_SECTIONS: Record<string, FxSection> = {
   bloom: 'bloom',
   glow: 'bloom',
   pixelate: 'pixelate',
@@ -124,7 +141,7 @@ const MOTION_IDS = new Set<MotionId>([
 ])
 
 /** Canned lighting rigs — the same shape SET DAY's beats use. */
-const MOODS: Record<string, UpdateLightsPayload> = {
+export const MOODS: Record<string, UpdateLightsPayload> = {
   goldenHour: {
     ambient: { color: '#4a2f3a', intensity: 0.7 },
     key: { color: '#ffb36b', intensity: 1.45, position: [-2.5, 1.6, 2] },
@@ -154,7 +171,7 @@ const MOODS: Record<string, UpdateLightsPayload> = {
 
 const LIGHT_TRANSITION = { durationSec: 1.4, easing: 'easeInOut' as const }
 
-function lightsSpec(payload: UpdateLightsPayload): LocalPacketSpec {
+export function lightsSpec(payload: UpdateLightsPayload): LocalPacketSpec {
   return {
     agent: 'LightingTech',
     body: { command: 'UPDATE_LIGHTS', payload, transition: LIGHT_TRANSITION },

@@ -247,9 +247,29 @@ export interface AgentAbortMessage {
   commandId: string
 }
 
+/**
+ * Liveness probe. `scene_state` only goes out when the snapshot changes, so an
+ * untouched set is silent and a half-open socket is undetectable without this.
+ * See `link-health.ts` for the policy and `socket.ts` for the timer.
+ */
+export interface PingMessage {
+  type: 'ping'
+  timestamp: number
+}
+
 // ---------------------------------------------------------------------------
 // Server -> client
 // ---------------------------------------------------------------------------
+
+/**
+ * Answer to `ping`. Carries nothing: its arrival is the entire payload, and
+ * `socket.ts` records liveness from the raw frame before parsing, so this never
+ * needs to reach `parseServerMessage`.
+ */
+export interface PongMessage {
+  type: 'pong'
+  timestamp: number
+}
 
 export interface AgentCommandMessage {
   type: 'agent_command'

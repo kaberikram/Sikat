@@ -27,6 +27,20 @@ DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
 """Fast tier — reserved for optional future preview helpers; not used for animate refine."""
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
+COMMAND_BUDGET_SEC = 12.0
+"""The whole budget for one command — mirrors COMMAND_BUDGET_MS in
+`src/director/link-health.ts`. Change both together.
+
+The client stops waiting at this point and improvises, so a provider call still
+running past it is producing an answer nobody is going to see. Both SDKs default
+to a *ten minute* HTTP timeout, and the sync path runs under `asyncio.to_thread`,
+which cannot be cancelled — so without this a single hung connection pins a
+worker thread long after the director has moved on."""
+
+LLM_HTTP_TIMEOUT_SEC = COMMAND_BUDGET_SEC + 3.0
+"""Slightly past the client's patience: the server should be the one to notice a
+dead provider, not merely inherit the client's guess about it."""
+
 SYSTEM_PROMPT_TEMPLATE = """You are the Director's Assistant on a virtual film set (RADIO_EDIT.EXE).
 Parse the director's instruction into structured intents. You see the scene
 briefing below — it includes BASE transforms (editable values) and NOW
@@ -383,7 +397,7 @@ def get_anthropic_client():
     except ImportError:
         log.warning("anthropic package not installed; using fallback parser")
         return None
-    return anthropic.Anthropic()
+    return anthropic.Anthropic(timeout=LLM_HTTP_TIMEOUT_SEC)
 
 
 def get_deepseek_client():
@@ -396,7 +410,7 @@ def get_deepseek_client():
     except ImportError:
         log.warning("openai package not installed; using fallback parser")
         return None
-    return OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+    return OpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL, timeout=LLM_HTTP_TIMEOUT_SEC)
 
 
 def get_async_anthropic_client():
@@ -408,7 +422,7 @@ def get_async_anthropic_client():
     except ImportError:
         log.warning("anthropic package not installed; using fallback parser")
         return None
-    return anthropic.AsyncAnthropic()
+    return anthropic.AsyncAnthropic(timeout=LLM_HTTP_TIMEOUT_SEC)
 
 
 def get_async_deepseek_client():
@@ -421,7 +435,7 @@ def get_async_deepseek_client():
     except ImportError:
         log.warning("openai package not installed; using fallback parser")
         return None
-    return AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL)
+    return AsyncOpenAI(api_key=key, base_url=DEEPSEEK_BASE_URL, timeout=LLM_HTTP_TIMEOUT_SEC)
 
 
 def _history_section() -> str:

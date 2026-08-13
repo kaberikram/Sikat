@@ -534,8 +534,22 @@ class AgentAbort(BaseModel):
     commandId: str
 
 
+class Ping(BaseModel):
+    """Liveness probe.
+
+    The editor only sends `scene_state` when the snapshot actually changes, so
+    an untouched set sends nothing at all. Proxies (and sleeping laptops) close
+    an idle socket without either side noticing: the browser keeps reporting
+    `readyState === OPEN`, sends succeed into the void, and the command never
+    lands. A ping the server answers is what makes that detectable.
+    """
+
+    type: Literal["ping"] = "ping"
+    timestamp: float = Field(default_factory=now)
+
+
 ClientMessage = Annotated[
-    Union[UserCommand, SceneState, Telemetry, AgentToolResult, AgentAbort],
+    Union[UserCommand, SceneState, Telemetry, AgentToolResult, AgentAbort, Ping],
     Field(discriminator="type"),
 ]
 client_message_adapter: TypeAdapter = TypeAdapter(ClientMessage)
@@ -544,6 +558,10 @@ client_message_adapter: TypeAdapter = TypeAdapter(ClientMessage)
 # ---------------------------------------------------------------------------
 # Server -> client message builders
 # ---------------------------------------------------------------------------
+
+
+def pong_message() -> dict:
+    return {"type": "pong", "timestamp": now()}
 
 
 def agent_command_message(packet) -> dict:

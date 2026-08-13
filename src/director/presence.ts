@@ -22,7 +22,18 @@ export const CURSOR_WORK_MS = 250 // readable action-note / apply beat
 export const CURSOR_SETTLE_MS = 450 // check has time to register
 export const CURSOR_MOTION_FADE_MS = 1100 // post-motion hold before soft fade
 export const CURSOR_FADE_MS = 900 // post-work hold before soft fade
-export const PENDING_RESPONSE_TIMEOUT_MS = 10_000 // clear a silent server request
+
+/**
+ * How long the crew may be silent before the client stops waiting on them.
+ *
+ * This is the *whole* budget for a command, and every other layer derives from
+ * it (`COMMAND_BUDGET_MS` in `link-health.ts` is the shared source, and the
+ * server's own drain is set from the same number). They used to disagree —
+ * cursors retired at 10s, the pod kept claiming work until 30s, and the server
+ * gave up at 45s — which meant a slow command spent 20s looking abandoned and
+ * could still land afterwards with nothing to attribute it to.
+ */
+export { COMMAND_BUDGET_MS as PENDING_RESPONSE_TIMEOUT_MS } from './link-health'
 
 export type CursorPhase = 'idle' | 'intent' | 'flying' | 'working' | 'settling' | 'done'
 export type IdleMode = 'none' | 'faded'

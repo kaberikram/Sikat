@@ -21,6 +21,7 @@ import {
 } from './protocol'
 import { retireAllCursors } from './agent-runtime'
 import { newCommandId } from './ids'
+import { admitToQueue, linkExpired, PING_INTERVAL_MS, pruneQueue } from './link-health'
 import { buildFullSnapshot } from './scene-state-sync'
 import { shouldAttachVision } from './vision-triggers'
 import { captureViewfinderFrame } from './viewfinder-capture'
@@ -28,6 +29,12 @@ import { captureViewfinderFrame } from './viewfinder-capture'
 export type SocketStatus = 'connecting' | 'open' | 'closed'
 
 type Listener<T> = (value: T) => void
+
+/** A command held while the link was down, waiting to be replayed on reconnect. */
+interface QueuedCommand {
+  queuedAt: number
+  payload: Record<string, unknown>
+}
 
 function defaultUrl(): string | null {
   const configured = import.meta.env.VITE_DIRECTOR_WS_URL as string | undefined
@@ -44,6 +51,11 @@ export class DirectorSocket {
   private attempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private closedByUser = false
+  private pingTimer: ReturnType<typeof setInterval> | null = null
+  /** Timestamp of the last frame of any kind — the only honest proof of life. */
+  private lastInboundAt = 0
+  private outbox: QueuedCommand[] = []
+  private wakeListenersBound = false
 
   private packetListeners = new Set<Listener<CommandPacket>>()
   private logListeners = new Set<Listener<AgentLogMessage>>()
@@ -73,12 +85,24 @@ export class DirectorSocket {
     return Boolean(this.url)
   }
 
+  /** Failed connection attempts so far; 0 while the first one is still open. */
+  get reconnectAttempts(): number {
+    return this.attempts
+  }
+
+  /** How many commands are held waiting for the link — 0 when nothing is owed. */
+  get heldCommandCount(): number {
+    this.outbox = pruneQueue(this.outbox, Date.now())
+    return this.outbox.length
+  }
+
   connect() {
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return
     if (!this.url) {
       this.setStatus('closed')
       return
     }
+    this.bindWakeListeners()
     this.closedByUser = false
     this.setStatus('connecting')
     try {
@@ -91,10 +115,16 @@ export class DirectorSocket {
     this.ws.onopen = () => {
       this.attempts = 0
       this.everConnected = true
+      this.lastInboundAt = Date.now()
+      this.startPinging()
       this.setStatus('open')
       for (const cb of this.openListeners) cb()
+      this.flushOutbox()
     }
     this.ws.onmessage = (event) => {
+      // Before parsing: any frame at all is proof the link is alive, including
+      // a `pong` that carries no other meaning.
+      this.lastInboundAt = Date.now()
       let raw: unknown
       try {
         raw = JSON.parse(event.data as string)
@@ -123,6 +153,7 @@ export class DirectorSocket {
     }
     this.ws.onclose = () => {
       this.ws = null
+      this.stopPinging()
       this.setStatus('closed')
       // Any crew choreography in flight is now orphaned — the packets that
       // would have finished it are never arriving. Retire the cursors rather
@@ -138,7 +169,63 @@ export class DirectorSocket {
   disconnect() {
     this.closedByUser = true
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.stopPinging()
     this.ws?.close()
+  }
+
+  // ---- liveness ----
+
+  private startPinging() {
+    this.stopPinging()
+    if (typeof setInterval === 'undefined') return
+    this.pingTimer = setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return
+      if (linkExpired(this.lastInboundAt, Date.now())) {
+        // Half-open: the browser still calls this socket OPEN and every send
+        // reports success, but nothing has come back. Close it so `onclose`
+        // runs the normal reconnect (and retires the orphaned cursors).
+        this.ws.close()
+        return
+      }
+      this.sendRaw({ type: 'ping', timestamp: Date.now() / 1000 })
+    }, PING_INTERVAL_MS)
+  }
+
+  private stopPinging() {
+    if (this.pingTimer === null) return
+    clearInterval(this.pingTimer)
+    this.pingTimer = null
+  }
+
+  /**
+   * Waking from sleep and regaining network are the two moments a reconnect is
+   * most likely to succeed and least likely to be already scheduled — waiting
+   * out a 10s backoff there is the difference between the set answering and the
+   * director thinking it is broken.
+   */
+  private bindWakeListeners() {
+    if (this.wakeListenersBound) return
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+    this.wakeListenersBound = true
+    const wake = () => {
+      if (this.closedByUser || !this.url) return
+      if (this.ws?.readyState === WebSocket.OPEN) return
+      this.reconnectNow()
+    }
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') wake()
+    })
+  }
+
+  /** Drop any pending backoff and retry immediately. */
+  private reconnectNow() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.attempts = 0
+    this.connect()
   }
 
   private scheduleReconnect() {
@@ -164,7 +251,11 @@ export class DirectorSocket {
     return true
   }
 
-  /** Returns the commandId used, or null when the socket is not open. */
+  /**
+   * `sent` — it is on the wire. `held` — the link is down but the command is
+   * queued and will replay on reconnect. `unconfigured` — there is no server
+   * to reach in this build, so waiting for one would be a lie.
+   */
   async sendUserCommand(
     text: string,
     opts?: {
@@ -172,11 +263,11 @@ export class DirectorSocket {
       commandId?: string
       targetHint?: { id: string; name: string }
     }
-  ): Promise<string | null> {
+  ): Promise<{ commandId: string; delivery: 'sent' | 'held' | 'unconfigured' }> {
     const commandId = opts?.commandId ?? newCommandId()
     const attachVision = opts?.forceVision === true || shouldAttachVision(text)
     const frame = attachVision ? await captureViewfinderFrame() : null
-    const sent = this.sendRaw({
+    const payload: Record<string, unknown> = {
       type: 'user_command',
       timestamp: Date.now() / 1000,
       text,
@@ -184,8 +275,32 @@ export class DirectorSocket {
       scene: { type: 'scene_state', timestamp: Date.now() / 1000, ...buildFullSnapshot() },
       ...(frame ? { frame } : {}),
       ...(opts?.targetHint ? { targetHint: opts.targetHint } : {}),
-    })
-    return sent ? commandId : null
+    }
+    if (this.sendRaw(payload)) return { commandId, delivery: 'sent' }
+    if (!this.url) return { commandId, delivery: 'unconfigured' }
+    // Hold it. The same commandId rides the replay, so a later cancel or
+    // supersede still matches the choreography this command already started.
+    this.outbox = admitToQueue(this.outbox, { queuedAt: Date.now(), payload }, Date.now())
+    return { commandId, delivery: 'held' }
+  }
+
+  /**
+   * Replay whatever the link owes, oldest first.
+   *
+   * The scene snapshot inside each held payload is deliberately *not* refreshed
+   * — the server grounds the parse in the set as it was when the director
+   * spoke, which is the set they were describing.
+   */
+  private flushOutbox() {
+    if (this.outbox.length === 0) return
+    const due = pruneQueue(this.outbox, Date.now())
+    this.outbox = []
+    for (const entry of due) {
+      if (!this.sendRaw(entry.payload)) {
+        // Lost it again mid-flush; keep the rest for the next open.
+        this.outbox.push(entry)
+      }
+    }
   }
 
   sendSceneState(snapshot: Omit<SceneSnapshot, 'type' | 'timestamp'>): boolean {

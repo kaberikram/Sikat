@@ -31,6 +31,7 @@ from .schema import (
     AgentToolResult,
     MoveCameraPacket,
     MoveCameraPayload,
+    Ping,
     SceneState,
     Telemetry,
     UserCommand,
@@ -39,6 +40,7 @@ from .schema import (
     agent_status_message,
     client_message_adapter,
     error_message,
+    pong_message,
 )
 from .observer import run_observer
 from .session_context import SessionContext, bind_session, reset_session
@@ -239,7 +241,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     )
                 )
                 continue
-            if isinstance(msg, SceneState):
+            if isinstance(msg, Ping):
+                # Answer before anything else — a client waiting on this has
+                # already decided the link is suspect.
+                await ws.send_json(pong_message())
+            elif isinstance(msg, SceneState):
                 scene_state.update(msg)
                 session = manager.sessions.get(ws)
                 if session is not None:
