@@ -8,6 +8,7 @@
 import { applyCommandPacket, cancelCommandPacket, resolveTarget } from './command-applier'
 import { classifyCursorHome, idleDecision, watchdogExpired } from './cursor-lifecycle'
 import { clearGhost, showGhost } from './ghost-preview'
+import { sameMotionFamily } from './motion-family'
 import { clearProposal, showProposal } from './proposal-ghost'
 import { respond } from '../scene/xr/ambient-channel'
 import { liveTargetPosition, packetTargetPosition } from './cursor-targets'
@@ -471,17 +472,18 @@ export function enqueuePacket(packet: CommandPacket): void {
 
   const queue = queues.get(agent) ?? []
 
-  // Barge-in v1: a newer command for the same object + command type
-  // supersedes any not-yet-applied packet still waiting in this agent's
-  // queue, so a fresh correction doesn't wait behind stale queued work. The
-  // in-flight packet (already shifted off the queue) is unaffected — its
-  // flight/work sleep still plays out (≤ ~600ms).
+  // Barge-in v1: a newer command for the same object + motion family
+  // (ANIMATE_OBJECT / SET_KEYFRAMES) supersedes any not-yet-applied packet
+  // still waiting in this agent's queue, so authored keys replace a catalog
+  // synth without waiting behind it. The in-flight packet (already shifted
+  // off the queue) is unaffected — its flight/work sleep still plays out
+  // (≤ ~600ms); SET_KEYFRAMES then overwrites the track on apply.
   const targetId = packetSupersedeTargetId(packet)
   if (targetId) {
     for (let i = queue.length - 1; i >= 0; i--) {
       const queued = queue[i]
       if (
-        queued.command === packet.command &&
+        sameMotionFamily(queued.command, packet.command) &&
         queued.commandId !== packet.commandId &&
         packetSupersedeTargetId(queued) === targetId
       ) {

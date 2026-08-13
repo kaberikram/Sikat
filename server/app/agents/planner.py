@@ -203,7 +203,10 @@ class PlanRunner:
         """Escalation chain: corrective re-plan -> motion floor -> honest state."""
         action_seeking = motion_floor.is_animation_seeking(text) or not describe_only
         open_brief = creative_parse.is_open_direction(text)
-        if not all_packets and plan_mode != "pitch" and not is_open_speech(text):
+        authored = any(p.command == "SET_KEYFRAMES" for p in all_packets)
+        wants_take = open_brief or motion_floor.is_animation_seeking(text)
+        missing_take = not all_packets or (open_brief and not authored)
+        if missing_take and wants_take and plan_mode != "pitch" and not is_open_speech(text):
             if plan_say or action_seeking or open_brief:
                 await emit_status("Producer", "active", command_id, "rethinking that…")
                 recovery_steps = 0
@@ -215,8 +218,8 @@ class PlanRunner:
                     extra_context=(
                         "Your previous plan produced ZERO executable steps "
                         "(all were dropped as invalid). Return concrete mutating "
-                        "steps now. Keyframe values must be [x,y,z] with exactly "
-                        "3 numbers."
+                        "steps now. Author track_keyframes — do not pick a motion "
+                        "id. Keyframe values must be [x,y,z] with exactly 3 numbers."
                     ),
                     adjustment=True,
                 ):
@@ -238,7 +241,9 @@ class PlanRunner:
                             emit_cancel, scene_now, utterance=text,
                         )
                         all_packets.extend(built)
-            if not all_packets:
+            if not all_packets or (open_brief and not any(
+                p.command == "SET_KEYFRAMES" for p in all_packets
+            )):
                 await emit_log("Producer", "plan didn't land — improvising a take", "warn")
                 floor = motion_floor.motion_floor_packets(text, command_id, scene_now)
                 for pkt in floor:

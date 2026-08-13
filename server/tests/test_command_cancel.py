@@ -84,3 +84,13 @@ async def test_freeze_emits_stop_cancel(producer, scene):
     assert len(cancels) == 1
     assert cancels[0]["reason"] == "stop"
     assert cancels[0]["commandId"] == "anim-1"
+
+
+def test_motion_family_shares_scope():
+    active_commands.clear()
+    prior = active_commands.note_active("CORE_SPHERE", "ANIMATE_OBJECT", "anim-1")
+    assert prior is None
+    prior = active_commands.note_active("CORE_SPHERE", "SET_KEYFRAMES", "keys-1")
+    assert prior == ("anim-1", "ANIMATE_OBJECT")
+    assert active_commands.prior_for("CORE_SPHERE", "ANIMATE_OBJECT") == ("keys-1", "SET_KEYFRAMES")
+    active_commands.clear()

@@ -359,7 +359,7 @@ export const STOP_CUES = [
  * Matching them lets the crew start improvising in the same frame.
  */
 export const CREATIVE_BRIEF_RE =
-  /\b(?:surprise(?:\s+me)?|impress\s+me|wow\s+me|blow\s+my\s+mind|go\s+wild|go\s+crazy|go\s+nuts|go\s+off|do\s+something(?:\s+cool)?|something\s+(?:cool|wild|crazy|interesting)|make\s+it\s+(?:cool|wild|crazy|interesting|pop|insane)|i\s+trust\s+you|trust\s+you|your\s+call|do\s+your\s+thing|motion\s+graphics|choreograph|freestyle|neon\s+tokyo|music\s+video|feel(?:s)?\s+like|feeling\s+like)\b/i
+  /\b(?:surprise(?:\s+me)?|impress\s+me|wow\s+me|blow\s+my\s+mind|go\s+wild|go(?:es)?\s+crazy|go\s+nuts|go\s+off|do\s+something(?:\s+cool)?|something\s+(?:cool|wild|crazy|interesting)|make\s+it\s+(?:cool|wild|crazy|interesting|pop|insane)|i\s+trust\s+you|trust\s+you|your\s+call|do\s+your\s+thing|motion\s+graphics|choreograph|freestyle|neon\s+tokyo|music\s+video|feel(?:s)?\s+like|feeling\s+like)\b/i
 
 export function isCreativeBrief(text: string): boolean {
   return CREATIVE_BRIEF_RE.test(text)

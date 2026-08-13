@@ -27,6 +27,9 @@ test('the phrasings people actually use are recognised', () => {
     'make it insane',
     'neon Tokyo',
     'make this feel like a music video intro',
+    'go crazy',
+    'goes crazy',
+    'animation goes crazy',
   ]) {
     assert.ok(isCreativeBrief(raw), raw)
   }
@@ -81,9 +84,10 @@ test('a busy set is capped so it stays a shot rather than noise', () => {
   assert.equal(choreograph(crowd, 'go wild').length, 4)
 })
 
-test('neighbouring objects get different motions', () => {
+test('neighbouring objects get different paths', () => {
   const beats = choreograph(SET_DAY, 'surprise me')
-  assert.ok(new Set(beats.map((b) => b.motion)).size > 1, 'not all the same motion')
+  const first = JSON.stringify(beats[0].keyframes)
+  assert.ok(beats.some((b) => JSON.stringify(b.keyframes) !== first), 'not all the same path')
 })
 
 // ---- determinism ----
@@ -95,24 +99,25 @@ test('the same brief replays identically', () => {
 test('different briefs look different', () => {
   const a = choreograph(SET_DAY, 'surprise me')
   const b = choreograph(SET_DAY, 'go wild')
-  assert.notDeepEqual(a.map((x) => x.motion), b.map((x) => x.motion))
+  assert.notDeepEqual(a.map((x) => x.keyframes), b.map((x) => x.keyframes))
 })
 
 // ---- packets ----
 
-test('a populated set animates without spawning anything', () => {
+test('a populated set authors keys without spawning anything', () => {
   const specs = beatsToSpecs(choreograph(SET_DAY, 'surprise me'))
   assert.equal(specs.filter((s) => s.body.command === 'SPAWN_OBJECT').length, 0)
-  assert.equal(specs.filter((s) => s.body.command === 'ANIMATE_OBJECT').length, 3)
+  assert.equal(specs.filter((s) => s.body.command === 'SET_KEYFRAMES').length, 3)
+  assert.equal(specs.filter((s) => s.body.command === 'ANIMATE_OBJECT').length, 0)
 })
 
-test('an empty set spawns the subject before animating it', () => {
+test('an empty set spawns the subject before keyframing it', () => {
   const specs = beatsToSpecs(choreograph([], 'surprise me'))
   assert.equal(specs[0].body.command, 'SPAWN_OBJECT')
-  assert.equal(specs[1].body.command, 'ANIMATE_OBJECT')
+  assert.equal(specs[1].body.command, 'SET_KEYFRAMES')
 })
 
-test('every animate target is provided by the same set of specs', () => {
+test('every keyframe target is provided by the same set of specs', () => {
   // The invariant the server-side bug broke: never animate a name that nothing
   // on set has and nothing here creates.
   for (const objs of [[], SET_DAY]) {
@@ -121,7 +126,7 @@ test('every animate target is provided by the same set of specs', () => {
     for (const s of specs) {
       const payload = s.body.payload as { name?: string; target?: { name?: string } }
       if (s.body.command === 'SPAWN_OBJECT' && payload.name) available.add(payload.name)
-      if (s.body.command === 'ANIMATE_OBJECT') {
+      if (s.body.command === 'SET_KEYFRAMES') {
         assert.ok(available.has(payload.target?.name ?? ''), `${payload.target?.name} unprovided`)
       }
     }

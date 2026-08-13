@@ -188,16 +188,72 @@ async def _run_with_empty_stream(monkeypatch, scene, text: str):
 async def test_empty_plan_floors_neon_tokyo(monkeypatch, scene):
     packets, notes = await _run_with_empty_stream(monkeypatch, scene, "neon Tokyo")
     assert notes[0] == "on it"
-    assert any(p.command == "ANIMATE_OBJECT" for p in packets)
+    assert any(p.command == "SET_KEYFRAMES" for p in packets)
     assert any(p.command == "PLAYBACK" for p in packets)
+    assert all(p.command != "ANIMATE_OBJECT" for p in packets)
 
 
 async def test_empty_plan_floors_i_trust_you(monkeypatch, scene):
     packets, _notes = await _run_with_empty_stream(monkeypatch, scene, "I trust you")
-    assert any(p.command == "ANIMATE_OBJECT" for p in packets)
+    assert any(p.command == "SET_KEYFRAMES" for p in packets)
+    assert all(p.command != "ANIMATE_OBJECT" for p in packets)
 
 
 async def test_greeting_empty_plan_does_not_floor(monkeypatch, scene):
     packets, notes = await _run_with_empty_stream(monkeypatch, scene, "hello")
     assert notes[0] == "on it"
     assert packets == []
+
+
+async def test_open_brief_catalog_animate_recovers_to_keyframes(monkeypatch, scene):
+    async def bounce_plan(*args, **kwargs):
+        yield llm.Meta(mode="execute", needs_deeper_creativity=False)
+        yield llm.Step(
+            PlanStep(action="animate", target="CORE_SPHERE", motion="bounce", say="bounce")
+        )
+
+    monkeypatch.setattr(llm, "stream_plan", bounce_plan)
+    ctx = SessionContext()
+    ctx.latest_scene = scene
+    token = bind_session(ctx)
+    packets: list = []
+
+    async def emit_log(agent, message, level="info"):
+        return None
+
+    async def emit_packet(packet):
+        packets.append(packet)
+
+    async def emit_status(agent, status, command_id=None, note=None):
+        return None
+
+    async def emit_cancel(*args, **kwargs):
+        return None
+
+    async def emit_suggest(*args, **kwargs):
+        return None
+
+    async def emit_question(*args, **kwargs):
+        return None
+
+    async def emit_plan_update(*args, **kwargs):
+        return None
+
+    await PlanRunner(Producer()).run(
+        "animation goes crazy",
+        scene,
+        "cmd-crazy",
+        emit_log,
+        emit_packet,
+        emit_status,
+        None,
+        emit_cancel,
+        emit_suggest,
+        emit_question,
+        emit_plan_update,
+        prefer_strong=True,
+    )
+    reset_session(token)
+
+    assert all(p.command != "ANIMATE_OBJECT" for p in packets)
+    assert any(p.command == "SET_KEYFRAMES" for p in packets)

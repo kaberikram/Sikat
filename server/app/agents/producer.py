@@ -10,6 +10,7 @@ from ..converse import converse_intent, radio_reply
 from ..creative_parse import (
     _CREATIVE_LANGUAGE,
     _grammar_has_complete_intent,
+    catalog_motion_forbidden,
     defer_clause_to_llm,
     is_open_direction,
     is_stock_showcase,
@@ -202,6 +203,13 @@ class Producer:
         working = intent
         if intent.action == "animate" and utterance:
             working = soften_default_motion(utterance, working)
+        if (
+            working.action == "animate"
+            and not working.track_keyframes
+            and utterance
+            and catalog_motion_forbidden(utterance)
+        ):
+            return []
         if working.action == "animate" and not working.track_keyframes:
             motion = working.motion or working.preset
             if motion:

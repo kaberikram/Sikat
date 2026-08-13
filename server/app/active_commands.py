@@ -14,8 +14,17 @@ def _packet_target_name(packet: CommandPacket) -> str | None:
     return target.name or target.id
 
 
+_MOTION_FAMILY = frozenset({"ANIMATE_OBJECT", "SET_KEYFRAMES"})
+
+
+def _family(command: str) -> str:
+    if command in _MOTION_FAMILY:
+        return "motion"
+    return command
+
+
 def scope_key(target_name: str, command: str) -> str:
-    return f"{target_name.lower()}:{command}"
+    return f"{target_name.lower()}:{_family(command)}"
 
 
 def note_active(target_name: str, command: str, command_id: str) -> tuple[str, str] | None:

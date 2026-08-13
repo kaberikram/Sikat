@@ -70,14 +70,18 @@ export async function submitDirectorCommand(
   // set is never standing still while that round-trip happens, and a slow or
   // failed server degrades to a decent shot instead of an error.
   if (isCreativeBrief(trimmed)) {
-    const objects = useEditorStore.getState().objects.map((o) => ({ id: o.id, name: o.name }))
+    const objects = useEditorStore.getState().objects.map((o) => ({
+      id: o.id,
+      name: o.name,
+      position: o.position,
+    }))
     const beats = choreograph(objects, trimmed)
     runLocalPackets(trimmed, beatsToSpecs(beats))
     // Roll it, so the take plays rather than sitting authored on the timeline.
     const st = useEditorStore.getState()
     st.setTime(0)
     if (!st.isPlaying) st.togglePlay()
-    log?.('AssetAnimator', `improvising — ${beats.map((b) => b.motion).join(', ')}`)
+    log?.('AssetAnimator', `improvising a path on ${beats.map((b) => b.target).join(', ')}`)
   }
 
   const socket = getDirectorSocket()

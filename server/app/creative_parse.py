@@ -33,7 +33,7 @@ _TRUST_OR_SURPRISE = re.compile(
     r"\b("
     r"surprise me|blow my mind|impress me|"
     r"i trust you|trust you|your call|do your thing|"
-    r"go off|go crazy|go nuts|go wild|"
+    r"go off|go crazy|goes crazy|go nuts|go wild|"
     r"make it insane|make it wild"
     r")\b",
     re.I,
@@ -105,6 +105,24 @@ def is_llm_owned_clause(
 ) -> bool:
     """Alias for defer_clause_to_llm — True when the LLM owns the clause."""
     return defer_clause_to_llm(clause, intent, llm_available=llm_available)
+
+
+_LITERAL_MOTION = re.compile(
+    r"\b(bounce|spin|orbit|drop|float|rise|sway|wander)\b",
+    re.I,
+)
+
+
+def said_literal_motion(text: str) -> bool:
+    """True when the director named a craft synth (bounce/spin/orbit/…)."""
+    return bool(_LITERAL_MOTION.search(text))
+
+
+def catalog_motion_forbidden(text: str) -> bool:
+    """Open briefs must author keyframes — a motion id is not a take."""
+    if said_literal_motion(text):
+        return False
+    return is_open_direction(text)
 
 
 _OBJECT_VERB = re.compile(

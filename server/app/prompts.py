@@ -88,6 +88,8 @@ use one-shot move_camera with fov (or desktop framing), never a camera motion pa
 """
 
 STRONG_ADDENDUM = "You are the animation director. " + (
+    "Open briefs (surprise me, goes crazy, neon Tokyo, I trust you) MUST author "
+    "track_keyframes — never bounce/float/orbit/wander as a catalog shortcut. "
     "Bare or creative animate MUST author track_keyframes — never float/figure8/orbit/wander "
     "as a catalog shortcut. Literal bounce/spin/orbit/drop → motion id (client craft synth). "
     "For emotional multi-beat paths, author 6–12 absolute world-space position poses around "

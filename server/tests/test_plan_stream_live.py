@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("text", ["surprise me", "neon Tokyo"])
+@pytest.mark.parametrize("text", ["surprise me", "animation goes crazy"])
 async def test_live_stream_plan_strong_yields_mutating_step(text: str, caplog):
     caplog.set_level(logging.ERROR, logger="director.llm")
     scene = scene_with("CORE_SPHERE")
@@ -36,12 +36,13 @@ async def test_live_stream_plan_strong_yields_mutating_step(text: str, caplog):
                 if (
                     isinstance(event, llm.Step)
                     and event.step.action not in _NON_MUTATING
+                    and event.step.track_keyframes
                 ):
                     mutating.append(event.step)
                     break
     except TimeoutError:
         if not mutating:
-            pytest.fail(f"stream_plan exceeded 15s with zero mutating steps for {text!r}")
+            pytest.fail(f"stream_plan exceeded 15s with zero authored keyframes for {text!r}")
     except Exception as exc:
         pytest.fail(f"stream_plan error for {text!r}: {type(exc).__name__}: {exc}")
 
@@ -49,5 +50,6 @@ async def test_live_stream_plan_strong_yields_mutating_step(text: str, caplog):
     if "stream_plan failed" in caplog.text:
         pytest.fail(f"stream_plan logged failure for {text!r} in {elapsed:.2f}s")
 
-    assert mutating, f"zero mutating steps for {text!r} in {elapsed:.2f}s"
+    assert mutating, f"zero authored keyframe steps for {text!r} in {elapsed:.2f}s"
+    assert all(step.track_keyframes for step in mutating)
     assert elapsed < 15

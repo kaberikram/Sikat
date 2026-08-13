@@ -1,43 +1,24 @@
 /**
  * Improvisation — the set moves before anyone has finished thinking.
  *
- * An open-ended brief ("surprise me", "do crazy motion graphics") has no local
- * grammar match, so it went straight to the server and the director watched
- * nothing until the round-trip came back. When that round-trip was slow, or the
- * plan produced nothing, they watched nothing and then got an error.
- *
- * This choreographs a real take immediately from the local vocabulary —
- * `motion-synth.ts` already ships 21 motions — across whatever is actually on
- * set. It is deterministic, needs no server and no API key, and runs in the same
- * frame the words land. The LLM's richer plan still arrives and supersedes it
- * through the runtime's existing barge-in, so this is a floor, not a ceiling.
+ * An open-ended brief has no local grammar match, so it used to go straight
+ * to the server and the director watched nothing until the round-trip came
+ * back. This authors a unique seeded position path immediately against
+ * whatever is on set. The LLM's richer plan still arrives and supersedes it
+ * through barge-in (SET_KEYFRAMES replaces SET_KEYFRAMES / ANIMATE_OBJECT
+ * on the same object), so this is a floor, not a ceiling.
  *
  * The planning decisions are pure so they can be unit tested; the caller turns
  * the result into packets.
  */
-import type { MotionId } from '../motion-synth'
 import type { LocalPacketSpec } from './local-grammar'
-
-/** Motions that read well without knowing anything about the object. */
-const SAFE_MOTIONS: MotionId[] = [
-  'float',
-  'spin',
-  'bounce',
-  'orbit',
-  'sway',
-  'figure8',
-  'spiral',
-  'wobble',
-  'swing',
-  'pulse',
-  'zigzag',
-  'drift',
-]
+import type { Vec3 } from './protocol'
 
 /** Beats between each object starting, so a take reads as choreography. */
 const STAGGER_SEC = 0.35
 /** A take long enough to watch, short enough not to feel like a screensaver. */
 const TAKE_SEC = 6
+const PATH_TIMES = [0, 0.5, 1.1, 1.9, 2.8, 3.9, 5.0, 6.0] as const
 
 /** Name for the subject conjured when there is nothing on set to direct. */
 export const IMPROVISED_HERO = 'HERO_SPHERE'
@@ -45,12 +26,17 @@ export const IMPROVISED_HERO = 'HERO_SPHERE'
 export interface StageObject {
   id: string
   name: string
+  position?: Vec3
+}
+
+export interface ImprovisedKeyframe {
+  time: number
+  value: Vec3
 }
 
 export interface ImprovisedBeat {
   target: string
-  motion: MotionId
-  durationSec: number
+  keyframes: ImprovisedKeyframe[]
   /** Seconds after the take starts that this object begins. */
   delaySec: number
   /** True when this object has to be created first. */
@@ -71,6 +57,30 @@ function seedAt(seed: string, salt: number): number {
   return Math.abs(h)
 }
 
+function unitAt(seed: string, salt: number): number {
+  return (seedAt(seed, salt) % 1000) / 1000
+}
+
+function authoredPath(base: Vec3, seed: string, salt: number): ImprovisedKeyframe[] {
+  const travel = 0.35
+  const keys: ImprovisedKeyframe[] = []
+  for (let i = 0; i < PATH_TIMES.length; i++) {
+    const u = unitAt(seed, salt + i + 10)
+    const v = unitAt(seed, salt + i + 20)
+    const angle = (i / 7) * Math.PI * 2 + u * 0.8
+    const lift = (v - 0.5) * travel * 0.8
+    const x = base[0] + Math.cos(angle) * travel * (0.6 + u * 0.5)
+    const y = Math.max(0.02, base[1] + lift + travel * 0.15)
+    const z = base[2] + Math.sin(angle) * travel * (0.6 + v * 0.5)
+    keys.push({
+      time: PATH_TIMES[i],
+      value: [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000, Math.round(z * 1000) / 1000],
+    })
+  }
+  keys[keys.length - 1] = { time: TAKE_SEC, value: keys[0].value }
+  return keys
+}
+
 /**
  * Choreograph a take across what's on set.
  *
@@ -82,8 +92,7 @@ export function choreograph(objects: StageObject[], seed: string): ImprovisedBea
     return [
       {
         target: IMPROVISED_HERO,
-        motion: SAFE_MOTIONS[seedAt(seed, 0) % SAFE_MOTIONS.length],
-        durationSec: TAKE_SEC,
+        keyframes: authoredPath([0, 0.15, 0], seed, 0),
         delaySec: 0,
         spawn: true,
       },
@@ -94,9 +103,7 @@ export function choreograph(objects: StageObject[], seed: string): ImprovisedBea
   const cast = objects.slice(0, 4)
   return cast.map((obj, i) => ({
     target: obj.name,
-    // Offset the salt per object so neighbours don't land on the same motion.
-    motion: SAFE_MOTIONS[seedAt(seed, i + 1) % SAFE_MOTIONS.length],
-    durationSec: TAKE_SEC,
+    keyframes: authoredPath(obj.position ?? [0, 0, 0], seed, i + 1),
     delaySec: i * STAGGER_SEC,
     spawn: false,
   }))
@@ -115,15 +122,18 @@ export function beatsToSpecs(beats: ImprovisedBeat[]): LocalPacketSpec[] {
         },
       })
     }
+    const keyframes =
+      beat.delaySec > 0
+        ? beat.keyframes.map((k) => ({ time: k.time + beat.delaySec, value: k.value }))
+        : beat.keyframes
     specs.push({
       agent: 'AssetAnimator',
       body: {
-        command: 'ANIMATE_OBJECT',
+        command: 'SET_KEYFRAMES',
         payload: {
           target: { name: beat.target },
-          motion: beat.motion,
-          durationSec: beat.durationSec,
-          params: { delaySec: beat.delaySec },
+          property: 'position',
+          keyframes,
         },
       },
     })
