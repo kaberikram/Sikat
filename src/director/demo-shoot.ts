@@ -248,14 +248,16 @@ export function startSetDay(): string {
     }))
   })
 
-  // The hero.
+  // The hero, placed *on* the pedestal rather than at a hand-measured Y.
+  // The old `cy + 0.88` was the pedestal's height worked out by hand and
+  // pasted in — it broke silently the moment the pedestal's scale changed.
   at(4600, () => {
     enqueuePacket(packet('AssetAnimator', {
       command: 'SPAWN_OBJECT',
       payload: {
         primitive: 'sneaker',
         name: HERO,
-        position: [cx, cy + 0.88, cz],
+        anchor: { target: { name: PEDESTAL }, relation: 'on' },
         scale: [2, 2, 2],
       },
     }))

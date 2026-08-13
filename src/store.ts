@@ -212,6 +212,27 @@ export interface MotionObject {
   id: string;
   name: string;
   type: 'mesh' | 'group';
+  /**
+   * What this was created as — `box`, `sneaker`, `gltf`, …
+   *
+   * The mesh knows its own geometry and the store did not, which left the crew
+   * reading `scale (1.8,2.8,1.8)` with no idea it described a cylinder. Rides
+   * the scene snapshot so the AI can reason about kinds, not just numbers.
+   */
+  primitive?: string;
+  /**
+   * The motion currently authored on this object — `spin`, `bounce`, …
+   *
+   * `ANIMATE_OBJECT` resolved a motion id, synthesised keyframes from it, and
+   * threw the name away, so the crew could only re-infer "spin-like" from the
+   * numbers. Keeping it means "make that spin faster" can amend the track it
+   * already has instead of replacing it blind. Cleared when a packet of the
+   * same motion family overwrites the track (see `motion-family.ts`).
+   */
+  motion?: string;
+  motionParams?: Record<string, number>;
+  /** True when the clip was authored to loop rather than play once. */
+  motionLoop?: boolean;
   mesh?: THREE.Object3D;
   position: [number, number, number];
   rotation: [number, number, number];
@@ -373,6 +394,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       id,
       name: obj.name || 'Untitled Object',
       type: obj.type || 'mesh',
+      // Named explicitly, like every other field: this builder drops anything
+      // it doesn't list, which silently swallowed `primitive` and left the
+      // crew's scene brief reporting every prop as an unknown kind.
+      primitive: obj.primitive,
       mesh: obj.mesh,
       position: obj.position || [0, 0, 0],
       rotation: obj.rotation || [0, 0, 0],

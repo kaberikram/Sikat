@@ -133,7 +133,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
       new THREE.SphereGeometry(0.15, 32, 32),
       new THREE.MeshToonMaterial({ color: 0x0076ff })
     )
-    useEditorStore.getState().addObject({ name: 'CORE_SPHERE', type: 'mesh', mesh: sphere })
+    useEditorStore.getState().addObject({ name: 'CORE_SPHERE', type: 'mesh', primitive: 'sphere', mesh: sphere })
   }
 
   let lastObjectIdSig = ''

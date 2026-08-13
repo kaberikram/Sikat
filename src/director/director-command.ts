@@ -1,5 +1,15 @@
 /**
  * Shared director command submit — desktop pod + XR voice finals.
+ *
+ * Two tiers, and the split is the point. **Reflexes** (transport, undo,
+ * overlays, session cues, SET DAY) are answered locally and instantly; a
+ * round-trip on "cut" would feel broken. **Everything else goes to the crew**
+ * whenever the link is up, because a deterministic grammar returning the same
+ * canned rig for "golden hour" every time is what makes the set feel like a
+ * lookup table rather than a room with people in it.
+ *
+ * With no link, the offline grammar answers what it recognises and the rest is
+ * an honest miss. Nothing guesses.
  */
 import { beginPendingCommand, releaseCommandPresence } from './agent-runtime'
 import { noteDemoUtterance } from './demo-shoot'
@@ -8,10 +18,7 @@ import { noteCommandText } from './undo'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
-import { isCreativeBrief, normalizeUtterance } from './local-grammar'
-import { describeImprovisation, improviseSpecs } from './improvise'
-import { runLocalPackets } from './local-packets'
-import { useEditorStore } from '../store'
+import { normalizeUtterance } from './local-grammar'
 import { getDirectorSocket } from './socket'
 
 export type DirectorLogFn = (
@@ -24,60 +31,6 @@ export interface SubmitDirectorResult {
   ok: boolean
   offline?: boolean
   local?: boolean
-  /** The crew answered from the local vocabulary rather than a server plan. */
-  improvised?: boolean
-}
-
-/**
- * Commands the local crew has already answered.
- *
- * Three paths can reach the improviser for the same utterance — the link being
- * down, the budget expiring, and a late `miss` from a server that finally
- * answered with nothing. On a slow link two of them can fire for one command,
- * and improvising twice authors a second take over the first.
- */
-const improvised = new Set<string>()
-
-/**
- * Answer from the local vocabulary, against whatever is actually on set.
- *
- * Used in two places, and the distinction matters: for an open-ended brief this
- * runs *alongside* the round-trip so the set is never standing still, and the
- * server plan supersedes it through the runtime's barge-in. When the link is
- * down or the crew came back empty, it is the whole answer.
- *
- * Returns false only when there is genuinely nothing to author, or when this
- * command has already been answered locally.
- */
-export function improviseNow(
-  text: string,
-  log?: DirectorLogFn,
-  commandId?: string | null
-): boolean {
-  if (commandId) {
-    if (improvised.has(commandId)) return false
-    improvised.add(commandId)
-    if (improvised.size > 50) {
-      const oldest = improvised.values().next().value
-      if (oldest) improvised.delete(oldest)
-    }
-  }
-  const objects = useEditorStore.getState().objects.map((o) => ({
-    id: o.id,
-    name: o.name,
-    position: o.position,
-  }))
-  const specs = improviseSpecs(objects, text)
-  if (specs.length === 0) return false
-  runLocalPackets(text, specs)
-  if (specs.some((spec) => spec.body.command === 'SET_KEYFRAMES')) {
-    // Roll it, so the take plays rather than sitting authored on the timeline.
-    const st = useEditorStore.getState()
-    st.setTime(0)
-    if (!st.isPlaying) st.togglePlay()
-  }
-  log?.('AssetAnimator', describeImprovisation(specs))
-  return true
 }
 
 export async function submitDirectorCommand(
@@ -100,13 +53,16 @@ export async function submitDirectorCommand(
   noteDemoUtterance(trimmed)
 
   const log = opts?.log
-  const local = tryLocalCommand(trimmed)
+  const socket = getDirectorSocket()
+  // The crew gets first refusal on anything that isn't a reflex. The offline
+  // grammar only runs when there is nobody to ask.
+  const local = tryLocalCommand(trimmed, { allowSceneGrammar: socket.status !== 'open' })
   if (local.handled) {
     // "cut"/"stop" are swallowed locally — also stop any in-flight SceneAgent
     // loop, which otherwise never hears about it (its cancel rides user_command).
     const agentSession = activeAgentSessionId()
     if (agentSession) {
-      getDirectorSocket().sendAgentAbort(agentSession)
+      socket.sendAgentAbort(agentSession)
       clearAgentSession(agentSession)
     }
     log?.('DIRECTOR', trimmed)
@@ -118,30 +74,14 @@ export async function submitDirectorCommand(
     return { ok: true, local: true }
   }
 
-  const socket = getDirectorSocket()
   const commandId = opts?.commandId ?? newCommandId()
   noteCommandText(commandId, trimmed)
   // Echo the director before anything else touches the wire. A vision command
   // awaits a viewfinder JPEG inside `sendUserCommand`, and logging after that
-  // meant your own words appeared *after* the crew's answer to them.
+  // meant your own words appeared after the crew's answer to them.
   log?.('DIRECTOR', trimmed)
 
-  // An open-ended brief gets a real take immediately, so the set is never
-  // standing still while the round-trip happens. It still goes to the crew
-  // below, and the plan supersedes this through the runtime's barge-in.
-  // Tagged with the commandId so the dead-link path below doesn't author a
-  // second take over this one.
-  let answered = isCreativeBrief(trimmed) && improviseNow(trimmed, log, commandId)
-
-  beginPendingCommand(commandId, {
-    onTimeout: () => {
-      // The crew went quiet. Standing still is the one answer that reads as
-      // broken, so the set answers from the local vocabulary instead. A late
-      // plan still supersedes this the moment it lands.
-      improviseNow(trimmed, log, commandId)
-      opts?.onNoResponse?.()
-    },
-  })
+  beginPendingCommand(commandId, { onTimeout: opts?.onNoResponse })
   markCommandSent(commandId)
 
   const { delivery } = await socket.sendUserCommand(trimmed, {
@@ -151,13 +91,14 @@ export async function submitDirectorCommand(
   })
   if (delivery === 'sent') return { ok: true }
 
-  // The link is down or absent. Either way the director said something and the
-  // set must answer — the crew improvises now, and a held command supersedes it
-  // through the runtime's barge-in if the link comes back in time.
+  // Nobody to ask, and the offline grammar already declined above. Say so
+  // rather than inventing something — a canned guess costs more trust than an
+  // honest miss.
   releaseCommandPresence(commandId)
-  answered = improviseNow(trimmed, log, commandId) || answered
   if (delivery === 'held') {
     log?.('SYSTEM', 'link lost — holding that until the crew is back', 'warn')
+  } else {
+    log?.('SYSTEM', 'no crew on the line — that one needs the agent server', 'warn')
   }
-  return { ok: answered, offline: true, improvised: answered }
+  return { ok: false, offline: true }
 }

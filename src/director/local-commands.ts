@@ -109,7 +109,23 @@ function tryTakeCue(text: string): LocalCommandResult | null {
   return null
 }
 
-export function tryLocalCommand(raw: string): LocalCommandResult {
+/**
+ * Reflexes first, then — only when asked — the offline scene grammar.
+ *
+ * Everything above the grammar block is a *reflex*: transport, undo, overlays,
+ * session cues, SET DAY. Those stay local unconditionally, because a round-trip
+ * on "cut" would feel broken and there is nothing for a crew to interpret.
+ *
+ * The scene grammar is different. It answers "golden hour" and "add a red box"
+ * with the same canned result every time, no interpretation and no radio line —
+ * so when there is a crew to ask, we ask them. `allowSceneGrammar` is false
+ * whenever the link is up, which leaves the grammar as the no-link fallback it
+ * should always have been.
+ */
+export function tryLocalCommand(
+  raw: string,
+  opts?: { allowSceneGrammar?: boolean }
+): LocalCommandResult {
   // Spoken cues arrive punctuated and often prefixed ("Okay, cut.") — every
   // matcher below is anchored, so normalize before anything tries to match.
   const text = normalizeUtterance(raw)
@@ -204,11 +220,14 @@ export function tryLocalCommand(raw: string): LocalCommandResult {
   }
 
   // LOCAL CREW grammar — spawns, moods, FX, motions, moves. Deterministic and
-  // offline; runs through the same packet pipeline as server commands.
-  const specs = parseOfflineClauses(text)
-  if (specs) {
-    runLocalPackets(text, specs)
-    return { handled: true }
+  // offline; runs through the same packet pipeline as server commands. Only
+  // reached with no link: with a crew on the line, they interpret it instead.
+  if (opts?.allowSceneGrammar) {
+    const specs = parseOfflineClauses(text)
+    if (specs) {
+      runLocalPackets(text, specs)
+      return { handled: true }
+    }
   }
 
   return { handled: false }

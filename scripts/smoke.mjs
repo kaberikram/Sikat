@@ -11,8 +11,8 @@
  *  3. the demo cues work offline (golden hour, float)
  *  4. the offline grammar handles the pod's own suggestions (add a red box…)
  *  5. punctuated / filler-prefixed spoken forms still match ("Okay, cut.")
- *  6. sentences the grammar refuses still change the set, in the direction the
- *     words pointed — no dead-end "didn't catch that"
+ *  6. with no crew reachable, off-grammar sentences get an honest miss and
+ *     change nothing; cues the grammar knows still work
  *
  * Waits are on conditions, never durations: the crew's applies are paced behind
  * their cursors, so a stopwatch makes unrelated assertions fail on a slow
@@ -132,6 +132,23 @@ check(
 // The build is multi-packet; let the queue drain so a later cue isn't overwritten
 // by a beat still in flight.
 await waitForQuiet(sceneSignature)
+
+// The stacking invariant. SET DAY used to hardcode `cy + 0.88` for the shoe —
+// the pedestal's height measured by hand — which broke silently whenever the
+// pedestal changed. It now says `anchor: on PEDESTAL`, so this assertion is
+// what proves the anchor actually resolves against real bounds.
+const bottomTopGap = await store(() => {
+  // Read the same bounds the crew is sent, not a private recomputation.
+  const objs = window.__sceneSnapshot().objects
+  const ped = objs.find((o) => o.name === 'PEDESTAL')?.bounds
+  const hero = objs.find((o) => o.name === 'SNEAKER_ONE')?.bounds
+  if (!ped || !hero) return null
+  return hero.min[1] - ped.max[1]
+})
+check(
+  bottomTopGap !== null && Math.abs(bottomTopGap) < 0.06,
+  `the hero sits on the pedestal without a hardcoded offset (gap ${bottomTopGap})`
+)
 await page.screenshot({ path: `${OUT}02-set-built.png` })
 
 // 3 — coached cues, offline
@@ -215,50 +232,52 @@ check(
 )
 await page.screenshot({ path: `${OUT}05-spoken-forms.png` })
 
-// 6 — say anything. With no server, a sentence the grammar refuses used to
-// dead-end on "LOCAL CREW didn't catch that". The set must answer instead, and
-// it must answer the words that were actually used — a colour is not a wiggle.
-console.log('off-grammar sentences')
-const paintOf = (name) =>
-  store(
-    (n) =>
-      window.__editorStore
-        .getState()
-        .objects.find((o) => o.name === n)?.materialOverride?.color ?? null,
-    name
-  )
-const beforePaint = await paintOf('SNEAKER_ONE')
-await say('make the sneaker a deep gold, would you')
-check((await paintOf('SNEAKER_ONE')) !== beforePaint, 'an off-grammar colour request repainted the sneaker')
-
-const beforeBloom = await store(
-  () => window.__editorStore.getState().virtualCamera.postProcessing.bloom.enabled
-)
-await say('can you make the whole thing glow a bit more')
-check(
-  beforeBloom ||
-    (await store(() => window.__editorStore.getState().virtualCamera.postProcessing.bloom.enabled)),
-  'an off-grammar vibe request reached the FX stack'
-)
-
-// A signature, not a count: SET_KEYFRAMES *replaces* a track, so authoring a
-// fresh path over an existing one can leave the total unchanged.
-const keySignature = () =>
+// 6 — nothing canned. With no crew on the line, a sentence the offline grammar
+// doesn't recognise gets an honest miss and leaves the set exactly as it was.
+// The improviser that used to guess here was removed on purpose: a canned
+// answer costs more trust than admitting the crew is unreachable.
+console.log('off-grammar sentences, no crew')
+const sceneSig = () =>
   store(() =>
     JSON.stringify(
-      window.__editorStore
-        .getState()
-        .objects.map((o) => [o.name, o.keyframes.map((k) => [k.property, k.time, k.value])])
+      window.__editorStore.getState().objects.map((o) => [
+        o.name,
+        o.position,
+        o.scale,
+        o.materialOverride ?? null,
+        o.keyframes.map((k) => [k.property, k.time, k.value]),
+      ])
     )
   )
-const beforeKeys = await keySignature()
-await say('do the thing with the stuff')
-check((await keySignature()) !== beforeKeys, 'a sentence nothing understood still produced a take')
+const beforeMiss = await sceneSig()
+for (const line of [
+  'make the sneaker a deep gold, would you',
+  'do the thing with the stuff',
+]) {
+  await say(line)
+}
+check((await sceneSig()) === beforeMiss, 'off-grammar sentences left the set untouched')
+// The dev server URL is configured but nothing is listening, so the command is
+// *held* for replay rather than refused outright. Either way the pod says so
+// instead of inventing a change.
 check(
-  (await page.getByText('didn’t catch that').count()) === 0,
-  'no dead-end "didn’t catch that" for any of the above'
+  (await page.getByText('link lost').count()) > 0 ||
+    (await page.getByText('needs the agent server').count()) > 0,
+  'the pod says the crew is unreachable rather than inventing something'
 )
-await page.screenshot({ path: `${OUT}06-say-anything.png` })
+
+// …but the grammar is still the no-link fallback, so cues it knows keep working.
+const beforeFallback = await store(() => window.__editorStore.getState().objects.length)
+await say('add a green cone')
+check(
+  await waitForStore(
+    (n) => window.__editorStore.getState().objects.length === n,
+    10_000,
+    beforeFallback + 1
+  ),
+  'the offline grammar still answers what it recognises'
+)
+await page.screenshot({ path: `${OUT}06-honest-miss.png` })
 
 await browser.close()
 

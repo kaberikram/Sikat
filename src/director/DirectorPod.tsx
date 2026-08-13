@@ -20,9 +20,8 @@ import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from 
 import { currentDemoHint } from './demo-shoot'
 import { PLACEHOLDERS } from './local-grammar'
 import { isSoundEnabled, listenEnd, listenStart, missedBuzz, replyChime, setSoundEnabled } from './sound'
-import { improviseNow, submitDirectorCommand } from './director-command'
+import { submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
-import { commandTextFor } from './undo'
 import { markFirstPacket, formatLatencySummary } from './latency'
 import { COMMAND_BUDGET_MS, linkLabel, linkMode, type LinkMode } from './link-health'
 import { presenceStore } from './presence'
@@ -363,17 +362,12 @@ export function DirectorPod() {
     })
     const offLog = socket.onLog((msg) => {
       if (msg.kind === 'miss') {
-        // The crew reached the end of the plan with nothing to show. Rather
-        // than hand back a redirect and leave the set exactly as it was, the
-        // local vocabulary answers — the director said something, so something
-        // happens, and "undo that" is one cue away.
-        const said = commandTextFor(msg.forCommandId)
-        const improvised = said ? improviseNow(said, pushLog, msg.forCommandId) : false
+        // The crew's own redirect. An empty answer from a live crew is a real
+        // answer — report it and leave the set alone rather than papering over
+        // it with something canned.
         setDirectorLine({
-          text: improvised
-            ? msg.message || 'took a swing at that one'
-            : msg.message || 'didn’t catch that — name an object or a move',
-          kind: improvised ? 'reply' : 'miss',
+          text: msg.message || 'didn’t catch that — name an object or a move',
+          kind: 'miss',
         })
       } else if (
         (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&

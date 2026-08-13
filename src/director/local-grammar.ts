@@ -72,15 +72,7 @@ export function normalizeUtterance(text: string): string {
   return stripped || cleaned
 }
 
-/**
- * Exported so the improviser can read the same words loosely.
- *
- * The matchers below are whole-string anchored on purpose — a grammar that
- * half-matches is worse than one that declines. The improviser has the opposite
- * job (answer *something* to anything), so it scans these same tables for words
- * appearing anywhere in a sentence. One vocabulary, two reading strictnesses.
- */
-export const COLORS: Record<string, string> = {
+const COLORS: Record<string, string> = {
   red: '#ff3b30',
   orange: '#ff9500',
   yellow: '#ffd60a',
@@ -117,7 +109,7 @@ const PRIMITIVES: Record<string, 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus
   shoe: 'sneaker',
 }
 
-export const FX_SECTIONS: Record<string, FxSection> = {
+const FX_SECTIONS: Record<string, FxSection> = {
   bloom: 'bloom',
   glow: 'bloom',
   pixelate: 'pixelate',
@@ -141,7 +133,7 @@ const MOTION_IDS = new Set<MotionId>([
 ])
 
 /** Canned lighting rigs — the same shape SET DAY's beats use. */
-export const MOODS: Record<string, UpdateLightsPayload> = {
+const MOODS: Record<string, UpdateLightsPayload> = {
   goldenHour: {
     ambient: { color: '#4a2f3a', intensity: 0.7 },
     key: { color: '#ffb36b', intensity: 1.45, position: [-2.5, 1.6, 2] },
@@ -171,7 +163,7 @@ export const MOODS: Record<string, UpdateLightsPayload> = {
 
 const LIGHT_TRANSITION = { durationSec: 1.4, easing: 'easeInOut' as const }
 
-export function lightsSpec(payload: UpdateLightsPayload): LocalPacketSpec {
+function lightsSpec(payload: UpdateLightsPayload): LocalPacketSpec {
   return {
     agent: 'LightingTech',
     body: { command: 'UPDATE_LIGHTS', payload, transition: LIGHT_TRANSITION },
@@ -368,19 +360,6 @@ export const STOP_CUES = [
   /^that'?s\s+a\s+cut$/,
   /^stop\s+recording$/,
 ]
-
-/**
- * An open-ended creative brief — the director wants movement but hasn't said
- * what or to which object. These have no grammar match by definition, so they
- * used to go straight to the server and leave the set still until it answered.
- * Matching them lets the crew start improvising in the same frame.
- */
-export const CREATIVE_BRIEF_RE =
-  /\b(?:surprise(?:\s+me)?|impress\s+me|wow\s+me|blow\s+my\s+mind|go\s+wild|go(?:es)?\s+crazy|go\s+nuts|go\s+off|do\s+something(?:\s+cool)?|something\s+(?:cool|wild|crazy|interesting)|make\s+it\s+(?:cool|wild|crazy|interesting|pop|insane)|i\s+trust\s+you|trust\s+you|your\s+call|do\s+your\s+thing|motion\s+graphics|choreograph|freestyle|neon\s+tokyo|music\s+video|feel(?:s)?\s+like|feeling\s+like)\b/i
-
-export function isCreativeBrief(text: string): boolean {
-  return CREATIVE_BRIEF_RE.test(text)
-}
 
 export const WRAP_CUE_RE =
   /^(that'?s\s+a\s+wrap|wrap\s+it\s+up|wrap\s+for\s+today|exit\s+(?:xr|the\s+headset|headset|the\s+set)|leave\s+the\s+set)[!.]?$/
