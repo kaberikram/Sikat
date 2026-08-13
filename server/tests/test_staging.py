@@ -49,11 +49,17 @@ async def test_direct_active_precedes_packet_for_agent(producer, scene):
 
 
 async def test_direct_no_actionable_command_streams_nothing(producer, scene):
+    """Nothing to do on set: no packets, no cursors, no agent churn.
+
+    The crew still answers on the radio — "the set always answers" — so this
+    reports describe_only, which is what suppresses a no-op error on top of a
+    reply the director already got.
+    """
     planned, describe_only, packets, statuses = await _collect(
         producer, "tell me a joke", scene
     )
     assert planned == []
-    assert describe_only is False
+    assert describe_only is True
     assert packets == []
     assert statuses == []
 

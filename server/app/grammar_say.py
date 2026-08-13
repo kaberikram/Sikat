@@ -1,7 +1,15 @@
 """Parametric set-radio lines for grammar-owned intents (no LLM)."""
 from __future__ import annotations
 
-from .schema import Intent
+from .schema import Intent, PlacementAnchor
+
+_RELATION_WORDS: dict[str, str] = {
+    "on": "on",
+    "above": "above",
+    "beside": "beside",
+    "in_front_of": "in front of",
+    "behind": "behind",
+}
 
 _COLOR_WORDS: dict[str, str] = {
     "#ff3b30": "red",
@@ -23,6 +31,22 @@ def _color_word(color: str | None) -> str | None:
     return _COLOR_WORDS.get(lower)
 
 
+def _placement_words(anchor: PlacementAnchor | None) -> str:
+    """Where the prop is actually going.
+
+    This used to be the constant "dead center" for every spawn, which was true
+    right up until placement anchors started working — after that the crew was
+    confidently narrating the one thing it was no longer doing.
+    """
+    if anchor is None:
+        return "dead center"
+    name = (anchor.target.name or "").strip().lower()
+    relation = _RELATION_WORDS.get(anchor.relation, anchor.relation)
+    if not name:
+        return relation
+    return f"{relation} the {name}"
+
+
 def _truncate_words(text: str, max_words: int = 8) -> str:
     words = text.split()
     if len(words) <= max_words:
@@ -37,9 +61,10 @@ def radio_line(intent: Intent) -> str:
     if action == "spawn":
         prim = (intent.primitive or "box").lower()
         color = _color_word(intent.color)
+        where = _placement_words(intent.anchor)
         if color:
-            return _truncate_words(f"{prim} in, {color}, dead center")
-        return _truncate_words(f"{prim} in, dead center")
+            return _truncate_words(f"{prim} in, {color}, {where}")
+        return _truncate_words(f"{prim} in, {where}")
 
     if action == "remove":
         target = intent.target or "it"
@@ -47,6 +72,10 @@ def radio_line(intent: Intent) -> str:
 
     if action == "transform":
         target = intent.target or "it"
+        if intent.anchor is not None:
+            return _truncate_words(
+                f"moving {target} {_placement_words(intent.anchor)}"
+            )
         if intent.mode == "relative":
             return _truncate_words(f"nudging {target}")
         return _truncate_words(f"moving {target}")

@@ -38,7 +38,8 @@ DEEPSEEK_API_KEY=sk-... uv run uvicorn app.main:app --port 8000
 
 Model overrides:
 - `DIRECTOR_QUALITY_MODEL=claude-sonnet-5` — animate/choreo refine (default)
-- `DIRECTOR_FAST_MODEL=deepseek-v4-flash` — reserved for future fast helpers
+- `DIRECTOR_FAST_MODEL=claude-haiku-4-5` — direct commands ("add a sphere beside
+  the cube") and the fast planning tier
 - `DIRECTOR_MODEL=...` — legacy override for whichever provider is selected
 
 Provider resolution:
@@ -53,6 +54,13 @@ Provider resolution:
 
 With no key (or `DIRECTOR_LLM_PROVIDER=none`) the rule grammar runs the show.
 Any LLM error or invalid JSON also degrades to the rule grammar.
+
+With a key, the LLM is what *understands* a command; the grammar's read is the
+instant preview and a parse hint, and it is never applied on its own. Only two
+things stay grammar-owned when keyed, because they are control rather than scene
+understanding: transport (`play` / `cut` / `record`) and complete performer
+assignment. Direct commands take a single-round fast-tier stream; choreography,
+moods, and open briefs go to the plan-act-observe loop.
 
 ## Test
 

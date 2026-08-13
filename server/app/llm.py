@@ -396,6 +396,14 @@ def select_tier(
     if override not in ("", "anthropic"):
         log.warning("unknown DIRECTOR_LLM_PROVIDER %r; using Anthropic planning", override)
     if not os.environ.get("ANTHROPIC_API_KEY"):
+        # Auto-selection has to agree with select_provider, which falls back to
+        # DeepSeek here. Disagreeing strands the whole LLM lane: Producer asks
+        # this function whether a crew is on the line, gets None on a perfectly
+        # keyed DeepSeek deployment, and hands the set to the rule grammar.
+        if frame is None and os.environ.get("DEEPSEEK_API_KEY"):
+            return "deepseek", os.environ.get(
+                "DIRECTOR_FAST_MODEL", DEEPSEEK_DEFAULT_MODEL
+            )
         return None
     if escalated:
         return "anthropic", os.environ.get(
@@ -403,6 +411,18 @@ def select_tier(
             os.environ.get("DIRECTOR_QUALITY_MODEL", ANTHROPIC_DEFAULT_MODEL),
         )
     return "anthropic", os.environ.get("DIRECTOR_FAST_MODEL", ANTHROPIC_FAST_DEFAULT_MODEL)
+
+
+def _fast_model_for(provider: str) -> str:
+    """Cheap, low-latency model for direct commands.
+
+    Mirrors ``select_tier``'s fast branch. A plain "add a sphere beside the
+    cube" does not need the choreography model, and the director feels every
+    hundred milliseconds between saying it and seeing it.
+    """
+    if provider == "deepseek":
+        return os.environ.get("DIRECTOR_FAST_MODEL", DEEPSEEK_DEFAULT_MODEL)
+    return os.environ.get("DIRECTOR_FAST_MODEL", ANTHROPIC_FAST_DEFAULT_MODEL)
 
 
 def _model_for(provider: str) -> str:
@@ -1097,16 +1117,20 @@ async def stream_intents(
     frame: SceneFrame | None = None,
     on_partial: Callable[[dict[str, str | int]], Awaitable[None]] | None = None,
     hints: str | None = None,
+    tier: Literal["fast", "quality"] = "quality",
 ) -> AsyncIterator[Intent]:
     """Stream intents as the LLM completes each one, instead of waiting for the
     full response. Callers should treat zero yielded intents (including on any
     provider error, which is logged and swallowed here) as a signal to fall
     back to :func:`parse_intents` / the rule parser exactly as before.
+
+    ``tier="fast"`` is for direct commands, where latency is the whole
+    experience; the quality tier stays the default for choreography.
     """
     provider = select_provider(frame)
     if provider is None:
         return
-    model = _model_for(provider)
+    model = _fast_model_for(provider) if tier == "fast" else _model_for(provider)
     started = time.monotonic()
     count = 0
     try:

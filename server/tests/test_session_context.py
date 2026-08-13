@@ -15,6 +15,18 @@ def test_record_captures_target_and_summary():
     assert session_context.last_target() == "BOX_MDL_01"
 
 
+def test_record_keeps_where_the_prop_went():
+    """A follow-up like "put one on top of that" has to resolve from history —
+    the scene brief describes the set as it is, never what was just asked for."""
+    scene = scene_with("PEDESTAL")
+    intents = parse("put a sphere on the pedestal", scene)
+    session_context.record("put a sphere on the pedestal", intents)
+    (exchange,) = session_context.history()
+    (summary,) = exchange.intent_summaries
+    assert "sphere" in summary
+    assert "on PEDESTAL" in summary
+
+
 def test_last_target_scans_back_over_empty_exchanges():
     scene = scene_with("CORE_SPHERE")
     session_context.record("move the sphere up 2", parse("move the sphere up 2", scene))

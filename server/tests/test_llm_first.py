@@ -5,7 +5,7 @@ import asyncio
 
 from app import llm
 from app.agents.producer import Producer
-from app.schema import Intent
+from app.schema import Intent, PlacementAnchor, Target
 
 from tests.helpers import scene_with
 
@@ -48,29 +48,79 @@ async def _collect_llm(producer, text, scene, *, emit_cancel=None):
     return planned, describe_only, packets, logs, cancels
 
 
-async def test_pure_deterministic_skips_llm(monkeypatch, scene):
+async def test_deterministic_line_still_goes_to_the_llm(monkeypatch, scene):
+    """The grammar can parse this one, but it is not the authority any more.
+
+    It used to answer outright, which is why "add sphere beside the cube"
+    spawned a box: the regex table matched `cube` before `sphere`.
+    """
     stream_started = False
 
-    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         nonlocal stream_started
         stream_started = True
         yield Intent(action="spawn", primitive="box", color="#ff3b30")
+        yield Intent(action="update_fx", section="bloom", fx_enabled=True)
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    monkeypatch.setattr(llm, "stream_intents", slow_stream)
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
     monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
 
     _, _, packets, logs, _ = await _collect_llm(
         Producer(), "add a red box then enable bloom", scene
     )
-    assert not stream_started
+    assert stream_started
     assert not any(any(j in msg for j in _PARSE_JARGON) for msg in logs)
     assert any(p.command == "SPAWN_OBJECT" for p in packets)
     assert any(p.command == "UPDATE_FX" for p in packets)
 
 
+async def test_the_crew_read_outranks_the_grammar_read(monkeypatch, scene):
+    """The line that started all this.
+
+    "add sphere beside the cube" used to spawn a box at dead centre, because
+    the grammar answered outright and its table matched `cube` before `sphere`.
+    Whatever the grammar makes of a line now, exactly one spawn reaches the set
+    and it is the crew's.
+    """
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
+        yield Intent(
+            action="spawn",
+            primitive="sphere",
+            anchor=PlacementAnchor(target=Target(name="CUBE"), relation="beside"),
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+
+    _, _, packets, _, _ = await _collect_llm(
+        Producer(), "add sphere beside the cube", scene_with("CUBE")
+    )
+    spawns = [p for p in packets if p.command == "SPAWN_OBJECT"]
+    assert len(spawns) == 1, "the grammar must not also spawn something"
+    assert spawns[0].payload.primitive == "sphere"
+    assert spawns[0].payload.anchor is not None
+    assert spawns[0].payload.anchor.target.name == "CUBE"
+    assert spawns[0].payload.anchor.relation == "beside"
+    assert spawns[0].payload.position is None
+
+
+async def test_deterministic_line_is_instant_with_no_llm(monkeypatch, scene):
+    """No key, no link: the grammar still runs the whole show, instantly."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DIRECTOR_LLM_PROVIDER", raising=False)
+
+    _, _, packets, _, _ = await _collect_llm(
+        Producer(), "add a red box then enable bloom", scene
+    )
+    assert any(p.command == "SPAWN_OBJECT" for p in packets)
+    assert any(p.command == "UPDATE_FX" for p in packets)
+
+
 async def test_compound_line_adds_animate(monkeypatch, scene):
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(action="spawn", primitive="sphere", color="#3366ff")
         yield Intent(action="animate", target="CORE_SPHERE", motion="wander")
 
@@ -92,7 +142,7 @@ async def test_compound_line_adds_animate(monkeypatch, scene):
 async def test_llm_animate_no_grammar_staging(monkeypatch, scene):
     box_scene = scene_with("BOX")
 
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(action="animate", target="BOX", motion="wander")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
@@ -112,7 +162,7 @@ async def test_llm_animate_no_grammar_staging(monkeypatch, scene):
 async def test_llm_animate_emits_fresh_not_refinement(monkeypatch, scene):
     box_scene = scene_with("BOX")
 
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(
             action="animate",
             target="BOX",
@@ -135,7 +185,7 @@ async def test_llm_animate_emits_fresh_not_refinement(monkeypatch, scene):
 async def test_all_deferred_llm_empty_triggers_grammar_rescue(monkeypatch, scene):
     box_scene = scene_with("BOX")
 
-    async def empty_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def empty_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         if False:
             yield Intent(action="animate", target="BOX", motion="wander")
 
@@ -151,7 +201,7 @@ async def test_all_deferred_llm_empty_triggers_grammar_rescue(monkeypatch, scene
 
 
 async def test_spawn_color_mismatch_no_set_material(monkeypatch, scene):
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(action="spawn", primitive="sphere", color="#ff0000")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
@@ -167,7 +217,7 @@ async def test_spawn_color_mismatch_no_set_material(monkeypatch, scene):
 
 
 async def test_compound_wander_targets_spawned_sphere(monkeypatch, scene):
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(action="spawn", primitive="sphere", color="#0a84ff")
         yield Intent(action="animate", target="it", motion="wander")
 
@@ -187,7 +237,7 @@ async def test_compound_wander_targets_spawned_sphere(monkeypatch, scene):
 
 
 async def test_duplicate_llm_spawn_dropped(monkeypatch, scene):
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(
             action="spawn",
             primitive="box",
@@ -209,15 +259,22 @@ async def test_duplicate_llm_spawn_dropped(monkeypatch, scene):
 
 
 async def test_showcase_comma_line_emits_spawns_and_animates(monkeypatch, scene):
-    """Comma compound must not collapse to mood-only; motion clauses reach the LLM."""
+    """Comma compound must not collapse to mood-only — every clause survives.
+
+    The crew now owns the whole line rather than splitting it with the grammar,
+    so the stream carries the spawns and the mood as well as the motion.
+    """
     from app import performers, session_context
 
     performers.clear()
     session_context.clear()
 
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
+        yield Intent(action="spawn", primitive="box", color="#ff3b30")
+        yield Intent(action="spawn", primitive="sphere", color="#0a84ff")
         yield Intent(action="animate", target="sphere", motion="bounce", addressee=1)
         yield Intent(action="animate", target="box", motion="orbit", addressee=2)
+        yield Intent(action="set_scene", mood="sunset")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(llm, "stream_intents", fake_stream)

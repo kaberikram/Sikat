@@ -70,8 +70,17 @@ class ShootResidue:
 
 def _summarize(intent: Intent) -> str:
     parts = [intent.action]
+    if intent.action == "spawn" and intent.primitive:
+        parts.append(intent.primitive)
     if intent.target:
         parts.append(intent.target)
+    # Where it went, not just what moved. "put one on top of that" needs the
+    # last placement to have survived the exchange, and the brief only ever
+    # described the set as it is now — never what the director just asked for.
+    if intent.anchor is not None:
+        relation = intent.anchor.relation.replace("_", " ")
+        name = intent.anchor.target.name or "it"
+        parts.append(f"{relation} {name}")
     if intent.preset:
         parts.append(intent.preset)
     if intent.mood:

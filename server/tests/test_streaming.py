@@ -47,7 +47,7 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     gate = asyncio.Event()
     released = asyncio.Event()
 
-    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         gate.set()
         await released.wait()
         yield Intent(action="update_fx", section="bloom", fx_enabled=True)
@@ -69,7 +69,10 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     async def emit_status(agent, status, command_id=None, note=None):
         return None
 
-    # First clause hits instant grammar; second is LLM-owned — LLM stays pending.
+    # The grammar can read the first clause, but it is no longer the authority:
+    # nothing is applied to the set until the crew answers. The director is not
+    # left staring at a still frame — the instant feedback is the intent preview,
+    # emitted in main.py before direct() is even called.
     task = asyncio.create_task(
         producer.direct(
             "add a red box then xyzzy fuzz the mood",
@@ -82,17 +85,14 @@ async def test_fallback_clauses_stream_while_llm_pending(monkeypatch, scene):
     )
 
     await asyncio.wait_for(gate.wait(), timeout=1.0)
-    for _ in range(50):
-        if events:
-            break
-        await asyncio.sleep(0.01)
-    assert events[0] == "SPAWN_OBJECT", "grammar spawn should stream before LLM returns"
+    await asyncio.sleep(0.05)
+    assert events == [], "nothing should reach the set while the crew is still reading"
     assert not task.done()
     released.set()
     planned, describe_only = await task
     assert describe_only is False
-    assert [p.command for p in packets] == ["SPAWN_OBJECT", "UPDATE_FX"]
-    assert len(planned) == 2
+    assert [p.command for p in packets] == ["UPDATE_FX"]
+    assert len(planned) == 1
 
 
 def test_split_clauses_exported():
@@ -138,7 +138,7 @@ async def test_suggest_intent_routes_without_packets(monkeypatch, scene):
     suggestions: list = []
     packets: list = []
 
-    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(action="spawn", primitive="box", color="#ff3b30", say="spawning box")
         yield Intent(
             action="suggest",

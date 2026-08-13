@@ -9,11 +9,11 @@ from .. import active_commands, fallback_parser, llm, performers, session_contex
 from ..converse import converse_intent, radio_reply
 from ..creative_parse import (
     _CREATIVE_LANGUAGE,
-    _grammar_has_complete_intent,
     catalog_motion_forbidden,
     defer_clause_to_llm,
     is_open_direction,
     is_stock_showcase,
+    said_literal_motion,
 )
 from ..motion_policy import soften_default_motion
 from ..motion_floor import is_animation_seeking
@@ -764,14 +764,14 @@ class Producer:
         return built
 
     def _resolve_pronoun_target(
-        self, intent: Intent, grammar_emitted: list[Intent], scene: SceneState | None = None
+        self, intent: Intent, spawned_here: list[Intent], scene: SceneState | None = None
     ) -> Intent:
         if intent.action != "animate":
             return intent
         target = (intent.target or "").strip().lower()
         if target and target not in ("it", "that", "this", "this one"):
             return intent
-        for g in grammar_emitted:
+        for g in spawned_here:
             if g.action == "spawn":
                 # Must predict the same name AssetAnimator.build() will give
                 # this spawn in the same command, scene-uniqued identically.
@@ -808,6 +808,7 @@ class Producer:
         emit_cancel: EmitCancel,
         scene: SceneState | None,
         utterance: str | None = None,
+        spawned_here: list[Intent] | None = None,
     ) -> list[CommandPacket]:
         if intent.action in ("describe", "suggest", "clarify"):
             return []
@@ -818,7 +819,12 @@ class Producer:
                 await emit_log(self.assistant.name, intent.say, "info")
             return []
 
-        working = self._resolve_pronoun_target(intent, grammar_emitted, scene)
+        # "make it wander" points at whatever this same command just spawned —
+        # which, now that the LLM owns spawns, is usually a spawn the LLM itself
+        # streamed a moment ago rather than one the grammar emitted.
+        working = self._resolve_pronoun_target(
+            intent, grammar_emitted if spawned_here is None else spawned_here, scene
+        )
         return await self._emit_staged_intent(
             working,
             command_id,
@@ -939,13 +945,18 @@ class Producer:
 
         if any_llm_owned:
             llm_agen = llm.stream_intents(
-                text, scene, frame, on_partial=on_llm_partial, hints=hints or None
+                text, scene, frame, on_partial=on_llm_partial, hints=hints or None,
+                tier="fast",
             )
             llm_queue = asyncio.Queue()
             llm_feed_task = asyncio.create_task(_drain_llm_stream(llm_agen, llm_queue))
             log.debug("streaming %d clause(s); LLM in parallel", len(clauses))
 
         grammar_emitted: list[Intent] = []
+        # Spawns made anywhere in this command, grammar or LLM — the referent
+        # for a later "make it wander". Kept apart from grammar_emitted, which
+        # is duplicate detection: two sphere spawns from the LLM are two props.
+        spawned_here: list[Intent] = []
         all_intents: list[Intent] = []
         all_packets: list[CommandPacket] = []
         describe_only = True
@@ -1014,6 +1025,7 @@ class Producer:
             grammar_emitted.append(voiced)
             grammar_handled_count += 1
             if raw_intent.action == "spawn" and built:
+                spawned_here.append(voiced)
                 spawn_name = built[0].payload.name
                 if spawn_name:
                     session_context.note_target(spawn_name)
@@ -1049,9 +1061,15 @@ class Producer:
                     emit_cancel,
                     scene,
                     utterance=text,
+                    spawned_here=spawned_here,
                 )
                 if built:
                     llm_directed_count += 1
+                    if intent.action == "spawn":
+                        spawned_here.append(intent)
+                        spawn_name = built[0].payload.name
+                        if spawn_name:
+                            session_context.note_target(spawn_name)
                 all_packets.extend(built)
             await llm_feed_task
 
@@ -1170,12 +1188,6 @@ class Producer:
                 emit_packet, emit_status, scene
             )
             return [], True
-        is_complete_grammar = (
-            bool(parsed)
-            and all(intent is not None and _grammar_has_complete_intent(intent) for intent in parsed)
-            and not _CREATIVE_LANGUAGE.search(text)
-            and not is_open_direction(text)
-        )
         # Mood / shine / surprise is authored by the planner when keyed.
         # Stock look is grammar-owned only for an explicit default/stock ask.
         wants_authored_scene = (
@@ -1186,31 +1198,18 @@ class Producer:
             )
         )
         llm_ready = llm.select_tier(frame, escalated=False) is not None
-        if is_complete_grammar and not (llm_ready and wants_authored_scene):
-            intents = [intent for intent in parsed if intent is not None]
-            packets = await self._stream_intents(
-                intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
-                utterance=text,
-            )
-            session_context.record(text, intents)
-            log.debug("instant via grammar: %d intent(s)", len(intents))
-            return packets, not packets
 
+        # No crew on the line: the rule grammar runs the show, exactly as it
+        # always has. This is the *only* path that applies grammar packets.
         if not llm_ready:
-            intents = fallback_parser.parse(text, scene)
+            intents = [intent for intent in parsed if intent is not None]
             if intents:
-                clarify = next((intent for intent in intents if intent.action == "clarify"), None)
-                if clarify is not None:
-                    await self._emit_clarify(
-                        clarify, text, command_id, emit_log, emit_question, emit_cancel,
-                        emit_packet, emit_status, scene
-                    )
-                    return [], True
                 packets = await self._stream_intents(
                     intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
                     utterance=text,
                 )
                 session_context.record(text, intents)
+                log.debug("keyless: %d grammar intent(s)", len(intents))
                 return packets, not packets
             reply = converse_intent(text)
             await self._emit_describe(reply, emit_log)
@@ -1242,11 +1241,30 @@ class Producer:
         has_animation_request = any(
             intent is not None and intent.action == "animate" for intent in parsed
         ) or is_animation_seeking(text)
+        wants_authored_take = (
+            wants_authored_scene
+            or is_open_direction(text)
+            or bool(_CREATIVE_LANGUAGE.search(text))
+            # An animation ask only needs the plan-act-observe loop when the
+            # take has to be *authored*. "bounce the box" names the instrument
+            # — sending that through the planner buys a 2s observe wait and a
+            # second round that re-animates what round one just did.
+            or (has_animation_request and not said_literal_motion(text))
+        )
+        if not wants_authored_take:
+            # A direct command — "add a sphere beside the cube". The LLM still
+            # reads it (the grammar's guess is a preview and a hint, never the
+            # answer), but through the single-round streaming lane rather than
+            # the plan-act-observe loop, which is built for choreography and
+            # spends a 2s observe wait and a strong-tier round on the way.
+            log.debug("direct command → LLM fast lane")
+            return await self._direct_multi_clause(
+                text, clauses, scene, command_id, emit_log, emit_packet, emit_status,
+                frame, emit_preview, emit_cancel, emit_question, emit_suggest,
+                skip_clarify_resume=True,
+            )
         return await PlanRunner(self).run(
             text, scene, command_id, emit_log, emit_packet, emit_status, frame, emit_cancel,
             emit_suggest, emit_question, emit_plan_update,
-            prefer_strong=has_animation_request
-            or wants_authored_scene
-            or is_open_direction(text)
-            or bool(_CREATIVE_LANGUAGE.search(text)),
+            prefer_strong=wants_authored_take,
         )

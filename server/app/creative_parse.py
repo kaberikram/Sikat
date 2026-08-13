@@ -85,19 +85,24 @@ def defer_clause_to_llm(
 
         if is_open_speech(clause):
             return False
-    if intent.action == "animate":
-        return True
-    # Mood / shine / showcase is authored by the planner when keyed.
     # Stock look is grammar-owned only for an explicit default/stock ask.
-    if intent.action == "set_scene" and intent.mood:
-        return not is_stock_showcase(clause)
-    if _CREATIVE_LANGUAGE.search(clause.lower()):
-        return True
-    if _TRUST_OR_SURPRISE.search(clause.lower()) or _MOOD_VIBE.search(clause.lower()):
-        return True
-    if not _grammar_has_complete_intent(intent):
-        return True
-    return False
+    if intent.action == "set_scene" and intent.mood and is_stock_showcase(clause):
+        return False
+    # Transport and performer addressing are deterministic control, not scene
+    # understanding: "cut" is never misread, and a round trip before the camera
+    # stops is the one latency the floor actually feels. (The client answers
+    # most of these itself — see local-commands.ts.)
+    if intent.action == "playback":
+        return False
+    if intent.action == "assign":
+        return not _grammar_has_complete_intent(intent)
+    # Everything that changes the *set* belongs to the LLM when one is on the
+    # line. The grammar is a bag of ordered regexes: it read "add sphere beside
+    # the cube" as a box, because `cube` sits above `sphere` in PRIMITIVE_WORDS
+    # and it matched against the whole clause. Its guess is still worth having —
+    # it drives the instant preview and rides along as a parse hint — but it is
+    # a guess, and a model that can actually read the sentence outranks it.
+    return True
 
 
 def is_llm_owned_clause(
