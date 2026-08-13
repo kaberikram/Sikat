@@ -149,10 +149,18 @@ let nativeCooldownUntil = 0
  * Backstop only. The socket's own close (after CloseStream) and Deepgram's
  * UtteranceEnd both finish the hold sooner — this just bounds the wait when
  * neither arrives, and it is the delay the user feels when they don't.
+ *
+ * It sits at the very front of the latency chain: nothing else in the system
+ * can start until the transcript is dispatched, so every millisecond here is
+ * added to every other cost. Trimmed to roughly the round-trip it is guarding,
+ * on the reasoning that a backstop longer than the thing it backs up is just
+ * dead air. The words themselves are safe either way — `finalSegments` has
+ * already accumulated them, so a short grace risks a late *tail*, not the
+ * utterance.
  */
-const FINISH_GRACE_MS = 1500
+const FINISH_GRACE_MS = 600
 /** Backstop only — rec.stop() -> onend normally resolves in well under this. */
-const NATIVE_STOP_GRACE_MS = 800
+const NATIVE_STOP_GRACE_MS = 400
 
 // ---- native path ----
 
@@ -451,7 +459,11 @@ async function openDeepgramSocket(
     interim_results: 'true',
     smart_format: 'true',
     punctuate: 'true',
-    utterance_end_ms: '1500',
+    // 1000 is Deepgram's floor. The hold already bounds the utterance — the
+    // director let go of the key — so the long tail this normally guards
+    // against isn't a risk here, and the shorter window is time the set gets
+    // back on every spoken command.
+    utterance_end_ms: '1000',
     // Repeated `keyterm=` params. The typed field JSON-encodes an array, which
     // Deepgram would read as one nonsense term — queryParams serializes with
     // arrayFormat 'repeat', which is the shape the API wants.

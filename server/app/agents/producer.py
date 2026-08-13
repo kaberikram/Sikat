@@ -980,9 +980,13 @@ class Producer:
         if llm_feed_task is not None and llm_queue is not None:
             while True:
                 try:
-                    intent = await asyncio.wait_for(llm_queue.get(), timeout=45.0)
+                    intent = await asyncio.wait_for(
+                        llm_queue.get(), timeout=llm.COMMAND_BUDGET_SEC
+                    )
                 except asyncio.TimeoutError:
-                    log.warning("LLM drain timed out after 45s")
+                    # Past this the client has already given up and improvised;
+                    # anything still arriving would land on a set that moved on.
+                    log.warning("LLM drain timed out after %.0fs", llm.COMMAND_BUDGET_SEC)
                     break
                 if intent is _LLM_STREAM_DONE:
                     break

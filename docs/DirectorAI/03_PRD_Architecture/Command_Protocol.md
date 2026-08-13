@@ -15,6 +15,7 @@ Implementations: `server/app/schema.py` (pydantic, authoritative validation) and
 | `user_command` | `text`, `commandId`, `scene?`, `frame?` | one director instruction; `scene` is a full snapshot (`mode: full`) at command time; `frame` is an optional viewfinder JPEG (base64, no `data:` prefix) when vision triggers fire — never on heartbeat |
 | `scene_state` | see **SceneState** below | sent on connect + debounced 300 ms on change (`mode: heartbeat`) |
 | `telemetry` | `source`, `pose {position, rotation?, fov?}` | camera-operator pose; server converts to `MOVE_CAMERA` (throttled ≤ 20 Hz) |
+| `ping` | — | liveness probe; server answers `pong` immediately. Sent every 20 s |
 
 ### SceneState (heartbeat + full)
 
@@ -48,7 +49,40 @@ Breaking change: `camera` → **`virtualCamera`**.
 | `agent_question` | `agent`, `commandId`, `question`, `options[]` |
 | `agent_suggestion` | `suggestionId`, `agent`, `text`, `kind (observation\|suggestion\|reaction)`, `suggestedCommand?`, `subjectObject?` |
 | `agent_log` | `agent`, `level (info\|warn\|error)`, `message`, `forCommandId?` |
+| `pong` | — (answer to `ping`; its arrival is the whole payload) |
 | `error` | `message`, `forCommandId?` |
+
+### Link liveness (client-owned)
+
+`scene_state` is only sent when the snapshot signature changes, so an untouched
+set produces no traffic at all and a proxy can drop the connection with neither
+side noticing — the browser still reports `readyState === OPEN`, sends still
+"succeed", and the command vanishes.
+
+The client pings every 20 s and treats **any** inbound frame as proof of life.
+After 30 s with nothing received it closes the socket itself so the normal
+reconnect path runs (which also retires orphaned cursors). Reconnect backoff is
+skipped entirely on `online` and on the tab becoming visible — a waking laptop
+is the most likely moment for a reconnect to succeed.
+
+A `user_command` that cannot be sent is **held**, not dropped: up to 5 commands,
+each valid for 20 s, replayed oldest-first on reconnect with their original
+`commandId` so `command_cancel` / supersede still match. The held payload keeps
+the scene snapshot from when the director spoke, since that is the set they were
+describing.
+
+### Command budget
+
+One number, shared, so the layers cannot disagree: `COMMAND_BUDGET_MS`
+(`src/director/link-health.ts`) and `COMMAND_BUDGET_SEC` (`server/app/llm.py`),
+currently **12 s**. It bounds the client's pending-command timer, the pod's
+input state, the server's LLM drain, and — via `LLM_HTTP_TIMEOUT_SEC` — the
+provider SDK timeouts, which otherwise default to ten minutes.
+
+When it expires the client **improvises** from the local vocabulary rather than
+reporting a failure. Same on a `kind: "miss"` log (the server reached the end of
+a plan with no packets) and whenever the link is down. Change both constants
+together.
 
 ### Progressive execution (Phase F)
 

@@ -20,9 +20,11 @@ import { activeAgentSessionId, clearAgentSession, startAgentToolExecutor } from 
 import { currentDemoHint } from './demo-shoot'
 import { PLACEHOLDERS } from './local-grammar'
 import { isSoundEnabled, listenEnd, listenStart, missedBuzz, replyChime, setSoundEnabled } from './sound'
-import { submitDirectorCommand } from './director-command'
+import { improviseNow, submitDirectorCommand } from './director-command'
 import { newCommandId } from './ids'
+import { commandTextFor } from './undo'
 import { markFirstPacket, formatLatencySummary } from './latency'
+import { COMMAND_BUDGET_MS, linkLabel, linkMode, type LinkMode } from './link-health'
 import { presenceStore } from './presence'
 import { startTakeRecorder } from './take-recorder'
 import {
@@ -57,7 +59,13 @@ interface PlanProgress {
 }
 
 const MAX_LOG = 40
-const COMMAND_INPUT_TIMEOUT_MS = 30_000
+/**
+ * The input's "crew is working…" must not outlast the runtime's own patience —
+ * the two disagreeing is what left the pod claiming work for twenty seconds
+ * after the cursors had already given up. One budget, plus a beat for the last
+ * packet of a plan that answered just inside it.
+ */
+const COMMAND_INPUT_TIMEOUT_MS = COMMAND_BUDGET_MS + 2_000
 let logCounter = 0
 
 /**
@@ -94,14 +102,27 @@ const MENU_ROW_CLASS =
   `block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[16px] lowercase ` +
   `hover:bg-wash ${PRESSABLE}`
 
-const STATUS_COLORS: Record<SocketStatus, string> = {
-  open: '#30d158',
-  connecting: '#ffd60a',
-  closed: '#ff3b30',
-}
-
 /** Calm amber for "no server in this setup" — offline is a mode, not an error. */
 const LOCAL_CREW_COLOR = '#ffb020'
+
+const LINK_COLORS: Record<LinkMode, string> = {
+  open: '#30d158',
+  connecting: '#ffd60a',
+  // Amber, not red: a reconnect in progress is the system working, and held
+  // commands will replay. Red is for a link that was never going to exist.
+  reconnecting: '#ffd60a',
+  'local-crew': LOCAL_CREW_COLOR,
+  unconfigured: LOCAL_CREW_COLOR,
+}
+
+const LINK_HINTS: Record<LinkMode, string> = {
+  open: 'connected to the agent server',
+  connecting: 'reaching the agent server…',
+  reconnecting: 'link dropped — anything you say is held and replays on reconnect',
+  'local-crew': 'no agent server answering; the on-device crew runs the set',
+  unconfigured:
+    'no agent server configured — set VITE_DIRECTOR_WS_URL for freeform direction; the on-device crew runs the set meanwhile',
+}
 
 const SEEN_SET_DAY_KEY = 'radio-edit:seen-set-day'
 
@@ -204,8 +225,17 @@ export function DirectorPod() {
   const reduceMotion = useReducedMotion()
   const hasContext = selectedId !== null
   // Never-connected ≠ error: without a server the LOCAL CREW grammar runs the
-  // set, so the pod shows a calm amber mode instead of a red failure.
-  const offlineLocal = status !== 'open' && !getDirectorSocket().everConnected
+  // set, so the pod shows a calm amber mode instead of a red failure. A link
+  // that *was* up and dropped is a third thing again — see `linkMode`.
+  const socket = getDirectorSocket()
+  const mode = linkMode({
+    status,
+    configured: socket.isConfigured,
+    everConnected: socket.everConnected,
+    attempts: socket.reconnectAttempts,
+  })
+  const heldCount = socket.heldCommandCount
+  const offlineLocal = mode === 'local-crew' || mode === 'unconfigured'
 
   const pushLog = useCallback((source: string, text: string, level: LogEntry['level'] = 'info') => {
     setLog((prev) => [
@@ -233,7 +263,6 @@ export function DirectorPod() {
   }, [completeCommand])
 
   useMountEffect(() => {
-    const socket = getDirectorSocket()
     const offStatus = socket.onStatus(setStatus)
     // Packets no longer apply on arrival — the agent runtime queues them and
     // paces each apply behind its cursor's flight, logging as it commits.
@@ -334,10 +363,17 @@ export function DirectorPod() {
     })
     const offLog = socket.onLog((msg) => {
       if (msg.kind === 'miss') {
-        // The crew's own redirect, not a fixed string.
+        // The crew reached the end of the plan with nothing to show. Rather
+        // than hand back a redirect and leave the set exactly as it was, the
+        // local vocabulary answers — the director said something, so something
+        // happens, and "undo that" is one cue away.
+        const said = commandTextFor(msg.forCommandId)
+        const improvised = said ? improviseNow(said, pushLog, msg.forCommandId) : false
         setDirectorLine({
-          text: msg.message || 'didn’t catch that — name an object or a move',
-          kind: 'miss',
+          text: improvised
+            ? msg.message || 'took a swing at that one'
+            : msg.message || 'didn’t catch that — name an object or a move',
+          kind: improvised ? 'reply' : 'miss',
         })
       } else if (
         (msg.kind === 'reply' || msg.agent === 'DirectorsAssistant') &&
@@ -607,27 +643,22 @@ export function DirectorPod() {
 
         <div
           className="flex items-center justify-between px-1.5 select-none"
-          title={
-            offlineLocal
-              ? 'offline — cue grammar runs on-device; connect an agent server (VITE_DIRECTOR_WS_URL) for freeform direction'
-              : status
-          }
+          title={LINK_HINTS[mode]}
         >
           <div className="flex items-center gap-[7px]">
-            <span
-              className="status-dot"
-              style={{ background: offlineLocal ? LOCAL_CREW_COLOR : STATUS_COLORS[status] }}
-            />
+            <span className="status-dot" style={{ background: LINK_COLORS[mode] }} />
             <span className="text-[11.5px] font-semibold text-ink-soft tracking-[-0.05px]">
               director_link
             </span>
           </div>
           <span className="font-mono text-[10px] text-faint">
-            {log.length === 0
+            {/* An idle, connected link has nothing to report, so the pod invites
+                direction instead. Any other mode is worth knowing about before
+                you speak — especially on a cold load with no server, where the
+                on-device crew is about to answer and you should know it. */}
+            {log.length === 0 && (mode === 'open' || mode === 'connecting')
               ? 'awaiting direction…'
-              : offlineLocal
-                ? 'local crew'
-                : status}
+              : linkLabel(mode, heldCount)}
           </span>
         </div>
 
