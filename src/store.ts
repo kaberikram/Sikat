@@ -4,7 +4,7 @@ import {
   isNearZeroDelta,
   translateObjectPose,
   vecDelta,
-} from './scene/xr/stage-relocate'
+} from './scene/xr/stage-relocate.ts'
 
 export const VIRTUAL_CAMERA_ID = 'virtualCamera' as const;
 

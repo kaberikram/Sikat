@@ -3,6 +3,7 @@ import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js
 import type { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { updateGhosts } from '../director/ghost-preview'
+import { tickTweens } from '../director/tween'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCameraBase } from '../timeline-apply'
 import { renderViewfinderPass } from './viewfinder-pass'
 import { ensureShadowsOnObjectMeshes } from './shadows'
@@ -68,6 +69,13 @@ export function createAnimateLoop(ctx: {
   const frame = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
     lastTime = now
+
+    // The agent tween engine has no clock of its own; it borrows this one. It
+    // has to run before the store→mesh apply below, or every tween shows a
+    // frame late. Driving it from here (rather than its own rAF, which the
+    // browser suspends for the whole of an immersive session) is what makes
+    // crew transitions work in the headset at all.
+    tickTweens()
 
     const { isPlaying, isRolling, cameraOpMode, xrActive } = useEditorStore.getState()
     if (isPlaying) {
