@@ -80,6 +80,7 @@ export function applyCellOutlines(
       if (!(child as THREE.Mesh).isMesh) return
       const mesh = child as THREE.Mesh
       if (mesh.userData.isCellOutlineShell) return
+      if (mesh instanceof THREE.SkinnedMesh) return
       if (!mesh.userData.outline) {
         const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide })
         const outlineMesh = new THREE.Mesh(mesh.geometry, outlineMaterial)

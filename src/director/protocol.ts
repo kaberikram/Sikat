@@ -37,7 +37,7 @@ export interface PlacementAnchor {
 }
 
 export interface SpawnObjectPayload {
-  primitive: 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus' | 'plane' | 'text' | 'sneaker'
+  primitive: 'box' | 'sphere' | 'cone' | 'cylinder' | 'torus' | 'plane' | 'text' | 'sneaker' | 'gltf' | 'image'
   id?: string | null
   name?: string | null
   color?: string | null
@@ -47,6 +47,11 @@ export interface SpawnObjectPayload {
   scale?: Vec3 | null
   /** Placed relative to something already on set. Wins over `position`. */
   anchor?: PlacementAnchor | null
+  /**
+   * Client-only public asset path (SET DAY). Packets with `url` never go to
+   * the server — `buildSpawnMesh` pulls a mesh preloaded into the demo cache.
+   */
+  url?: string | null
 }
 
 export interface RemoveObjectPayload {

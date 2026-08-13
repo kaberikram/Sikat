@@ -3,6 +3,7 @@ import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js
 import type { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { updateGhosts } from '../director/ghost-preview'
+import { tickDemoAssets } from '../director/demo-assets'
 import { tickTweens } from '../director/tween'
 import { applyObjectTransformAtTime, applyVirtualCameraAtTime, applyVirtualCameraBase } from '../timeline-apply'
 import { renderViewfinderPass } from './viewfinder-pass'
@@ -172,6 +173,7 @@ export function createAnimateLoop(ctx: {
       if (!gizmoObj) applyObjectTransformAtTime(t, obj)
       if (!ctx.scene.children.includes(obj.mesh)) ctx.scene.add(obj.mesh)
     }
+    tickDemoAssets(delta)
 
     ctx.agentCursors.update(now)
     updateStageMarker(ctx.stageMarker)

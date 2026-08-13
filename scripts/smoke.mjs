@@ -7,7 +7,7 @@
  *
  * Asserts, with NO agent server running:
  *  1. cold load shows the SET DAY cue chip and a calm LOCAL CREW status
- *  2. clicking the chip builds the set (pedestal + sneaker + sign spawn)
+ *  2. clicking the chip builds the set (pedestal + run clip + sign spawn)
  *  3. the demo cues work offline (golden hour, float)
  *  4. the offline grammar handles the pod's own suggestions (add a red box…)
  *  5. punctuated / filler-prefixed spoken forms still match ("Okay, cut.")
@@ -115,7 +115,7 @@ await page.screenshot({ path: `${OUT}01-cold-load.png` })
 // 2 — the front door: click the chip, watch the set build
 console.log('set day build')
 await page.locator('.cue-chip').click()
-for (const expected of ['PEDESTAL', 'SNEAKER_ONE', 'SET_SIGN']) {
+for (const expected of ['PEDESTAL', 'RUN_CLIP', 'SET_SIGN']) {
   check(
     await waitForStore(
       (n) => window.__editorStore.getState().objects.some((o) => o.name === n),
@@ -141,7 +141,7 @@ const bottomTopGap = await store(() => {
   // Read the same bounds the crew is sent, not a private recomputation.
   const objs = window.__sceneSnapshot().objects
   const ped = objs.find((o) => o.name === 'PEDESTAL')?.bounds
-  const hero = objs.find((o) => o.name === 'SNEAKER_ONE')?.bounds
+  const hero = objs.find((o) => o.name === 'RUN_CLIP')?.bounds
   if (!ped || !hero) return null
   return hero.min[1] - ped.max[1]
 })
@@ -173,13 +173,13 @@ check(
   await store(() => window.__editorStore.getState().lighting.key.color.toLowerCase() === '#ffb36b'),
   'golden hour relit the key light'
 )
-await say('make the sneaker float')
+await say('make the clip float')
 check(
   await store(() => {
-    const hero = window.__editorStore.getState().objects.find((o) => o.name === 'SNEAKER_ONE')
+    const hero = window.__editorStore.getState().objects.find((o) => o.name === 'RUN_CLIP')
     return Boolean(hero && hero.keyframes.some((k) => k.property === 'position'))
   }),
-  'sneaker float authored position keyframes'
+  'hero float authored position keyframes'
 )
 await page.screenshot({ path: `${OUT}03-golden-float.png` })
 

@@ -88,10 +88,10 @@ A fully offline, end-to-end demo of the whole platform. Works on desktop
 answers; the slate (XR) / input placeholder (desktop) coaches the next line.
 
 1. **"crew, set the stage"** — the crew rolls in one by one (GAFFER, ANIMATOR,
-   VFX), then builds a product set around you: mood lighting, pedestal, hero
-   sneaker with a slow turntable spin, glowing sign.
+   VFX), then builds a product set around you: mood lighting, pedestal, Mixamo
+   runner (idle mesh + run clip, looping + turntable spin), Rat'teryx backdrop.
 2. **"golden hour"** — the gaffer relights the set warm.
-3. **"make the sneaker float"** — the hero lifts into a hover.
+3. **"make the clip float"** — the hero lifts into a hover.
 4. **"action"** — you're rolling; walk the set and film with the camcorder
    (trigger = REC on Quest).
 5. **"and cut"** — the take ends and replays on the review monitor.

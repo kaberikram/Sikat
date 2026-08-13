@@ -69,6 +69,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   mainRenderer.shadowMap.type = THREE.PCFShadowMap
   mainRenderer.toneMapping = THREE.ACESFilmicToneMapping
   mainRenderer.toneMappingExposure = 1
+  mainRenderer.outputColorSpace = THREE.SRGBColorSpace
   mainRenderer.domElement.style.display = 'block'
   container.appendChild(mainRenderer.domElement)
 
@@ -78,6 +79,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   pipRenderer.shadowMap.enabled = true
   pipRenderer.toneMapping = THREE.ACESFilmicToneMapping
   pipRenderer.toneMappingExposure = 1
+  pipRenderer.outputColorSpace = THREE.SRGBColorSpace
   pipRenderer.domElement.style.width = '100%'
   pipRenderer.domElement.style.height = '100%'
   pipRenderer.domElement.style.display = 'block'

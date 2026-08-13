@@ -3,7 +3,7 @@
  *
  * One cue ("crew, set the stage") runs a fully deterministic, fully offline
  * build: the crew rolls in one by one, then constructs a product set —
- * pedestal, hero sneaker, sign, mood lighting, bloom, turntable spin —
+ * pedestal, Mixamo runner, Rat'teryx backdrop, mood lighting, bloom, turntable spin —
  * through the SAME packet pipeline real commands use (enqueuePacket →
  * agent-runtime flight/work/settle theater). Nothing is faked; it just never
  * depends on a server.
@@ -12,6 +12,7 @@
  * placeholder on desktop) and advances as cues are spoken.
  */
 import { enqueuePacket } from './agent-runtime'
+import { disposeDemoAssets, HERO_URL, preloadDemoAssets, SIGN_URL } from './demo-assets'
 import { parseOfflineClauses } from './local-grammar'
 import { getDirectorSocket } from './socket'
 import { setRoomDim } from '../scene/xr/entry-sequence'
@@ -22,7 +23,7 @@ import type { CommandPacket, Vec3 } from './protocol'
 
 const DEMO_COMMAND_ID = 'demo-set-day'
 
-const HERO = 'SNEAKER_ONE'
+const HERO = 'RUN_CLIP'
 const PEDESTAL = 'PEDESTAL'
 const SIGN = 'SET_SIGN'
 
@@ -61,7 +62,7 @@ const BEATS: Beat[] = [
     },
   },
   {
-    hint: 'say “make the sneaker float”',
+    hint: 'say “make the clip float”',
     cue: /float|hover|levitate/,
     offlineFallback: () => {
       enqueuePacket(packet('AssetAnimator', {
@@ -181,6 +182,7 @@ export function startSetDay(): string {
   const stage = useEditorStore.getState().stage
   const [cx, cy, cz] = stage.position
   const r = stage.radius
+  const assetsReady = preloadDemoAssets()
 
   rollCall()
 
@@ -251,54 +253,39 @@ export function startSetDay(): string {
   // The hero, placed *on* the pedestal rather than at a hand-measured Y.
   // The old `cy + 0.88` was the pedestal's height worked out by hand and
   // pasted in — it broke silently the moment the pedestal's scale changed.
+  // Size is already fitted in the preloaded mesh (unit scale).
   at(4600, () => {
-    enqueuePacket(packet('AssetAnimator', {
-      command: 'SPAWN_OBJECT',
-      payload: {
-        primitive: 'sneaker',
-        name: HERO,
-        anchor: { target: { name: PEDESTAL }, relation: 'on' },
-        scale: [2, 2, 2],
-      },
-    }))
+    void assetsReady.then(() => {
+      enqueuePacket(packet('AssetAnimator', {
+        command: 'SPAWN_OBJECT',
+        payload: {
+          primitive: 'gltf',
+          name: HERO,
+          url: HERO_URL,
+          anchor: { target: { name: PEDESTAL }, relation: 'on' },
+        },
+      }))
+    })
   })
 
-  // Sign behind the stage.
+  // Rat'teryx backdrop behind the stage.
   at(5800, () => {
-    enqueuePacket(packet('AssetAnimator', {
-      command: 'SPAWN_OBJECT',
-      payload: {
-        primitive: 'text',
-        name: SIGN,
-        text: 'SET DAY',
-        color: '#FFE092',
-        position: [cx, cy + 1.5, cz - 1.0],
-        scale: [2, 2, 2],
-      },
-    }))
+    void assetsReady.then(() => {
+      enqueuePacket(packet('AssetAnimator', {
+        command: 'SPAWN_OBJECT',
+        payload: {
+          primitive: 'image',
+          name: SIGN,
+          url: SIGN_URL,
+          position: [cx, cy + 1.4, cz - 1.0],
+        },
+      }))
+    })
   })
 
-  // Hero glow — threshold stays above the darkened set so only the emissive
-  // hero blooms, not the whole viewfinder frame.
+  // Turntable — no sneaker-era emissive glow. That painted the mesh coral in
+  // the editor and let viewfinder bloom copy albedo→emissive (white PiP).
   at(6800, () => {
-    enqueuePacket(packet('VFXOperator', {
-      command: 'UPDATE_FX',
-      payload: {
-        section: 'bloom',
-        // Bloom "surface glow" boosts EVERY material's emissive by
-        // color × boost at this intensity (viewfinder-mesh-fx) — keep both
-        // low or the lit whites wash the whole frame out.
-        patch: { enabled: true, strength: 0.5, threshold: 0.9, emissiveBoost: 0.7, emissiveIntensity: 0.45 },
-      },
-    }))
-    enqueuePacket(packet('VFXOperator', {
-      command: 'SET_MATERIAL',
-      payload: { target: { name: HERO }, emissive: '#ff5a5f', emissiveIntensity: 0.12 },
-    }))
-  })
-
-  // Turntable.
-  at(7800, () => {
     enqueuePacket(packet('AssetAnimator', {
       command: 'ANIMATE_OBJECT',
       payload: {
@@ -313,7 +300,7 @@ export function startSetDay(): string {
 
   // Frame the hero for the viewfinder (in XR the handheld camcorder pose
   // takes over live — this sets the desktop money shot). Pose scales with the
-  // stage so the sneaker sits in frame above the pedestal instead of the lens
+  // stage so the hero sits in frame above the pedestal instead of the lens
   // parking inside it.
   at(8800, () => {
     const heroPos = useEditorStore.getState().objects
@@ -342,6 +329,7 @@ export function strikeSet(): string {
   state.active = false
   state.beat = -1
   wrapChord()
+  disposeDemoAssets()
   // Lights up — the wrap brings the room back.
   setRoomDim(0)
 

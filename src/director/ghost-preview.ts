@@ -110,6 +110,7 @@ export function updateGhosts(nowMs: number): void {
 
 export function showGhost(msg: IntentPreviewMessage, opts?: GhostOptions): void {
   if (msg.action === 'spawn' && msg.primitive) {
+    if (msg.primitive === 'gltf' || msg.primitive === 'image') return
     const material = makeGhostMaterial()
     const root = createPrimitiveMesh(msg.primitive, GHOST_COLOR)
     root.traverse((node) => {
