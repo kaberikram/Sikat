@@ -64,7 +64,7 @@ const MIN_RADIUS = 0.08
 const easeOut = (t: number) => 1 - (1 - t) ** 3
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
 
-// ---- module state (one field per session, same shape as aim-picker/entry-sequence) ----
+// ---- module state (one field per session, same shape as entry-sequence) ----
 
 let pool: THREE.Mesh | null = null
 let poolMat: THREE.MeshBasicMaterial | null = null

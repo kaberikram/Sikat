@@ -30,6 +30,7 @@ const SANS_LG = '700 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
 export const XR_FONT_SANS = SANS
 export const XR_FONT_SANS_LG = SANS_LG
 export const XR_FONT_MONO = 'bold 36px "JetBrains Mono", ui-monospace, monospace'
+export const XR_FONT_MONO_LG = 'bold 52px "JetBrains Mono", ui-monospace, monospace'
 
 const FONT_PROBE = '700 56px "Baloo 2"'
 

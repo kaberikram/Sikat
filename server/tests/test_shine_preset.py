@@ -185,3 +185,98 @@ async def test_showcase_keyless_still_fires_macro(producer, scene):
     assert any(
         p.command == "SPAWN_OBJECT" and p.payload.name == "SHINE_TITLE" for p in packets
     )
+
+
+def _scripted_take(plan_calls: list[str], hero: str = "LLM_HERO"):
+    async def scripted_plan(text, scene_arg, frame=None, *, tier="fast", extra_context=None, adjustment=False):
+        plan_calls.append(text)
+        if adjustment:
+            return
+        yield llm.Say("authored take")
+        yield llm.Meta(mode="execute", needs_deeper_creativity=False)
+        yield llm.Step(
+            PlanStep.model_validate(
+                {"action": "spawn", "primitive": "cone", "name": hero, "say": "hero in"}
+            )
+        )
+        yield llm.Step(PlanStep.model_validate({"action": "playback", "playback_action": "play"}))
+
+    return scripted_plan
+
+
+async def test_neon_tokyo_never_calls_mood_catalog(monkeypatch, producer, scene):
+    mood_calls: list[str] = []
+    shine_calls: list[str] = []
+    plan_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "app.agents.producer.mood_packets",
+        lambda mood: mood_calls.append(mood) or [],
+    )
+    monkeypatch.setattr(
+        "app.agents.producer.shine_packets",
+        lambda *args, **kwargs: shine_calls.append("shine") or [],
+    )
+    monkeypatch.setattr(llm, "select_tier", lambda frame, *, escalated: ("deepseek", "test-model"))
+    monkeypatch.setattr(llm, "stream_plan", _scripted_take(plan_calls))
+
+    packets: list = []
+
+    async def emit_packet(packet):
+        packets.append(packet)
+
+    await producer.direct("neon Tokyo", scene, "cmd-neon", emit_packet=emit_packet)
+
+    assert plan_calls and plan_calls[0] == "neon Tokyo"
+    assert mood_calls == []
+    assert shine_calls == []
+    assert any(p.command == "SPAWN_OBJECT" and p.payload.name == "LLM_HERO" for p in packets)
+
+
+async def test_surprise_me_never_calls_catalogs(monkeypatch, producer, scene):
+    mood_calls: list[str] = []
+    shine_calls: list[str] = []
+    plan_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "app.agents.producer.mood_packets",
+        lambda mood: mood_calls.append(mood) or [],
+    )
+    monkeypatch.setattr(
+        "app.agents.producer.shine_packets",
+        lambda *args, **kwargs: shine_calls.append("shine") or [],
+    )
+    monkeypatch.setattr(llm, "select_tier", lambda frame, *, escalated: ("deepseek", "test-model"))
+    monkeypatch.setattr(llm, "stream_plan", _scripted_take(plan_calls, "SURPRISE_HERO"))
+
+    packets: list = []
+
+    async def emit_packet(packet):
+        packets.append(packet)
+
+    await producer.direct("surprise me", scene, "cmd-surprise", emit_packet=emit_packet)
+
+    assert plan_calls and plan_calls[0] == "surprise me"
+    assert mood_calls == []
+    assert shine_calls == []
+    assert any(
+        p.command == "SPAWN_OBJECT" and p.payload.name == "SURPRISE_HERO" for p in packets
+    )
+
+
+async def test_stock_showcase_still_uses_catalog_when_keyed(monkeypatch, producer, scene):
+    plan_calls: list[str] = []
+
+    async def forbidden_plan(*args, **kwargs):
+        plan_calls.append("hit")
+        if False:
+            yield llm.Say("should not run")
+
+    monkeypatch.setattr(llm, "select_tier", lambda frame, *, escalated: ("deepseek", "test-model"))
+    monkeypatch.setattr(llm, "stream_plan", forbidden_plan)
+
+    packets, _ = await producer.direct("stock showcase", scene, "cmd-stock")
+    assert plan_calls == []
+    assert any(
+        p.command == "SPAWN_OBJECT" and p.payload.name == "SHINE_TITLE" for p in packets
+    )

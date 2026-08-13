@@ -28,6 +28,15 @@ def _heartbeat(objects: list[ObjectSnapshot]) -> dict:
 def _enable_proactive(monkeypatch):
     monkeypatch.setenv("DIRECTOR_PROACTIVE", "1")
 
+    async def live_huddle(obs, scene, persona=None):
+        name = obs.subject_object or "it"
+        return {
+            "say": f"nudge {name} back onto the disc",
+            "suggested_command": obs.suggested_command,
+        }
+
+    monkeypatch.setattr("app.observer.phrase_observation", live_huddle)
+
 
 def test_off_stage_triggers_suggestion():
     on_stage = ObjectSnapshot(

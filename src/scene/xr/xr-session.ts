@@ -6,7 +6,6 @@ import { abandonDemo } from '../../director/demo-shoot'
 import { clearAllGhosts } from '../../director/ghost-preview'
 import { clearProposal } from '../../director/proposal-ghost'
 import { EDITOR_LAYER } from '../infrastructure'
-import { clearAimPick } from './aim-picker'
 import { clearAttention } from './attention-field'
 import { resetAmbientChannel } from './ambient-channel'
 import { resetAmbientSense } from './ambient-sense'
@@ -110,10 +109,12 @@ export function initXrSession(
       clearProposal()
       resetAmbientChannel()
       resetAmbientSense()
-      clearAimPick()
       clearAttention()
       stopXrCoach()
 
+      // Carry the set back to world origin so desktop isn't left staring at
+      // an empty ring while props sit at the last XR standoff.
+      store.relocateStage([0, 0, 0])
       store.setXrActive(false)
       store.setCameraOpMode(priorCameraOpMode)
     })

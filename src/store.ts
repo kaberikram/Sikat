@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
+import {
+  isNearZeroDelta,
+  translateObjectPose,
+  vecDelta,
+} from './scene/xr/stage-relocate'
 
 export const VIRTUAL_CAMERA_ID = 'virtualCamera' as const;
 
@@ -280,6 +285,8 @@ interface EditorState {
   setSubMeshShadow: (objectId: string, meshUuid: string, castAndReceive: boolean) => void
   updateLighting: (patch: LightingPatch) => void
   updateStage: (patch: Partial<StageAnchor>) => void
+  /** Move stage + every object (and position keyframes) + key light by the same delta. */
+  relocateStage: (position: [number, number, number]) => void
   setObjectMaterial: (id: string, patch: MaterialOverride) => void
   updateCamera: (updates: Partial<VirtualCamera>) => void
   setSelected: (id: string | null) => void
@@ -427,6 +434,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateStage: (patch) => set((state) => ({
     stage: { ...state.stage, ...patch },
   })),
+  relocateStage: (position) => set((state) => {
+    const delta = vecDelta(state.stage.position, position)
+    if (isNearZeroDelta(delta)) return state
+    return {
+      stage: { ...state.stage, position },
+      objects: state.objects.map((obj) => {
+        const next = translateObjectPose(obj.position, obj.keyframes, delta)
+        return { ...obj, position: next.position, keyframes: next.keyframes }
+      }),
+      lighting: {
+        ...state.lighting,
+        key: {
+          ...state.lighting.key,
+          position: [
+            state.lighting.key.position[0] + delta[0],
+            state.lighting.key.position[1] + delta[1],
+            state.lighting.key.position[2] + delta[2],
+          ],
+        },
+      },
+    }
+  }),
   setCameraOpMode: (on) => set({ cameraOpMode: on }),
   setXrActive: (on) => set({ xrActive: on }),
   setFatalRenderError: (on) => set({ fatalRenderError: on }),

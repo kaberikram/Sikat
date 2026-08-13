@@ -7,7 +7,13 @@ import re
 
 from .. import active_commands, fallback_parser, llm, performers, session_context, undo
 from ..converse import converse_intent, radio_reply
-from ..creative_parse import _CREATIVE_LANGUAGE, _grammar_has_complete_intent, defer_clause_to_llm, is_open_direction
+from ..creative_parse import (
+    _CREATIVE_LANGUAGE,
+    _grammar_has_complete_intent,
+    defer_clause_to_llm,
+    is_open_direction,
+    is_stock_showcase,
+)
 from ..motion_policy import soften_default_motion
 from ..motion_floor import is_animation_seeking
 from ..grammar_say import intent_with_radio
@@ -64,56 +70,13 @@ _LLM_STREAM_DONE = object()
 AGENT_STEP_DELAY = 0.15  # between successive packets from the same specialist
 AGENT_STAGGER = 0.15  # head-start offset between specialists so cursors fan out
 
-# Present-tense verb per command, shown on the agent's cursor as a "note" the
-# instant it goes active — fills the parse latency ("dead air") so the crew's
-# thinking is visible before the first packet lands. The client refines these
-# per packet as work proceeds (e.g. "tracing bounce 12/25").
-_COMMAND_NOTE = {
-    "SPAWN_OBJECT": "spawning",
-    "REMOVE_OBJECT": "removing",
-    "TRANSFORM_OBJECT": "moving",
-    "ANIMATE_OBJECT": "animating",
-    "MOVE_CAMERA": "framing shot",
-    "UPDATE_LIGHTS": "lighting",
-    "SET_MATERIAL": "painting",
-    "UPDATE_FX": "compositing",
-    "SET_KEYFRAMES": "keyframing",
-    "PLAYBACK": "cueing",
-}
 
-
-def _agent_note(agent_packets: list[CommandPacket]) -> str:
-    """A short 'what am I doing' note derived from the agent's first packet."""
-    if not agent_packets:
-        return "working"
-    return _COMMAND_NOTE.get(agent_packets[0].command, "working")
-
-
-_INSTANT_NOTE_POOL = [
-    "copy",
-    "on it",
-    "hearing you",
-    "rolling on that",
-    "got it",
-    "standing by",
-    "yep",
-    "roger",
-]
-
-
-def _display_note(note: str | None, agent_packets: list[CommandPacket]) -> str | None:
-    if note:
-        session_context.note_say(note)
-        return note
-    if not agent_packets:
-        return session_context.pick_fresh_note(_INSTANT_NOTE_POOL)
-    base = _agent_note(agent_packets)
-    recent = session_context.get_session().recent_notes
-    if base in recent:
-        alts = [v for v in dict.fromkeys(_COMMAND_NOTE.values()) if v != base]
-        return session_context.pick_fresh_note(alts + _INSTANT_NOTE_POOL)
-    session_context.note_say(base)
-    return base
+def _display_note(note: str | None) -> str | None:
+    """Pass the plan's say through once. Empty slot otherwise — the mesh is the note."""
+    if not note:
+        return None
+    session_context.note_say(note)
+    return note
 
 
 _SUMMARY_PARAM_KEYS = ("hops", "height", "amplitude", "frequency", "turns", "radius")
@@ -566,7 +529,7 @@ class Producer:
             index: int, agent: str, agent_packets: list[CommandPacket]
         ) -> None:
             await asyncio.sleep(index * AGENT_STAGGER)
-            await emit_status(agent, "active", command_id, _display_note(note, agent_packets))
+            await emit_status(agent, "active", command_id, _display_note(note))
             for step, packet in enumerate(agent_packets):
                 if step:
                     await asyncio.sleep(AGENT_STEP_DELAY)
@@ -1158,17 +1121,19 @@ class Producer:
             bool(parsed)
             and all(intent is not None and _grammar_has_complete_intent(intent) for intent in parsed)
             and not _CREATIVE_LANGUAGE.search(text)
+            and not is_open_direction(text)
         )
-        # Shine/showcase is creative direction: with an LLM configured it gets
-        # choreographed fresh each take instead of replaying the canned macro.
-        wants_showcase = any(
-            intent is not None
-            and intent.action == "set_scene"
-            and intent.mood == "shine"
-            for intent in parsed
+        # Mood / shine / surprise is authored by the planner when keyed.
+        # Stock look is grammar-owned only for an explicit default/stock ask.
+        wants_authored_scene = (
+            not is_stock_showcase(text)
+            and any(
+                intent is not None and intent.action == "set_scene" and intent.mood
+                for intent in parsed
+            )
         )
         llm_ready = llm.select_tier(frame, escalated=False) is not None
-        if is_complete_grammar and not (llm_ready and wants_showcase):
+        if is_complete_grammar and not (llm_ready and wants_authored_scene):
             intents = [intent for intent in parsed if intent is not None]
             packets = await self._stream_intents(
                 intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
@@ -1228,6 +1193,7 @@ class Producer:
             text, scene, command_id, emit_log, emit_packet, emit_status, frame, emit_cancel,
             emit_suggest, emit_question, emit_plan_update,
             prefer_strong=has_animation_request
-            or wants_showcase
+            or wants_authored_scene
+            or is_open_direction(text)
             or bool(_CREATIVE_LANGUAGE.search(text)),
         )

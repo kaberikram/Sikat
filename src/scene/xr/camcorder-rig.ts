@@ -23,7 +23,6 @@ import {
 import { beatTick, missedBuzz } from '../../director/sound'
 import { useEditorStore } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
-import { clearAimPick, getAimedObject, setAimChangeListener, updateAimPick } from './aim-picker'
 import { bindAmbientChannel, resetAmbientChannel, respond } from './ambient-channel'
 import {
   getAmbientSignals,
@@ -68,7 +67,6 @@ const WORKING_SAMPLE_STILLNESS = 0.75
 const WORKING_SAMPLE_INTERVAL_MS = 4000
 
 const LENS_FORWARD_M = 0.05
-const AIM_RAY_LEN = 2.5
 
 /**
  * Which object is this packet about? Used to send attention to the target
@@ -136,57 +134,7 @@ export function createCamcorderRig(
   directorSlate.setAmbient(true)
   bindAmbientChannel(directorSlate)
 
-  // Debug aim ray — matches virt cam forward (grip −Z pitched AIM_UP_DEG up).
-  const aimRay = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.003, 0.003, AIM_RAY_LEN, 8),
-    new THREE.MeshBasicMaterial({
-      color: 0xff3300,
-      depthTest: false,
-      transparent: true,
-      opacity: 0.85,
-    })
-  )
-  // Cylinder default +Y → −Z, then same upward pitch as the virt cam.
-  aimRay.rotation.set(Math.PI / 2 - AIM_UP_RAD, 0, 0)
-  const rayMid = new THREE.Vector3(0, 0.01, -AIM_RAY_LEN / 2 - LENS_FORWARD_M)
-  rayMid.applyQuaternion(AIM_OFFSET)
-  aimRay.position.copy(rayMid)
-  aimRay.renderOrder = 20
-  group.add(aimRay)
-
-  const aimTip = new THREE.Mesh(
-    new THREE.SphereGeometry(0.012, 12, 12),
-    new THREE.MeshBasicMaterial({
-      color: 0xffee00,
-      depthTest: false,
-    })
-  )
-  const tipPos = new THREE.Vector3(0, 0.01, -AIM_RAY_LEN - LENS_FORWARD_M)
-  tipPos.applyQuaternion(AIM_OFFSET)
-  aimTip.position.copy(tipPos)
-  aimTip.renderOrder = 21
-  group.add(aimTip)
-
   setEditorLayer(group)
-
-  // Point + speak lock-on. The tip still shifts so the ray reads as armed, but
-  // the acknowledgement now belongs to the object: the ambient channel lights
-  // the thing you mean instead of printing its name on the slate.
-  const aimRayMat = aimRay.material as THREE.MeshBasicMaterial
-  const aimTipMat = aimTip.material as THREE.MeshBasicMaterial
-  setAimChangeListener((id, name) => {
-    if (id) {
-      aimRayMat.color.set(0x57cfa0)
-      aimTipMat.color.set(0x57cfa0)
-      aimTip.scale.setScalar(1.8)
-      pulse(padRef, 0.25, 20)
-    } else {
-      aimRayMat.color.set(0xff3300)
-      aimTipMat.color.set(0xffee00)
-      aimTip.scale.setScalar(1)
-    }
-    respond({ kind: 'aimed', objectId: id, name })
-  })
 
   xrInput.xrOrigin.gripSpaces.right.add(group)
 
@@ -314,7 +262,7 @@ export function createCamcorderRig(
     const standoff = standoffForThisDirector()
     if (!shouldReplaceStage(pos, forward, st.stage.position, standoff)) return
     const position = computeStagePose(pos, forward, standoff).position
-    st.updateStage({ position })
+    st.relocateStage(position)
     playStageLockPulse()
     beatTick()
   }
@@ -418,15 +366,9 @@ export function createCamcorderRig(
         const commandId = newCommandId()
         respond({ kind: 'working', on: true })
         thinkingLine = line
-        // Point + speak: "this/that/it" while aiming means THAT object.
-        const aimed = /\b(this|that|it|there|these|those)\b/i.test(line) ? getAimedObject() : null
-        // You named it, so attention goes there now rather than when the crew
-        // gets round to it — the set shows what it thinks you meant.
-        if (aimed) respond({ kind: 'addressed', objectId: aimed.id })
         void submitDirectorCommand(transcript, {
           forceVision: true,
           commandId,
-          targetHint: aimed ?? undefined,
           onNoResponse: () => {
             thinkingLine = null
             respond({ kind: 'working', on: false })
@@ -442,7 +384,7 @@ export function createCamcorderRig(
             // Local commands apply instantly — no crew round-trip to wait on,
             // so the change itself is the acknowledgement.
             thinkingLine = null
-            respond({ kind: 'landed', objectId: aimed?.id ?? null })
+            respond({ kind: 'landed', objectId: null })
           } else if (result.ok) {
             respond({ kind: 'offline', on: false })
             // Stay working until the first crew packet or reply lands
@@ -550,7 +492,7 @@ export function createCamcorderRig(
         const standoff = standoffForThisDirector()
         const head: V3 = valid ? pos : [0, 1.6, 0]
         const position = computeStagePose(head, forward, standoff).position
-        useEditorStore.getState().updateStage({ position })
+        useEditorStore.getState().relocateStage(position)
         noteSessionStart()
         startEntrySequence()
         startXrCoach(timeSec * 1000)
@@ -604,11 +546,10 @@ export function createCamcorderRig(
     worldPos.add(scratchOffset.copy(lensOffset).applyQuaternion(aimQuat))
 
     const nowMs = timeSec * 1000
-    updateAimPick(worldPos, aimQuat, nowMs)
-    // Read the director: settled or roaming, dwelling or sweeping, how long
-    // since they last said anything. Drives the coach's patience and when a
-    // proposal is allowed to surface.
-    updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, getAimedObject()?.id ?? null)
+    // Read the director: settled or roaming, how long since they last said
+    // anything. Drives the coach's patience and when a proposal is allowed
+    // to surface. Aim-dwell focus is gone with the controller pointer.
+    updateAmbientSense(nowMs, delta, xrInput.xrOrigin.head, grip, null)
     const ambient = getAmbientSignals()
     setCoachHesitation(ambient.hesitation)
     sampleWorkingDistance(nowMs, ambient.stillness)
@@ -648,8 +589,6 @@ export function createCamcorderRig(
       offSlatePacket()
       registerStagePlacer(null)
       stopXrCoach()
-      setAimChangeListener(null)
-      clearAimPick()
       resetAmbientChannel()
       resetAmbientSense()
       retireAllCursors()
@@ -660,10 +599,6 @@ export function createCamcorderRig(
       scene.remove(xrInput.xrOrigin)
       screenMesh.geometry.dispose()
       ;(screenMesh.material as THREE.Material).dispose()
-      aimRay.geometry.dispose()
-      ;(aimRay.material as THREE.Material).dispose()
-      aimTip.geometry.dispose()
-      ;(aimTip.material as THREE.Material).dispose()
       if (takeLabel) {
         const labelMat = takeLabel.material as THREE.MeshBasicMaterial
         labelMat.map?.dispose()

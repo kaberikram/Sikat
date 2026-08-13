@@ -109,7 +109,7 @@ function makeLabel(name: string, color: string): {
   })
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false })
   const sprite = new THREE.Sprite(material)
-  sprite.scale.set(0.5, 0.104, 1)
+  sprite.scale.set(0.72, 0.15, 1)
   return { sprite, material }
 }
 
@@ -259,13 +259,13 @@ function drawNote(cursor: Cursor, text: string): void {
     return
   }
 
-  const font = '600 44px "Baloo 2", ui-rounded, system-ui, sans-serif'
+  const font = '600 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
   const measureCanvas = document.createElement('canvas')
   const measureCtx = measureCanvas.getContext('2d')!
   measureCtx.font = font
   const lines = wrapTwoLines(measureCtx, text, 760)
-  const lineH = 52
-  const cardH = lines.length === 2 ? 184 : 136
+  const lineH = 64
+  const cardH = lines.length === 2 ? 200 : 148
   const cardW = Math.min(
     896,
     Math.max(420, Math.ceil(Math.max(...lines.map((line) => measureCtx.measureText(line).width)) + 72))
@@ -281,7 +281,7 @@ function drawNote(cursor: Cursor, text: string): void {
   })
   cursor.noteMat.map = texture
   cursor.noteMat.needsUpdate = true
-  const worldH = lines.length === 2 ? 0.14 : 0.1
+  const worldH = lines.length === 2 ? 0.24 : 0.18
   cursor.noteSprite.scale.set(worldH * (cardW / cardH), worldH, 1)
 }
 

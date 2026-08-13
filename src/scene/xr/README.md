@@ -86,15 +86,21 @@ Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is hea
 | **Trigger** | REC / cut take |
 | **Hold A** | Push-to-talk → Director crew (Web Speech → `user_command`) |
 
-A compact DIRECTOR slate sits under the grip LCD: status (`DIRECTOR` / `LISTENING` / `OFFLINE`) + white transcript box (live interim while holding A, last sent after release). Reuses [`voice-session.ts`](../../director/voice-session.ts) + [`director-command.ts`](../../director/director-command.ts) — same path as the desktop mic, not a separate realtime voice API.
+A larger DIRECTOR slate hangs under the grip LCD: status (`DIRECTOR` / `LISTENING` / `OFFLINE`) + live transcript while holding A (ambient mode no longer hides listening/sending). Release keeps the captured line until the final lands. Reuses [`voice-session.ts`](../../director/voice-session.ts) + [`director-command.ts`](../../director/director-command.ts) — same path as the desktop mic, not a separate realtime voice API.
 
-## Review screen controls (v1)
+## Review screen controls
 
-After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto-plays the take once.
+After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto-plays the take once. No controller pointer / ray hit-tests — face buttons and stick only.
 
-- **Trigger** on PLAY / scrub / X — play-pause, seek, dismiss
-- **Squeeze** on frame — grab-move
-- **Squeeze** on blue corner cube — scale
+| Input | Action |
+|-------|--------|
+| **B tap** | Play / pause |
+| **Hold B** (~400ms) | Close monitor |
+| **Thumbstick X** | Scrub within the take |
+| **Squeeze** | Grab-move panel |
+| **Squeeze + thumbstick Y** | Scale panel (0.5–2.5×) |
+
+Trigger stays REC (still suppressed while the monitor is open). Hold A stays PTT. Voice `play` / `pause` / `where's the monitor` still work.
 
 ## Peers / versions
 
@@ -105,7 +111,8 @@ After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto
 ## Out of scope (for now)
 
 - Full desktop timeline UI in XR
-- Ray/grab pointers (`pointerSettings.enabled: false`) — review uses raycast hit-tests only
+- Ray/grab pointers (`pointerSettings.enabled: false`) — no controller laser; review is button-driven
+- Aim-pick / point-and-speak deictics (removed with the pointer)
 - UIKitML spatial UI
 - Locomotion / physics / scene understanding
 - IWSDK MCP coding-agent tooling (separate from Director crew)
@@ -117,7 +124,7 @@ After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto
 - [ ] Viewfinder shows studio CG / white bg (not black, not passthrough)
 - [ ] Trigger toggles TAKE / REC — blinking red dot on LCD while rolling
 - [ ] Cut → floating review screen appears, plays camera path on studio bg
-- [ ] PLAY / scrub / dismiss / grab-move / corner-scale work
+- [ ] Review: B play/pause, hold B close, stick scrub, squeeze move, squeeze+stick Y scale
 - [ ] Grip LCD stays live aim; review shows timeline playback
-- [ ] Hold A → slate LISTENING + live STT; release stops mic; finals reach crew when server up
+- [ ] Hold A → larger slate stays up with live STT; release keeps the line, then finals reach crew when server up
 - [ ] Quest Browser: same, with passthrough on headset view only

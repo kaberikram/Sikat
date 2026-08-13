@@ -206,7 +206,7 @@ The scene runs on `THREE.WebGLRenderer` + `EffectComposer`. WebXR on Quest 3 cur
 
 ### Quest 3 / WebXR testing
 
-**XR input:** controller grips / hand visuals come from [`@iwsdk/xr-input`](https://iwsdk.dev/concepts/xr-input/) (`XRInputManager`). We do **not** use full IWSDK (`World.create` / ECS) — session, dual cameras, and viewfinder FX stay in Sikat. Camcorder parents to `xrOrigin.gripSpaces.right`; REC uses StatefulGamepad trigger / select edges. Peer: `three >= 0.160` (we ship `^0.184`). Pointers are disabled for now (desktop gizmo still owns picking).
+**XR input:** controller grips / hand visuals come from [`@iwsdk/xr-input`](https://iwsdk.dev/concepts/xr-input/) (`XRInputManager`). We do **not** use full IWSDK (`World.create` / ECS) — session, dual cameras, and viewfinder FX stay in Sikat. Camcorder parents to `xrOrigin.gripSpaces.right`; REC uses StatefulGamepad trigger / select edges. Peer: `three >= 0.160` (we ship `^0.184`). No controller laser/pointer — review monitor uses face buttons + stick; desktop gizmo still owns picking.
 
 **Desktop (Chrome + WebXR emulator extension):**
 

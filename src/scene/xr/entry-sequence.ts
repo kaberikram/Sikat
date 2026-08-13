@@ -171,7 +171,7 @@ function buildObjects(): void {
     depthTest: false,
     side: THREE.DoubleSide,
   })
-  title = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.078), titleMat)
+  title = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.14), titleMat)
   const headPos = new THREE.Vector3()
   const headQuat = new THREE.Quaternion()
   head.getWorldPosition(headPos)

@@ -75,3 +75,35 @@ async def test_producer_records_after_parse(monkeypatch):
     assert [p.command for p in packets] == ["TRANSFORM_OBJECT"]
     assert packets[0].payload.target.name == "CORE_SPHERE"
     assert packets[0].payload.mode == "relative"
+
+
+def test_stamp_residue_injects_into_history():
+    from app.llm import _history_section
+    from app.schema import Intent
+    from app.session_context import PlanJournalEntry, SessionContext, bind_session, reset_session
+
+    ctx = SessionContext()
+    token = bind_session(ctx)
+    try:
+        scene = scene_with("CORE_SPHERE")
+        ctx.record_plan(
+            PlanJournalEntry(
+                command_id="c1",
+                text="neon Tokyo",
+                say="cyan key, hard bloom",
+                mode="execute",
+                steps=[
+                    Intent(action="animate", target="CORE_SPHERE", motion="bounce"),
+                ],
+                pre_scene=scene,
+            )
+        )
+        assert ctx.residue.hero == "CORE_SPHERE"
+        assert ctx.residue.motion_energy == "driven"
+        hist = _history_section()
+        assert "Last shoot residue" in hist
+        assert "CORE_SPHERE" in hist
+        assert "escalate or contrast" in hist
+        assert "cyan key, hard bloom" in hist
+    finally:
+        reset_session(token)

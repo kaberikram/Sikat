@@ -56,6 +56,18 @@ class PlanJournalEntry:
     pre_scene: SceneState | None = None
 
 
+@dataclass
+class ShootResidue:
+    """Last take's palette / hero / energy — session memory, not retrieval."""
+    hero: str | None = None
+    ambient_color: str | None = None
+    key_color: str | None = None
+    key_intensity: float | None = None
+    background: str | None = None
+    motion_energy: str | None = None
+    last_say: str | None = None
+
+
 def _summarize(intent: Intent) -> str:
     parts = [intent.action]
     if intent.target:
@@ -90,6 +102,7 @@ class SessionContext:
         self._pending_plan: PendingPlan | None = None
         self._plan_cancel: asyncio.Event = asyncio.Event()
         self.plan_journal: deque[PlanJournalEntry] = deque(maxlen=4)
+        self.residue: ShootResidue = ShootResidue()
 
     def note_addressee(self, addressee: int | None) -> None:
         if addressee is not None:
@@ -243,6 +256,7 @@ class SessionContext:
         self._pending_plan = None
         self._plan_cancel = asyncio.Event()
         self.plan_journal.clear()
+        self.residue = ShootResidue()
 
     def set_pending_plan(self, plan: PendingPlan) -> None:
         self._pending_plan = plan
@@ -268,12 +282,88 @@ class SessionContext:
 
     def record_plan(self, entry: PlanJournalEntry) -> None:
         self.plan_journal.append(entry)
+        self.stamp_residue(entry.pre_scene, entry)
+
+    def stamp_residue(
+        self,
+        scene: SceneState | None,
+        entry: PlanJournalEntry | None,
+    ) -> None:
+        """Stamp last-take palette/hero/energy so the next plan can escalate or contrast."""
+        hero = self._pending_target
+        ambient_color = None
+        key_color = None
+        key_intensity = None
+        background = None
+        energy = "still"
+        last_say = None
+
+        if scene is not None:
+            lit = scene.lighting
+            ambient_color = lit.ambient.color
+            key_color = lit.key.color
+            key_intensity = lit.key.intensity
+            background = lit.background
+
+        if entry is not None:
+            last_say = entry.say or None
+            for step in entry.steps:
+                if step.target:
+                    hero = step.target
+                if step.action == "animate":
+                    motion = (step.motion or "").lower()
+                    if step.track_keyframes or motion in {
+                        "bounce",
+                        "launch",
+                        "spiral",
+                        "zigzag",
+                        "wander",
+                    }:
+                        energy = "driven"
+                    elif energy == "still":
+                        energy = "soft"
+                if step.ambient_color:
+                    ambient_color = step.ambient_color
+                if step.key_color:
+                    key_color = step.key_color
+                if step.key_intensity is not None:
+                    key_intensity = step.key_intensity
+                if step.background:
+                    background = step.background
+            for packet in entry.packets:
+                if packet.command != "UPDATE_LIGHTS":
+                    continue
+                payload = packet.payload
+                if payload.ambient:
+                    ambient_color = payload.ambient.color or ambient_color
+                if payload.key:
+                    key_color = payload.key.color or key_color
+                    if payload.key.intensity is not None:
+                        key_intensity = payload.key.intensity
+                if payload.background:
+                    background = payload.background
+
+        self.residue = ShootResidue(
+            hero=hero,
+            ambient_color=ambient_color,
+            key_color=key_color,
+            key_intensity=key_intensity,
+            background=background,
+            motion_energy=energy,
+            last_say=last_say,
+        )
 
     def latest_plan(self) -> PlanJournalEntry | None:
         return self.plan_journal[-1] if self.plan_journal else None
 
     def pop_latest_plan(self) -> PlanJournalEntry | None:
-        return self.plan_journal.pop() if self.plan_journal else None
+        entry = self.plan_journal.pop() if self.plan_journal else None
+        remaining = self.latest_plan()
+        if remaining is None:
+            self.residue = ShootResidue()
+        else:
+            self.stamp_residue(remaining.pre_scene, remaining)
+        return entry
 
 
 def _server_edit_key(packet: CommandPacket) -> str | None:

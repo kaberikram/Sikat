@@ -9,9 +9,9 @@
  * coach lines, and the crew's own words when the scene didn't already answer.
  *
  * In ambient mode the card fades to nothing and **stops repainting entirely**
- * for the states the world covers. That matters: repainting an 896×308 canvas
- * and re-uploading the texture every 40ms sat on the XR frame path, and the
- * common case now skips it.
+ * for the states the world covers (thinking). Listening and sending stay on
+ * this card so hold-A live STT is readable at arm's length. Repainting a
+ * 896×480 canvas every 40ms sat on the XR frame path — idle still skips it.
  *
  * One canvas + one CanvasTexture for the slate's lifetime; repaints draw in
  * place (no per-update canvas/GPU realloc).
@@ -23,10 +23,10 @@ import { setEditorLayer } from '../infrastructure'
 import { currentCoachHint } from './xr-coach'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
-const SLATE_W = 0.14
-const SLATE_H = 0.048
+const SLATE_W = 0.3
+const SLATE_H = 0.11
 const TEX_W = 896
-const TEX_H = 308
+const TEX_H = 480
 
 export type SlateState =
   | 'idle'
@@ -138,7 +138,7 @@ function wrapLines(
 
 export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   const group = new THREE.Group()
-  group.position.set(0, -0.055, 0.002)
+  group.position.set(0, -0.09, 0.002)
   parent.add(group)
 
   let state: SlateState = 'idle'
@@ -188,13 +188,20 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   /**
    * Does the world already answer this? Anything that reaches `replying`,
    * `misheard` or `offline` got here because the ambient channel decided words
-   * were needed, so those always show. Listening and thinking are the room's
-   * job now. Idle only hides when it has nothing sticky to say.
+   * were needed, so those always show. Listening/sending stay on this card
+   * (live STT while holding A). Thinking is still the room's job. Idle only
+   * hides when it has nothing sticky to say.
    */
   function worldCarries(st: SlateState, nowMs: number): boolean {
     if (!ambient) return false
-    if (st === 'offline' || st === 'replying' || st === 'misheard') return false
-    if (st === 'listening' || st === 'thinking' || st === 'sending') return true
+    if (
+      st === 'offline' ||
+      st === 'replying' ||
+      st === 'misheard' ||
+      st === 'listening' ||
+      st === 'sending'
+    ) return false
+    if (st === 'thinking') return true
     // The idle ladder decides what an idle card would say; if it would say
     // anything at all, the card has to be on screen to say it. Checking a
     // hand-listed subset here is how the SET DAY shot list went invisible in
@@ -230,27 +237,27 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       drawGlassCard(ctx, w, h, { pad: 18, radius: 44 })
 
       // Status row — small accent dot + quiet label, no heavy pill.
-      const rowY = 64
+      const rowY = 72
       const accent = STATE_ACCENT[st]
       ctx.fillStyle = accent
       ctx.beginPath()
       if (st === 'thinking' || st === 'sending') {
         // Calm breathing dot.
-        const r = 11 + Math.sin(pulsePhase) * 4
-        ctx.arc(64, rowY, Math.max(r, 6), 0, Math.PI * 2)
+        const r = 16 + Math.sin(pulsePhase) * 5
+        ctx.arc(64, rowY, Math.max(r, 8), 0, Math.PI * 2)
       } else {
-        ctx.arc(64, rowY, 11, 0, Math.PI * 2)
+        ctx.arc(64, rowY, 16, 0, Math.PI * 2)
       }
       ctx.fill()
 
       ctx.fillStyle = XR_UI.inkSoft
-      ctx.font = '700 30px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      ctx.font = '700 48px "Baloo 2", ui-rounded, system-ui, sans-serif'
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
-      ctx.fillText(STATE_LABEL[st], 94, rowY + 2)
+      ctx.fillText(STATE_LABEL[st], 100, rowY + 2)
 
       ctx.textAlign = 'right'
-      ctx.font = '600 26px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      ctx.font = '600 40px "Baloo 2", ui-rounded, system-ui, sans-serif'
       const hint =
         st === 'listening'
           ? 'RELEASE TO SEND'
@@ -260,19 +267,25 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       if (hint) ctx.fillText(hint, w - 56, rowY + 2)
 
       // Body — one open area, generous space; no inner well boxes.
-      const bodyY = 108
+      const bodyY = 130
       const bodyH = h - bodyY - 34
       const maxW = w - 128
+      const bodyFont = '600 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      const lineH = 68
 
       if (st === 'listening') {
-        // Live level bars centered under the interim line — you can see it hear you.
+        // Live level bars under the wrapping interim — you can see it hear you.
         const text = interim.trim()
         ctx.fillStyle = text ? XR_UI.ink : XR_UI.inkSoft
-        ctx.font = '600 34px "Baloo 2", ui-rounded, system-ui, sans-serif'
+        ctx.font = bodyFont
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
-        const line = wrapLines(ctx, text || '…', maxW, 1)[0]
-        ctx.fillText(line, 64, bodyY + 28)
+        const rows = wrapLines(ctx, text || '…', maxW, 3)
+        let y = bodyY + 32
+        for (const row of rows) {
+          ctx.fillText(row, 64, y)
+          y += lineH
+        }
 
         const barW = 10
         const gap = (maxW - LEVEL_BARS * barW) / (LEVEL_BARS - 1)
@@ -282,7 +295,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           const centerBias = 1 - Math.abs(i - (LEVEL_BARS - 1) / 2) / (LEVEL_BARS / 2)
           const shimmer = 0.65 + 0.35 * Math.sin(pulsePhase * 2 + i * 1.7)
           const amp = Math.min(smoothedLevel * 6, 1) * centerBias * shimmer
-          const bh = 6 + amp * 42
+          const bh = 8 + amp * 48
           ctx.fillStyle = amp > 0.08 ? XR_UI.sunDeep : 'rgba(122, 119, 134, 0.35)'
           ctx.beginPath()
           ctx.roundRect(64 + i * (barW + gap), baseY - bh, barW, bh, barW / 2)
@@ -309,11 +322,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       }
 
       ctx.fillStyle = ghost ? XR_UI.inkSoft : XR_UI.ink
-      ctx.font = '600 34px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      ctx.font = bodyFont
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       const rows = wrapLines(ctx, line, maxW, 3)
-      const lineH = 44
       let y = bodyY + bodyH / 2 - ((rows.length - 1) * lineH) / 2
       for (const row of rows) {
         ctx.fillText(row, 64, y)

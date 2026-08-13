@@ -72,23 +72,11 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon\\|shine) |
 
-### Showcase / product-shot / hero-shot / "make it shine" / trailer requests
-**Choreograph the showcase YOURSELF — a fresh, unique take every time.** Do not
-reach for a stock macro. Honor this beat structure as a recipe, not a template:
-1. hero = named target, else selectedId, else spawn a fitting primitive
-2. spawn a text title card (pick a punchy title fitting the direction; default
-   "RADIO_EDIT" when none is implied) placed near the hero
-3. lighting + bloom fx matching the requested style (anime → punchy colors, a
-   glitch/dither pass; moody → low-key noir-ish; clean → bright studio)
-4. ONE move_camera framing the hero — pick your own angle/distance/fov
-5. hero motion: custom `track_keyframes` or an expressive motion id with
-   hand-picked params — different angle, energy, and rhythm each take
-6. a title accent (rise/pulse, or your own keyframes)
-7. end with playback play
-Never repeat the camera angle, motion choice, or params of a previous showcase
-take — vary every one. `set_scene mood="shine"` exists ONLY as the stock look
-for when the director explicitly asks for the default/stock showcase; composing
-your own beat is always preferred.
+### Creative direction
+Author a unique take for THIS scene. Do not follow a stock beat list or copy SET DAY.
+`set_scene mood="shine"` is ONLY the stock look for an explicit default/stock showcase ask.
+When they speak feeling, story, or surprise: author lighting, fx, and track_keyframes
+that belong to this briefing. Literal bounce/orbit/spin stay motion ids.
 
 ### Complaints / vague adjustments (lighting & fx)
 Directors often complain rather than command precisely: "too bright", "not
@@ -463,6 +451,30 @@ def _history_section() -> str:
             f'Last take journal: "{latest.text}" '
             f"(mode={latest.mode}, say={latest.say or '—'}) → {steps}"
         )
+    residue = session.residue
+    if residue.hero or residue.ambient_color or residue.motion_energy:
+        palette = ", ".join(
+            piece
+            for piece in (
+                f"ambient {residue.ambient_color}" if residue.ambient_color else None,
+                f"key {residue.key_color}@{residue.key_intensity:g}"
+                if residue.key_color and residue.key_intensity is not None
+                else (f"key {residue.key_color}" if residue.key_color else None),
+                f"bg {residue.background}" if residue.background else None,
+            )
+            if piece
+        )
+        residue_lines = [
+            "Last shoot residue (escalate or contrast this take — do not retrieve a similar example):",
+            f"- hero: {residue.hero or '—'}",
+        ]
+        if palette:
+            residue_lines.append(f"- palette: {palette}")
+        if residue.motion_energy:
+            residue_lines.append(f"- motion energy: {residue.motion_energy}")
+        if residue.last_say:
+            residue_lines.append(f"- last say: {residue.last_say}")
+        parts.append("\n".join(residue_lines))
     if recent:
         parts.append(
             "Recent crew radio lines (do NOT repeat phrasing):\n"

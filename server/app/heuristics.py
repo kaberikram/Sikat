@@ -37,7 +37,8 @@ class ObserverMemory:
     camera_has_keyframes: bool = False
 
 
-# Per-agent template pools (keyless fallback)
+# Internal detector labels — never shown to the director. User-facing copy
+# comes from a live huddle pass or silence.
 TEMPLATE_POOLS: dict[str, list[str]] = {
     "VFXOperator": [
         "Bloom's eating the emissive — dial it back?",

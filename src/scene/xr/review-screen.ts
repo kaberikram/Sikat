@@ -15,12 +15,12 @@ import { pulse } from './haptics'
 import { registerReviewRecall } from './xr-bridge'
 import {
   makeButtonTexture,
-  makeCloseTexture,
+  makeCanvasTexture,
   makePlayheadTexture,
   makeReviewCardTexture,
-  makeScaleHandleTexture,
   makeScrubTrackTexture,
   makeTitleTexture,
+  XR_FONT_MONO_LG,
   XR_UI,
 } from './xr-ui-chrome'
 
@@ -38,8 +38,12 @@ const MIN_SCALE = 0.5
 const MAX_SCALE = 2.5
 const SCRUB_W = 0.72
 const SCRUB_H = 0.045
-
-type HitKind = 'play' | 'scrub' | 'dismiss' | 'frame' | 'scale'
+const B_HOLD_MS = 400
+const STICK_DEADZONE = 0.15
+/** At full stick, scrub through one take-length per second (min 0.5s/s). */
+const SCRUB_RATE_MIN = 0.5
+/** Stick Y while squeezing — scale factor per second at full deflection. */
+const SCALE_RATE = 1.2
 
 export interface ReviewScreen {
   group: THREE.Group
@@ -74,6 +78,21 @@ function texturedPlane(
     depthTest: true,
   })
   return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat)
+}
+
+function makeDockLegendTexture(): THREE.CanvasTexture {
+  return makeCanvasTexture(1400, 120, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h)
+    ctx.fillStyle = 'rgba(59, 58, 72, 0.55)'
+    ctx.beginPath()
+    ctx.roundRect(8, 8, w - 16, h - 16, (h - 16) / 2)
+    ctx.fill()
+    ctx.fillStyle = XR_UI.paper
+    ctx.font = XR_FONT_MONO_LG
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('B PLAY  ·  HOLD B CLOSE  ·  STICK SCRUB', w / 2, h / 2 + 2)
+  })
 }
 
 export function createReviewScreen(
@@ -112,13 +131,12 @@ export function createReviewScreen(
   const cardTex = makeReviewCardTexture()
   const card = texturedPlane(CARD_W, CARD_H, cardTex)
   card.position.z = 0
-  card.userData.hitKind = 'frame' satisfies HitKind
   group.add(card)
 
   // Title chip only here (not baked into cardTex — that caused double text).
   const titleTex = makeTitleTexture('TAKE REVIEW')
-  const titleChip = texturedPlane(0.42, 0.072, titleTex)
-  titleChip.position.set(-0.36, CARD_H / 2 - 0.09, 0.008)
+  const titleChip = texturedPlane(0.67, 0.115, titleTex)
+  titleChip.position.set(-0.28, CARD_H / 2 - 0.1, 0.008)
   group.add(titleChip)
 
   const screenMat = new THREE.MeshBasicMaterial({
@@ -130,26 +148,22 @@ export function createReviewScreen(
   screenMesh.position.set(0, FILM_Y, 0.01)
   group.add(screenMesh)
 
-  // Transport dock controls
+  // Transport dock — status chrome only (buttons drive play/scrub/close).
   const playTex = makeButtonTexture('PLAY', { bg: XR_UI.sun, fg: XR_UI.ink })
   const pauseTex = makeButtonTexture('PAUSE', { bg: XR_UI.mint, fg: XR_UI.ink })
-  const playHoverTex = makeButtonTexture('PLAY', { bg: XR_UI.sun, fg: XR_UI.ink, hover: true })
-  const pauseHoverTex = makeButtonTexture('PAUSE', { bg: XR_UI.mint, fg: XR_UI.ink, hover: true })
   const playMat = new THREE.MeshBasicMaterial({
     map: playTex,
     transparent: true,
     toneMapped: false,
     side: THREE.DoubleSide,
   })
-  const playBtn = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.07), playMat)
-  playBtn.position.set(-0.42, DOCK_Y, 0.02)
-  playBtn.userData.hitKind = 'play' satisfies HitKind
+  const playBtn = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.112), playMat)
+  playBtn.position.set(-0.5, DOCK_Y, 0.02)
   group.add(playBtn)
 
   const scrubTex = makeScrubTrackTexture()
   const scrubTrack = texturedPlane(SCRUB_W, SCRUB_H, scrubTex)
   scrubTrack.position.set(0.08, DOCK_Y, 0.02)
-  scrubTrack.userData.hitKind = 'scrub' satisfies HitKind
   group.add(scrubTrack)
 
   const playheadTex = makePlayheadTexture()
@@ -157,54 +171,40 @@ export function createReviewScreen(
   scrubThumb.position.set(0.08 - SCRUB_W / 2, DOCK_Y, 0.03)
   group.add(scrubThumb)
 
-  const dismissTex = makeCloseTexture(false)
-  const dismissHoverTex = makeCloseTexture(true)
-  const dismissMat = new THREE.MeshBasicMaterial({
-    map: dismissTex,
-    transparent: true,
-    toneMapped: false,
-    side: THREE.DoubleSide,
-  })
-  const dismissBtn = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.09), dismissMat)
-  dismissBtn.position.set(CARD_W / 2 - 0.1, CARD_H / 2 - 0.1, 0.02)
-  dismissBtn.userData.hitKind = 'dismiss' satisfies HitKind
-  group.add(dismissBtn)
-
-  const scaleTex = makeScaleHandleTexture()
-  const scaleHandle = texturedPlane(0.08, 0.08, scaleTex)
-  scaleHandle.position.set(CARD_W / 2 - 0.1, DOCK_Y, 0.02)
-  scaleHandle.userData.hitKind = 'scale' satisfies HitKind
-  group.add(scaleHandle)
+  const legendTex = makeDockLegendTexture()
+  const legend = texturedPlane(1.15, 0.088, legendTex)
+  legend.position.set(0.12, CARD_H / 2 - 0.1, 0.02)
+  group.add(legend)
 
   setEditorLayer(group)
 
-  const raycaster = new THREE.Raycaster()
-  const rayOrigin = new THREE.Vector3()
-  const rayDir = new THREE.Vector3()
-  const localHit = new THREE.Vector3()
   const grabOffset = new THREE.Vector3()
   const worldPos = new THREE.Vector3()
   const worldQuat = new THREE.Quaternion()
   const forward = new THREE.Vector3()
-  const hitTargets: THREE.Object3D[] = [playBtn, scrubTrack, dismissBtn, card, scaleHandle]
 
   let open = false
   let takeStart = 0
   let takeEnd = 0
-  let dragging: 'move' | 'scale' | 'scrub' | null = null
-  let grabScale0 = 1
-  let grabDist0 = 1
-  let hoverKind: HitKind | null = null
+  let dragging: 'move' | null = null
+  let bDownAt: number | null = null
+  let bHoldFired = false
+  let lastUpdateMs = performance.now()
 
   function isOpen(): boolean {
     return open
   }
 
+  function resetReviewInput(): void {
+    dragging = null
+    bDownAt = null
+    bHoldFired = false
+  }
+
   function hide(): void {
     open = false
     group.visible = false
-    dragging = null
-    hoverKind = null
+    resetReviewInput()
     useEditorStore.getState().setPlayOnceEnd(null)
     if (useEditorStore.getState().isPlaying) useEditorStore.getState().togglePlay()
   }
@@ -227,6 +227,7 @@ export function createReviewScreen(
     group.visible = true
     group.scale.setScalar(1)
     lastHead = head
+    resetReviewInput()
 
     placeInFrontOfHead(head)
     // A small "look here" chime — the monitor spawns outside the viewfinder
@@ -256,126 +257,86 @@ export function createReviewScreen(
 
   function syncPlayLabel(): void {
     const playing = useEditorStore.getState().isPlaying
-    const hovered = hoverKind === 'play'
-    if (playing) playMat.map = hovered ? pauseHoverTex : pauseTex
-    else playMat.map = hovered ? playHoverTex : playTex
+    playMat.map = playing ? pauseTex : playTex
     playMat.needsUpdate = true
-  }
-
-  function syncHoverChrome(): void {
-    dismissMat.map = hoverKind === 'dismiss' ? dismissHoverTex : dismissTex
-    dismissMat.needsUpdate = true
-    syncPlayLabel()
-  }
-
-  // Springy hover pop — damp each control's scale toward 1.08 while pointed at.
-  const hoverScaleTargets: [THREE.Mesh, HitKind][] = [
-    [playBtn, 'play'],
-    [dismissBtn, 'dismiss'],
-    [scaleHandle, 'scale'],
-  ]
-  let lastHoverT = performance.now()
-  function syncHoverScale(): void {
-    const now = performance.now()
-    const dt = Math.min((now - lastHoverT) / 1000, 0.1)
-    lastHoverT = now
-    for (const [mesh, kind] of hoverScaleTargets) {
-      const target = hoverKind === kind ? 1.08 : 1
-      const next = THREE.MathUtils.damp(mesh.scale.x, target, 14, dt)
-      mesh.scale.setScalar(next)
-    }
-  }
-
-  function hitTest(xrInput: XRInputManager): { kind: HitKind; point: THREE.Vector3 } | null {
-    const ray = xrInput.xrOrigin.raySpaces.right
-    ray.updateWorldMatrix(true, false)
-    ray.matrixWorld.decompose(rayOrigin, worldQuat, localHit)
-    rayDir.set(0, 0, -1).applyQuaternion(worldQuat).normalize()
-    raycaster.set(rayOrigin, rayDir)
-    const hits = raycaster.intersectObjects(hitTargets, false)
-    if (hits.length === 0) return null
-    const kind = hits[0].object.userData.hitKind as HitKind | undefined
-    if (!kind) return null
-    return { kind, point: hits[0].point }
-  }
-
-  function seekFromPoint(point: THREE.Vector3): void {
-    scrubTrack.worldToLocal(localHit.copy(point))
-    const u = THREE.MathUtils.clamp((localHit.x + SCRUB_W / 2) / SCRUB_W, 0, 1)
-    useEditorStore.getState().setTime(takeStart + u * (takeEnd - takeStart))
   }
 
   function update(xrInput: XRInputManager): void {
     if (!open) return
 
+    const now = performance.now()
+    const dt = Math.min((now - lastUpdateMs) / 1000, 0.1)
+    lastUpdateMs = now
+
     syncScrubThumb()
+    syncPlayLabel()
 
     const pad = xrInput.gamepads.right
-    const triggerDown = Boolean(
-      pad && (pad.getButtonDown(InputComponent.Trigger) || pad.getSelectStart())
-    )
     const squeezeDown = Boolean(pad?.getButtonDown(InputComponent.Squeeze))
     const squeezeHeld = Boolean(pad?.getButtonPressed(InputComponent.Squeeze))
     const squeezeUp = Boolean(pad?.getButtonUp(InputComponent.Squeeze))
-    const triggerHeld = Boolean(
-      pad && (pad.getButtonPressed(InputComponent.Trigger) || pad.getSelecting())
-    )
 
-    const hit = hitTest(xrInput)
-    hoverKind = hit?.kind ?? null
-    syncHoverChrome()
-    syncHoverScale()
-
-    if (triggerDown && hit) {
-      pulse(pad, 0.3, 25)
-      if (hit.kind === 'play') {
-        useEditorStore.getState().togglePlay()
-      } else if (hit.kind === 'dismiss') {
+    // B tap = play/pause; hold B = close.
+    if (pad?.getButtonDown(InputComponent.B_Button)) {
+      bDownAt = now
+      bHoldFired = false
+    }
+    if (pad?.getButtonPressed(InputComponent.B_Button) && bDownAt !== null && !bHoldFired) {
+      if (now - bDownAt >= B_HOLD_MS) {
+        bHoldFired = true
+        pulse(pad, 0.35, 30)
         hide()
         return
-      } else if (hit.kind === 'scrub') {
-        dragging = 'scrub'
-        seekFromPoint(hit.point)
       }
     }
+    if (pad?.getButtonUp(InputComponent.B_Button)) {
+      if (!bHoldFired && bDownAt !== null) {
+        pulse(pad, 0.3, 25)
+        useEditorStore.getState().togglePlay()
+        syncPlayLabel()
+      }
+      bDownAt = null
+      bHoldFired = false
+    }
 
-    if (squeezeDown && hit) {
+    const axes = pad?.getAxesValues(InputComponent.Thumbstick)
+    const stickX = axes && Math.abs(axes.x) > STICK_DEADZONE ? axes.x : 0
+    const stickY = axes && Math.abs(axes.y) > STICK_DEADZONE ? axes.y : 0
+
+    // Scrub only when not grabbing — squeeze + stick Y owns scale.
+    if (!squeezeHeld && stickX !== 0) {
+      const span = Math.max(takeEnd - takeStart, SCRUB_RATE_MIN)
+      const st = useEditorStore.getState()
+      const next = THREE.MathUtils.clamp(st.currentTime + stickX * span * dt, takeStart, takeEnd)
+      st.setTime(next)
+      if (st.isPlaying) st.togglePlay()
+      syncScrubThumb()
+    }
+
+    if (squeezeDown) {
       pulse(pad, 0.2, 20)
-      if (hit.kind === 'scale') {
-        dragging = 'scale'
-        grabScale0 = group.scale.x
-        const grip = xrInput.xrOrigin.gripSpaces.right
-        grip.getWorldPosition(worldPos)
-        grabDist0 = Math.max(0.05, worldPos.distanceTo(group.position))
-      } else if (hit.kind === 'frame' || hit.kind === 'play' || hit.kind === 'scrub') {
-        dragging = 'move'
-        const grip = xrInput.xrOrigin.gripSpaces.right
-        grip.getWorldPosition(worldPos)
-        grabOffset.copy(group.position).sub(worldPos)
-      }
-    }
-
-    if (dragging === 'scrub' && triggerHeld && hit?.kind === 'scrub') {
-      seekFromPoint(hit.point)
+      dragging = 'move'
+      const grip = xrInput.xrOrigin.gripSpaces.right
+      grip.getWorldPosition(worldPos)
+      grabOffset.copy(group.position).sub(worldPos)
     }
 
     if (dragging === 'move' && squeezeHeld) {
       const grip = xrInput.xrOrigin.gripSpaces.right
       grip.getWorldPosition(worldPos)
       group.position.copy(worldPos).add(grabOffset)
+      if (stickY !== 0) {
+        // Quest: stick forward is typically −Y — push forward to grow.
+        const next = THREE.MathUtils.clamp(
+          group.scale.x * (1 - stickY * SCALE_RATE * dt),
+          MIN_SCALE,
+          MAX_SCALE
+        )
+        group.scale.setScalar(next)
+      }
     }
 
-    if (dragging === 'scale' && squeezeHeld) {
-      const grip = xrInput.xrOrigin.gripSpaces.right
-      grip.getWorldPosition(worldPos)
-      const dist = Math.max(0.05, worldPos.distanceTo(group.position))
-      const next = THREE.MathUtils.clamp(grabScale0 * (dist / grabDist0), MIN_SCALE, MAX_SCALE)
-      group.scale.setScalar(next)
-    }
-
-    if (squeezeUp || (dragging === 'scrub' && pad?.getButtonUp(InputComponent.Trigger))) {
-      dragging = null
-    }
+    if (squeezeUp) dragging = null
   }
 
   function renderPlayback(ctx: {
@@ -429,15 +390,9 @@ export function createReviewScreen(
     disposeMesh(playBtn, false)
     playTex.dispose()
     pauseTex.dispose()
-    playHoverTex.dispose()
-    pauseHoverTex.dispose()
     disposeMesh(scrubTrack)
     disposeMesh(scrubThumb)
-    dismissMat.map = null
-    disposeMesh(dismissBtn, false)
-    dismissTex.dispose()
-    dismissHoverTex.dispose()
-    disposeMesh(scaleHandle)
+    disposeMesh(legend)
     playbackBackdrop.geometry.dispose()
     ;(playbackBackdrop.material as THREE.Material).dispose()
     viewfinder.pixelatedPass.dispose()

@@ -234,7 +234,7 @@ export function startSetDay(): string {
     }))
   })
 
-  // Pedestal.
+  // Pedestal — ~2× tabletop so it reads at headset standoff (~1.9 m).
   at(3400, () => {
     enqueuePacket(packet('AssetAnimator', {
       command: 'SPAWN_OBJECT',
@@ -242,8 +242,8 @@ export function startSetDay(): string {
         primitive: 'cylinder',
         name: PEDESTAL,
         color: '#F5F2EA',
-        position: [cx, cy + 0.21, cz],
-        scale: [0.9, 1.4, 0.9],
+        position: [cx, cy + 0.42, cz],
+        scale: [1.8, 2.8, 1.8],
       },
     }))
   })
@@ -255,7 +255,8 @@ export function startSetDay(): string {
       payload: {
         primitive: 'sneaker',
         name: HERO,
-        position: [cx, cy + 0.43, cz],
+        position: [cx, cy + 0.88, cz],
+        scale: [2, 2, 2],
       },
     }))
   })
@@ -269,7 +270,8 @@ export function startSetDay(): string {
         name: SIGN,
         text: 'SET DAY',
         color: '#FFE092',
-        position: [cx, cy + 0.85, cz - 0.9],
+        position: [cx, cy + 1.5, cz - 1.0],
+        scale: [2, 2, 2],
       },
     }))
   })
@@ -313,7 +315,7 @@ export function startSetDay(): string {
   // parking inside it.
   at(8800, () => {
     const heroPos = useEditorStore.getState().objects
-      .find((o) => o.name === HERO)?.position ?? [cx, cy + 0.43, cz]
+      .find((o) => o.name === HERO)?.position ?? [cx, cy + 0.88, cz]
     enqueuePacket(packet('Producer', {
       command: 'MOVE_CAMERA',
       payload: {

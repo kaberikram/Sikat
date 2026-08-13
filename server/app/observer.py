@@ -86,13 +86,16 @@ async def _observer_cycle(
     kind = "reaction" if is_reaction else "observation"
 
     use_llm = not is_manual and gate.try_consume_llm_token()
-    if use_llm:
-        phrased = await phrase_observation(obs, curr)
-        say = str(phrased["say"])
-        suggested = phrased.get("suggested_command") or obs.suggested_command
-    else:
-        say = obs.template_line
-        suggested = obs.suggested_command
+    if not use_llm:
+        return
+
+    phrased = await phrase_observation(obs, curr)
+    say = phrased.get("say")
+    if not say:
+        gate.record(obs.kind, obs.dedupe_key, is_manual=is_manual, used_llm=True)
+        return
+
+    suggested = phrased.get("suggested_command") or obs.suggested_command
 
     suggestion_id = str(uuid.uuid4())
     try:
@@ -130,13 +133,16 @@ async def emit_suggestion_from_producer(
         return False
 
     use_llm = g.try_consume_llm_token()
-    if use_llm:
-        phrased = await phrase_observation(obs, scene)
-        say = str(phrased["say"])
-        suggested = phrased.get("suggested_command") or obs.suggested_command
-    else:
-        say = obs.template_line
-        suggested = obs.suggested_command
+    if not use_llm:
+        return False
+
+    phrased = await phrase_observation(obs, scene)
+    say = phrased.get("say")
+    if not say:
+        g.record(obs.kind, obs.dedupe_key, used_llm=True)
+        return False
+
+    suggested = phrased.get("suggested_command") or obs.suggested_command
 
     suggestion_id = str(uuid.uuid4())
     await ws.send_json(agent_status_message(obs.agent, "active", None, say))

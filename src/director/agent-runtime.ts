@@ -144,6 +144,7 @@ export function retireAllCursors(): void {
   commandSteering.clear()
   lastAgentByCommand.clear()
   pendingIdle.clear()
+  commandBreathOrigin.clear()
   for (const abort of inFlight.values()) abort.abort()
   inFlight.clear()
   const presence = presenceStore.getState()
@@ -238,33 +239,45 @@ function flightDurationTo(agent: string, target: [number, number, number]): numb
   return clamp(dist(current, target) * MS_PER_UNIT, 120, CURSOR_FLIGHT_MS)
 }
 
-function noteForPacket(packet: CommandPacket): string {
-  switch (packet.command) {
-    case 'SPAWN_OBJECT':
-      return `spawning ${packet.payload.primitive}`
-    case 'REMOVE_OBJECT':
-      return 'removing'
-    case 'TRANSFORM_OBJECT':
-      return 'moving'
-    case 'ANIMATE_OBJECT':
-      return `${packet.payload.motion ?? packet.payload.preset ?? 'animating'}`
-    case 'MOVE_CAMERA':
-      return 'framing'
+/** CommandId → first packet arrival, so atmosphere / craft / motion share one breath. */
+const commandBreathOrigin = new Map<string, number>()
+
+function breathAtMs(command: CommandPacket['command']): number {
+  switch (command) {
     case 'UPDATE_LIGHTS':
-      return 'lighting'
-    case 'SET_MATERIAL':
-      return 'material'
     case 'UPDATE_FX':
-      return `${packet.payload.section}`
-    case 'SET_KEYFRAMES':
-      return 'keyframes'
-    case 'PLAYBACK':
-      return 'cueing'
     case 'CALL_STORE_ACTION':
-      return `store: ${packet.payload.action}`
-    default:
-      return 'working'
+      return 0
+    case 'SPAWN_OBJECT':
+    case 'TRANSFORM_OBJECT':
+    case 'SET_MATERIAL':
+    case 'REMOVE_OBJECT':
+      return 180
+    case 'ANIMATE_OBJECT':
+    case 'SET_KEYFRAMES':
+    case 'MOVE_CAMERA':
+      return 420
+    case 'PLAYBACK':
+      return 700
+    default: {
+      const _never: never = command
+      return _never
+    }
   }
+}
+
+function planBreathWaitMs(packet: CommandPacket): number {
+  if (packet.refinement) return 0
+  const id = packet.commandId ?? '_local'
+  const now = performance.now()
+  let origin = commandBreathOrigin.get(id)
+  if (origin === undefined) {
+    origin = now
+    commandBreathOrigin.set(id, origin)
+  }
+  const wait = Math.max(0, breathAtMs(packet.command) - (now - origin))
+  if (packet.command === 'PLAYBACK') commandBreathOrigin.delete(id)
+  return wait
 }
 
 function resolveObjectId(target: Target | null | undefined): string | null {
@@ -487,10 +500,9 @@ export function enqueuePacket(packet: CommandPacket): void {
 }
 
 /**
- * The server says this agent picked up the command ("copy", "on it"). That is a
- * status line, not work — it no longer turns a cursor on. If the agent already
- * has one, the note updates it; otherwise this is silent and the cursor arrives
- * with the first packet.
+ * The server says this agent picked up the command. That is a status line, not
+ * work — it no longer turns a cursor on. If the agent already has one, a real
+ * say updates the note; otherwise this is silent and the mesh changing is the note.
  */
 export function markAgentActive(agent: string, note?: string | null, commandId?: string | null): void {
   if (!cursorVisible(agent)) return
@@ -694,6 +706,11 @@ async function drainAgentQueue(agent: string): Promise<void> {
     while (queue.length > 0) {
       const packet = queue.shift()!
       try {
+        const breathMs = planBreathWaitMs(packet)
+        if (breathMs > 0) {
+          const abort = new AbortController()
+          await sleepAbortable(breathMs, abort.signal)
+        }
         clearGhost(packet.commandId)
         const result = applyCommandPacket(packet)
         logger(agent, `${packet.command}: ${result}`, 'info')
@@ -716,7 +733,7 @@ async function drainAgentQueue(agent: string): Promise<void> {
     inFlight.set(flightKey, abort)
 
     const serverNote = presence.agents[agent]?.note
-    presence.setNote(agent, serverNote ?? noteForPacket(packet), true)
+    if (serverNote) presence.setNote(agent, serverNote, true)
 
     try {
       // Hold the named spinner/label before the first travel beat, even when
@@ -727,6 +744,9 @@ async function drainAgentQueue(agent: string): Promise<void> {
       } else {
         needsAnnounce = false
       }
+
+      const breathMs = planBreathWaitMs(packet)
+      if (breathMs > 0) await sleepAbortable(breathMs, abort.signal)
 
       if (packet.refinement) {
         const followId = followObjectIdForPacket(packet)

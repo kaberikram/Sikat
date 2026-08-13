@@ -13,11 +13,13 @@ log = logging.getLogger("director.crew_huddle")
 
 HUDDLE_TIMEOUT_SEC = 4.0
 
-HUDDLE_PROMPT = """You are {agent} on a film set. Rephrase this observation in ≤14 words, in-character.
+HUDDLE_PROMPT = """You are {agent} on this set. Offer ONE situated suggestion for THIS scene, ≤14 words, or stay silent.
 Persona: {persona}
-Observation: {template}
-Scene context: {brief}
-Return JSON only: {{"say": "...", "suggested_command": "{suggested_command}" or null}}"""
+Internal detector cue (do not quote; never reuse stock lines like "BOX off stage"): {template}
+Scene: {brief}
+Return JSON only: {{"say": "<live suggestion or empty>", "suggested_command": "{suggested_command}" or null}}
+If nothing specific to this scene is worth saying, return say as an empty string.
+"""
 
 
 async def phrase_observation(
@@ -25,10 +27,10 @@ async def phrase_observation(
     scene: SceneState | None,
     persona: str | None = None,
 ) -> dict[str, str | None]:
-    """LLM polish or template fallback."""
+    """Live suggestion from this scene, or silence. Never a template-pool line."""
     provider = llm.select_provider()
     if provider is None:
-        return {"say": obs.template_line, "suggested_command": obs.suggested_command}
+        return {"say": None, "suggested_command": None}
 
     brief = ""
     if scene is not None:
@@ -53,10 +55,13 @@ async def phrase_observation(
         )
         if result and result.intents:
             intent = result.intents[0]
-            say = (intent.say or intent.describe_message or obs.template_line)[:80]
-            cmd = obs.suggested_command
-            return {"say": say, "suggested_command": cmd}
+            raw = (intent.say or intent.describe_message or "").strip()
+            if raw:
+                return {
+                    "say": raw[:80],
+                    "suggested_command": obs.suggested_command,
+                }
     except (asyncio.TimeoutError, Exception) as exc:
-        log.debug("crew huddle fallback: %s", exc)
+        log.debug("crew huddle silent: %s", exc)
 
-    return {"say": obs.template_line, "suggested_command": obs.suggested_command}
+    return {"say": None, "suggested_command": None}
