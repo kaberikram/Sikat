@@ -78,6 +78,12 @@ def _light_fx_packets(seed: float) -> list[CommandPacket]:
     ]
 
 
+def _stage_presence(obj: ObjectSnapshot) -> float:
+    """How much of the shot an object commands — bigger reads as more hero."""
+    sx, sy, sz = obj.scale
+    return abs(sx * sy * sz)
+
+
 def resolve_hero(
     scene: SceneState | None, target: str | None = None
 ) -> tuple[ObjectSnapshot | None, str]:
@@ -85,6 +91,13 @@ def resolve_hero(
 
     An explicit ``target`` (e.g. resolved from "shine the blue ball") wins
     over the scene's current selection or the session's last-touched object.
+
+    Callers MUST honour both halves: a ``None`` object means the name is one to
+    **spawn**, not one that exists. ``motion_floor`` used to take the name and
+    animate it without spawning, which is how a phantom ``HERO_SPHERE`` reached
+    the client on every open-ended request in XR — where selection is a
+    desktop-gizmo concept and a fresh session has touched nothing, so every
+    lookup below missed.
     """
     if target and scene:
         obj = next((o for o in scene.objects if o.name == target), None)
@@ -94,11 +107,19 @@ def resolve_hero(
         obj = next((o for o in scene.objects if o.id == scene.selectedId), None)
         if obj:
             return obj, obj.name
+    # last_target() already falls through to the pointed ("point and speak")
+    # target, so aiming at something counts as naming it.
     session_target = session_context.last_target()
     if session_target and scene:
         obj = next((o for o in scene.objects if o.name == session_target), None)
         if obj:
             return obj, obj.name
+    # Anything actually standing on the set beats conjuring a sphere. With a
+    # pedestal, a hero prop and a sign in front of you, the obvious subject is
+    # one of those — this step simply did not exist before.
+    if scene and scene.objects:
+        hero = max(scene.objects, key=_stage_presence)
+        return hero, hero.name
     return None, HERO_SPAWN_NAME
 
 
