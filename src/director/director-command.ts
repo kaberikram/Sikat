@@ -8,7 +8,10 @@ import { noteCommandText } from './undo'
 import { activeAgentSessionId, clearAgentSession } from './agent-tools'
 import { markCommandSent } from './latency'
 import { tryLocalCommand } from './local-commands'
-import { normalizeUtterance } from './local-grammar'
+import { isCreativeBrief, normalizeUtterance } from './local-grammar'
+import { beatsToSpecs, choreograph } from './improvise'
+import { runLocalPackets } from './local-packets'
+import { useEditorStore } from '../store'
 import { getDirectorSocket } from './socket'
 
 export type DirectorLogFn = (
@@ -59,6 +62,22 @@ export async function submitDirectorCommand(
       return submitDirectorCommand(local.resubmit, opts)
     }
     return { ok: true, local: true }
+  }
+
+  // An open-ended brief gets a real take immediately, from the local motion
+  // vocabulary, against whatever is actually on set. It still goes to the crew
+  // below — the plan supersedes this through the runtime's barge-in — but the
+  // set is never standing still while that round-trip happens, and a slow or
+  // failed server degrades to a decent shot instead of an error.
+  if (isCreativeBrief(trimmed)) {
+    const objects = useEditorStore.getState().objects.map((o) => ({ id: o.id, name: o.name }))
+    const beats = choreograph(objects, trimmed)
+    runLocalPackets(trimmed, beatsToSpecs(beats))
+    // Roll it, so the take plays rather than sitting authored on the timeline.
+    const st = useEditorStore.getState()
+    st.setTime(0)
+    if (!st.isPlaying) st.togglePlay()
+    log?.('AssetAnimator', `improvising — ${beats.map((b) => b.motion).join(', ')}`)
   }
 
   const socket = getDirectorSocket()

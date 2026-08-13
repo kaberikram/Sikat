@@ -352,6 +352,19 @@ export const STOP_CUES = [
   /^stop\s+recording$/,
 ]
 
+/**
+ * An open-ended creative brief — the director wants movement but hasn't said
+ * what or to which object. These have no grammar match by definition, so they
+ * used to go straight to the server and leave the set still until it answered.
+ * Matching them lets the crew start improvising in the same frame.
+ */
+export const CREATIVE_BRIEF_RE =
+  /\b(?:surprise\s+me|go\s+wild|go\s+crazy|do\s+something|something\s+(?:cool|wild|crazy|interesting)|make\s+it\s+(?:cool|wild|crazy|interesting|pop)|motion\s+graphics|choreograph|freestyle|impress\s+me|wow\s+me)\b/i
+
+export function isCreativeBrief(text: string): boolean {
+  return CREATIVE_BRIEF_RE.test(text)
+}
+
 export const WRAP_CUE_RE =
   /^(that'?s\s+a\s+wrap|wrap\s+it\s+up|wrap\s+for\s+today|exit\s+(?:xr|the\s+headset|headset|the\s+set)|leave\s+the\s+set)[!.]?$/
 
