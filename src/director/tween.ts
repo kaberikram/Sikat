@@ -3,12 +3,22 @@
  *
  * Tweens write STORE base values (via the setter closure) — never Three.js
  * objects — so Scene.tsx's per-frame re-apply and gizmo-drag guards keep
- * working unchanged. One shared rAF loop; a new tween on the same key cancels
- * the previous one. Pauses (shifts start times) while the editor is exporting.
+ * working unchanged. A new tween on the same key cancels the previous one.
+ * Pauses (shifts start times) while the editor is exporting.
+ *
+ * **This engine has no clock of its own — `tickTweens()` must be called once
+ * per rendered frame** (`src/scene/animate-loop.ts`). It used to drive itself
+ * with `requestAnimationFrame`, which is suspended for the entire duration of
+ * an immersive WebXR session: the frame callback has to come from the session,
+ * which is what `renderer.setAnimationLoop` gives you. The visible symptom was
+ * that a prop spawned in the headset stayed at the 1% scale its entrance pop
+ * had just written, and only snapped to full size when the session ended and
+ * the page's rAF resumed. Borrowing the renderer's clock is what makes this
+ * correct in both modes, and keeps `director/` renderer-agnostic.
  */
-import { useEditorStore } from '../store'
+import { useEditorStore } from '../store.ts'
 import type { Easing } from './protocol'
-import { getEaseFn } from '../easing'
+import { getEaseFn } from '../easing.ts'
 
 interface ActiveTween {
   from: number[]
@@ -20,25 +30,35 @@ interface ActiveTween {
 }
 
 const active = new Map<string, ActiveTween>()
-let rafId: number | null = null
 let lastNow = 0
 
-function tick(now: number) {
+/**
+ * Advance every active tween. Call once per rendered frame.
+ *
+ * Reads the clock itself rather than taking the frame timestamp: `startTween`
+ * stamps `start` from `performance.now()`, and an XR frame callback's timestamp
+ * is not guaranteed to share that time origin. One clock in, one clock out.
+ */
+export function tickTweens(): void {
+  if (active.size === 0) return
+  const now = performance.now()
+  // `lastNow` is primed by `startTween`, so this is a real interval on the very
+  // first tick too. Inferring it from a sentinel instead let the first frame of
+  // an export hold slip through unshifted, which is progress the pause was
+  // supposed to prevent.
   const delta = now - lastNow
   lastNow = now
   if (useEditorStore.getState().isExporting) {
     // hold every tween in place while the exporter owns the scene
     for (const tween of active.values()) tween.start += delta
-  } else {
-    for (const [key, tween] of active) {
-      const alpha = Math.min(1, (now - tween.start) / tween.durationMs)
-      const eased = tween.ease(alpha)
-      tween.set(tween.from.map((f, i) => f + (tween.to[i] - f) * eased))
-      if (alpha >= 1) active.delete(key)
-    }
+    return
   }
-  if (active.size > 0) rafId = requestAnimationFrame(tick)
-  else rafId = null
+  for (const [key, tween] of active) {
+    const alpha = Math.min(1, (now - tween.start) / tween.durationMs)
+    const eased = tween.ease(alpha)
+    tween.set(tween.from.map((f, i) => f + (tween.to[i] - f) * eased))
+    if (alpha >= 1) active.delete(key)
+  }
 }
 
 export interface TweenOptions {
@@ -52,6 +72,9 @@ export interface TweenOptions {
 }
 
 export function startTween({ key, from, to, durationSec, easing, set }: TweenOptions) {
+  // Prime the tick interval when the engine wakes from idle, so the first tick
+  // measures a frame rather than however long nothing was running.
+  if (active.size === 0) lastNow = performance.now()
   active.set(key, {
     from,
     to,
@@ -60,10 +83,6 @@ export function startTween({ key, from, to, durationSec, easing, set }: TweenOpt
     ease: getEaseFn(easing),
     set,
   })
-  if (rafId === null) {
-    lastNow = performance.now()
-    rafId = requestAnimationFrame(tick)
-  }
 }
 
 /** Cancel an active tween and return the current interpolated value, if any. */
@@ -76,10 +95,6 @@ export function cancelTween(key: string): number[] | null {
   const current = tween.from.map((f, i) => f + (tween.to[i] - f) * eased)
   tween.set(current)
   active.delete(key)
-  if (active.size === 0 && rafId !== null) {
-    cancelAnimationFrame(rafId)
-    rafId = null
-  }
   return current
 }
 
@@ -98,8 +113,8 @@ export function retargetTween(key: string, newTo: number[], newDurationSec?: num
   return true
 }
 
-function cancelTweensFor(prefix: string) {
-  for (const key of active.keys()) {
-    if (key.startsWith(prefix)) active.delete(key)
-  }
+/** Test helper — drop all tween state between unit checks. */
+export function resetTweensForTests(): void {
+  active.clear()
+  lastNow = 0
 }
