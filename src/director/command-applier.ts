@@ -16,6 +16,7 @@ import {
   type MotionObject,
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
+import { bestMatch, primitiveForName } from './target-match'
 import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
 import { buildBounceScaleKeyframes, DEFAULT_BOUNCE_DECAY } from '../animation-presets'
 import {
@@ -34,6 +35,7 @@ import { applyLiveCameraPose } from './camera-pose'
 import type {
   CommandPacket,
   CommandCancelMessage,
+  SpawnObjectPayload,
   Target,
   Transition,
   Vec3,
@@ -118,20 +120,47 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
     if (byId) return byId
   }
   if (target.name) {
-    const needle = target.name.toLowerCase()
-    if (needle === 'ball' || needle === 'the ball') {
-      const ballLike = objects.find((o) => {
-        const n = o.name.toLowerCase()
-        return n.includes('sphere') || n.includes('ball') || n.includes('orb')
-      })
-      if (ballLike) return ballLike
-    }
-    const exact = objects.find((o) => o.name.toLowerCase() === needle)
-    if (exact) return exact
-    const partial = objects.find((o) => o.name.toLowerCase().includes(needle))
-    if (partial) return partial
+    // Exact wins outright; after that, token overlap and primitive kind (see
+    // target-match.ts). This replaces a one-directional `includes` that could
+    // not match HERO_SPHERE to a SPHERE_AGT_01 standing right there, plus a
+    // hard-coded "ball" case that only covered one word of one kind.
+    const hit = bestMatch(target.name, objects.map((o) => ({ id: o.id, name: o.name })))
+    if (hit) return objects.find((o) => o.id === hit.id) ?? null
   }
   return null
+}
+
+/**
+ * Resolve a target, creating it when nothing on set answers to the name.
+ *
+ * A direction that names something the set doesn't have is a request, not an
+ * error — "make the hero sphere spin" on a bare stage means *make one and spin
+ * it*. This used to throw, so the packet died and the director got a red line
+ * instead of a shot. Every match strategy runs first, so this only fires when
+ * genuinely nothing fits.
+ */
+function ensureTarget(target: Target | null | undefined): MotionObject | null {
+  const existing = resolveTarget(target)
+  if (existing) return existing
+  const name = target?.name?.trim()
+  if (!name) return null
+
+  const st = useEditorStore.getState()
+  const { mesh, name: spawnedName } = buildSpawnMesh({
+    primitive: primitiveForName(name) as SpawnObjectPayload['primitive'],
+    name,
+  })
+  const stage = st.stage
+  st.addObject({
+    name: spawnedName,
+    type: mesh instanceof THREE.Group ? 'group' : 'mesh',
+    mesh,
+    position: [stage.position[0], stage.position[1] + 0.5, stage.position[2]],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    keyframes: [],
+  })
+  return useEditorStore.getState().objects.find((o) => o.name === spawnedName) ?? null
 }
 
 type VectorProperty = 'position' | 'rotation' | 'scale'
@@ -322,7 +351,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
 
     case 'TRANSFORM_OBJECT': {
       const p = packet.payload
-      const obj = resolveTarget(p.target)
+      const obj = ensureTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       if (p.position) applyObjectVector(obj, 'position', p.position, p.mode, packet.transition)
       if (p.rotation) applyObjectVector(obj, 'rotation', p.rotation, p.mode, packet.transition)
@@ -332,7 +361,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
 
     case 'ANIMATE_OBJECT': {
       const p = packet.payload
-      const obj = resolveTarget(p.target)
+      const obj = ensureTarget(p.target)
       if (!obj) throw new Error(`target not found: ${p.target.name ?? p.target.id}`)
       const motion = p.motion ?? p.preset ?? 'bounce'
       const params = (p.params ?? {}) as MotionParams
