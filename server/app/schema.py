@@ -96,6 +96,20 @@ class PlacementAnchor(BaseModel):
     relation: AnchorRelation
     offset: Vec3 | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _name_as_target(cls, data):
+        """Accept `target: "PEDESTAL"` alongside `target: {"name": ...}`.
+
+        Structured output holds to the nested shape, but the JSON-mode models
+        write the bare name the prompt shows them, and a strict parse drops the
+        whole intent over it — landing the prop dead centre, which is the exact
+        failure this field exists to prevent.
+        """
+        if isinstance(data, dict) and isinstance(data.get("target"), str):
+            return {**data, "target": {"name": data["target"]}}
+        return data
+
 
 class SpawnObjectPayload(BaseModel):
     primitive: Primitive
@@ -877,6 +891,12 @@ class Intent(BaseModel):
     text: str | None = None
     # transform / spawn / move_camera (rotations in radians)
     position: Vec3 | None = None
+    anchor: PlacementAnchor | None = None
+    """Placement said as a relationship — "beside the pedestal" — rather than a
+    coordinate. Outranks `position` and travels through to the spawn/transform
+    payload, where the client resolves it against live bounds. Without this
+    field the crew has no way to say it and every relative spawn lands centre
+    stage."""
     rotation: Vec3 | None = None
     scale: Vec3 | None = None
     mode: Literal["absolute", "relative"] | None = None

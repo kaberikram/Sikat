@@ -12,7 +12,14 @@
  * fails offline.
  */
 import { resolveMotionId, type MotionId } from '../motion-synth.ts'
-import type { CommandPacket, UpdateLightsPayload, FxSection, Vec3 } from './protocol'
+import type {
+  AnchorRelation,
+  CommandPacket,
+  FxSection,
+  PlacementAnchor,
+  UpdateLightsPayload,
+  Vec3,
+} from './protocol'
 
 /**
  * Omit that distributes over a union.
@@ -179,19 +186,59 @@ function parseMood(t: string): LocalPacketSpec | null {
   return null
 }
 
+/**
+ * Placement phrases, longest first so "on top of" is never read as a bare "on".
+ * No under/below: `AnchorRelation` has no relation for them, and a
+ * half-understood placement is worse than falling through to the server.
+ */
+const SPAWN_RELATIONS: Record<string, AnchorRelation> = {
+  'on top of': 'on',
+  'in front of': 'in_front_of',
+  'next to': 'beside',
+  alongside: 'beside',
+  beside: 'beside',
+  behind: 'behind',
+  above: 'above',
+  over: 'above',
+  onto: 'on',
+  on: 'on',
+}
+
+const RELATION_ALTERNATION = Object.keys(SPAWN_RELATIONS).join('|')
+
+const SPAWN_RE = new RegExp(
+  `^(?:add|spawn|drop|create|place|put)\\s+(?:(a|an|the)\\s+)?(?:(\\w+)\\s+)?(\\w+)` +
+    `(?:\\s+(${RELATION_ALTERNATION})\\s+(?:the\\s+)?(\\S.*))?$`
+)
+
+/** Pronouns the server resolves from session memory — parsing here is pure. */
+const ANCHOR_PRONOUN = /^(?:it|that|this|this one|them|those)$/
+
 function parseSpawn(t: string): LocalPacketSpec | null {
-  const m = t.match(/^(?:add|spawn|drop|create|place)\s+(?:(?:a|an|the)\s+)?(?:(\w+)\s+)?(\w+)$/)
+  const m = t.match(SPAWN_RE)
   if (!m) return null
-  const [, modifier, noun] = m
+  const [, article, modifier, noun, relationWord, anchorName] = m
   const primitive = PRIMITIVES[noun]
   if (!primitive) return null
   const color = modifier ? COLORS[modifier] ?? null : null
   if (modifier && !color) return null
+
+  let anchor: PlacementAnchor | null = null
+  if (relationWord) {
+    // "place THE sphere on the pedestal" is a move, not a spawn — a definite
+    // article plus a destination means the prop is already on set.
+    if (article === 'the') return null
+    // Anchoring to "it" needs the last-addressed target, which only the server
+    // remembers; fall through rather than spawn against a name nobody has.
+    if (ANCHOR_PRONOUN.test(anchorName.trim())) return null
+    anchor = { target: { name: anchorName.trim() }, relation: SPAWN_RELATIONS[relationWord] }
+  }
+
   return {
     agent: 'AssetAnimator',
     body: {
       command: 'SPAWN_OBJECT',
-      payload: { primitive, ...(color ? { color } : {}) },
+      payload: { primitive, ...(color ? { color } : {}), ...(anchor ? { anchor } : {}) },
     },
   }
 }

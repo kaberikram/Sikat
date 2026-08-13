@@ -10,7 +10,7 @@ from .converse import converse_intent, is_open_speech
 from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
 from .motion_vocab import extract_motion, extract_motion_params
 from .scene_context import describe_fallback_message
-from .schema import FxSetting, Intent, SceneState, Transition
+from .schema import FxSetting, Intent, PlacementAnchor, SceneState, Target, Transition
 from .target_resolution import ambiguous_options, is_ambiguous, rank_targets
 
 COLOR_WORDS: dict[str, str] = {
@@ -297,6 +297,91 @@ def _find_target(clause: str, scene: SceneState | None) -> str | None:
     if _PRONOUN.search(clause):
         return session_context.last_target()
     return None
+
+
+# Placement phrases, longest first so "on top of" is never read as a bare "on".
+# Deliberately no under/below/inside: PlacementAnchor has no relation for them,
+# and a half-understood placement is worse than letting the LLM answer.
+_RELATION_PHRASES: tuple[tuple[str, str], ...] = (
+    ("on top of", "on"),
+    ("in front of", "in_front_of"),
+    ("next to", "beside"),
+    ("alongside", "beside"),
+    ("beside", "beside"),
+    ("behind", "behind"),
+    ("above", "above"),
+    ("over", "above"),
+    ("onto", "on"),
+    ("on", "on"),
+)
+_RELATION_BY_PHRASE = dict(_RELATION_PHRASES)
+_RELATION_RE = re.compile(
+    r"\b(" + "|".join(phrase for phrase, _ in _RELATION_PHRASES) + r")\b\s+(\S.*)$"
+)
+_ANCHOR_ARTICLE = re.compile(r"^(?:the|a|an|my|our)\s+")
+
+
+def split_placement(clause: str) -> tuple[str, str, str] | None:
+    """Split "spawn a box beside the cylinder" into head / relation / anchor text.
+
+    The split matters as much as the relation does: everything after the
+    placement word describes something already on set, so reading the colour,
+    the primitive, or the name out of it spawns the wrong prop ("a cylinder
+    next to the box" is not a box).
+    """
+    m = _RELATION_RE.search(clause)
+    if not m:
+        return None
+    return clause[: m.start(1)].strip(), _RELATION_BY_PHRASE[m.group(1)], m.group(2)
+
+
+def find_placement_anchor(
+    clause: str, scene: SceneState | None, *, allow_bare_name: bool = True
+) -> PlacementAnchor | None:
+    """Read the placement half of a clause as an anchor, or None.
+
+    `allow_bare_name` passes an unmatched noun through as the anchor's name,
+    which is what the grammar wants when no snapshot has arrived yet — the
+    client resolves names against the live set anyway, and an anchor it cannot
+    place falls back to the old centre spawn rather than failing. Callers
+    second-guessing the LLM turn it off: there the snapshot is always in hand,
+    so a name the set does not answer to means the phrase was not a placement.
+    """
+    split = split_placement(clause)
+    if not split:
+        return None
+    _, relation, anchor_text = split
+    ranked = rank_targets(anchor_text, scene)
+    name = ranked[0][0] if ranked else _find_scene_target(anchor_text, scene)
+    if not name and _PRONOUN.search(anchor_text):
+        # "spawn a box beside it" — whatever the director last addressed.
+        name = session_context.last_target()
+    elif not name and allow_bare_name:
+        name = _bare_anchor_name(anchor_text)
+    if not name:
+        return None
+    return PlacementAnchor(target=Target(name=name), relation=relation)  # type: ignore[arg-type]
+
+
+def clause_names_primitive(clause: str, primitive: str | None) -> bool:
+    """True when the clause asks for this kind of prop, by any of its words."""
+    if not primitive:
+        return False
+    return any(
+        kind == primitive and re.search(rf"\b{word}\b", clause)
+        for word, kind in PRIMITIVE_WORDS.items()
+    )
+
+
+def _blank_span(clause: str, start: int, end: int) -> str:
+    """Space out a span, keeping every other offset in the clause valid."""
+    return clause[:start] + " " * (end - start) + clause[end:]
+
+
+def _bare_anchor_name(anchor_text: str) -> str | None:
+    stripped = _ANCHOR_ARTICLE.sub("", anchor_text.strip())
+    m = re.match(r"[a-z0-9_]+", stripped)
+    return m.group(0) if m else None
 
 
 def _resolve_target_or_clarify(
@@ -628,26 +713,34 @@ def _parse_material(
 
 
 def _parse_spawn(
-    clause: str, _scene: SceneState | None, _transition: Transition | None
+    clause: str, scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
     if not re.search(
         r"\b(add|spawn|create|make|drop|place|give me|insert|reveal|introduce|put)\b", clause
     ):
         return None
+    text_m = re.search(r"(?:\"([^\"]+)\"|'([^']+)'|\bsaying\s+(.+)$)", clause)
+    text_value = next((g for g in text_m.groups() if g), None) if text_m else None
+    # Blank the sign's own copy before looking for a placement, or a sign
+    # saying "on set" would read as a spawn on something called "set".
+    said = clause if text_m is None else _blank_span(clause, *text_m.span())
+    head = said
+    anchor = None
+    split = split_placement(said)
+    if split:
+        head = split[0]
+        anchor = find_placement_anchor(said, scene)
     for word, primitive in PRIMITIVE_WORDS.items():
-        if re.search(rf"\b{word}\b", clause):
-            name_m = re.search(r"\b(?:called|named)\s+([a-z0-9_]+)", clause)
-            text_m = re.search(r"(?:\"([^\"]+)\"|'([^']+)'|\bsaying\s+(.+)$)", clause)
-            text_value = None
-            if text_m:
-                text_value = next(g for g in text_m.groups() if g)
+        if re.search(rf"\b{word}\b", head):
+            name_m = re.search(r"\b(?:called|named)\s+([a-z0-9_]+)", head)
             return Intent(
                 action="spawn",
                 primitive=primitive,  # type: ignore[arg-type]
-                color=_find_color(clause),
+                color=_find_color(head),
                 name=name_m.group(1).upper() if name_m else None,
                 text=text_value,
-                position=_find_vec3_after(clause, "at"),
+                position=_find_vec3_after(head, "at"),
+                anchor=anchor,
             )
     return None
 
