@@ -134,6 +134,14 @@ class PlanRunner:
                 break
             if not all_steps or adjustment:
                 break
+            # Round 2 exists to *adjust* against what round 1 changed. If round 1
+            # built no packets, nothing changed — so there is nothing to observe
+            # and nothing to adjust. This used to fall through anyway: it waited
+            # the full OBSERVE_SEC for a scene event that could never fire, then
+            # spent a second strong-tier call, and only then reached the
+            # improviser. That dead path was most of the sixteen seconds.
+            if not all_packets:
+                break
             await emit_plan_update(plan_update_message(command_id or "", status="adjusting", mode=plan_mode))
             session.scene_event.clear()
             try:
@@ -229,7 +237,7 @@ class PlanRunner:
                         all_packets.extend(built)
             if not all_packets and action_seeking:
                 await emit_log("Producer", "plan didn't land — improvising a take", "warn")
-                floor = motion_floor.motion_floor_packets(text, command_id)
+                floor = motion_floor.motion_floor_packets(text, command_id, scene_now)
                 for pkt in floor:
                     pkt.commandId = command_id
                     await emit_packet(pkt)

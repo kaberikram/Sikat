@@ -330,7 +330,19 @@ class Producer:
             return working
 
         if working.action == "animate":
-            _, hero_name = resolve_hero(scene, None)
+            hero_obj, hero_name = resolve_hero(scene, None)
+            # Only redirect to a hero that actually exists. This used to take
+            # the name regardless, so an unresolvable target was swapped for
+            # HERO_SPHERE — a second target that also did not exist — and the
+            # client failed it just the same. With nothing real to fall back to,
+            # skipping is the honest outcome.
+            if hero_obj is None:
+                await emit(
+                    self.name,
+                    f"no match for '{working.target}' and nothing on set to redirect to — skipping",
+                    "warn",
+                )
+                return None
             await emit(
                 self.name,
                 f"no match for '{working.target}' — animating hero '{hero_name}'",

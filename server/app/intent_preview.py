@@ -10,7 +10,13 @@ from .schema import Intent, SceneState
 
 _AGENT_RE = re.compile(r"\bagent\s*([1-4])\b", re.I)
 _ANIMATE_RE = re.compile(
-    r"\b(animate|animating|animation|bounce|bounc(?:e|ing)|float|orbit|spin|wander)\b",
+    # `motion`, `choreograph`, `surprise` and friends were missing, so an
+    # open-ended creative brief — "do crazy motion graphics, surprise me" —
+    # produced no preview at all and the director watched nothing for the whole
+    # round-trip. These are the words people actually use to ask for movement
+    # without naming one.
+    r"\b(animate|animating|animation|motion|move|moving|choreograph(?:y)?|"
+    r"surprise|bounce|bounc(?:e|ing)|float|orbit|spin|wander|dance|dancing)\b",
     re.I,
 )
 _MOTION_WORDS = (
