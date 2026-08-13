@@ -835,6 +835,31 @@ class Done:
 PlanEvent = Say | Meta | Step | Done
 
 
+def _anthropic_json_stream_kwargs(*, max_tokens: int) -> dict:
+    """Claude 5 thinks by default; thinking tokens share max_tokens with JSON.
+
+    Disable thinking so plan/intent streams actually close. Effort must stay
+    high or below when thinking is disabled (Opus 5 returns 400 otherwise).
+    """
+    return {
+        "max_tokens": max_tokens,
+        "thinking": {"type": "disabled"},
+        "output_config": {"effort": "high"},
+    }
+
+
+def should_abort_plan_for_escalation(
+    tier: Literal["fast", "strong"],
+    needs_deeper_creativity: bool,
+) -> bool:
+    """Fast-tier only: stop the stream so Planner can escalate.
+
+    Strong already *is* the animation director — aborting here yields zero
+    steps and Planner will not re-run (already escalated).
+    """
+    return needs_deeper_creativity and tier == "fast"
+
+
 def _extract_plan_meta(buffer: str) -> Meta | None:
     mode_match = re.search(r'"mode"\s*:\s*"(execute|pitch|amend|surprise)"', buffer)
     creativity_match = re.search(r'"needs_deeper_creativity"\s*:\s*(true|false)', buffer)
@@ -898,9 +923,9 @@ async def stream_plan(
         )
         async with client.messages.stream(
             model=model,
-            max_tokens=4096 if tier == "strong" else 3000,
             system=system,
             messages=[{"role": "user", "content": _build_user_content(text, frame)}],
+            **_anthropic_json_stream_kwargs(max_tokens=8192 if tier == "strong" else 3000),
         ) as stream:
             async for chunk in stream.text_stream:
                 buffer += chunk
@@ -914,7 +939,7 @@ async def stream_plan(
                     if meta is not None:
                         yielded_meta = True
                         yield meta
-                        if meta.needs_deeper_creativity:
+                        if should_abort_plan_for_escalation(tier, meta.needs_deeper_creativity):
                             return
                 slices, consumed = extract_complete_array_items(buffer, consumed)
                 for raw in slices:
@@ -929,7 +954,10 @@ async def stream_plan(
                             log.warning("skipping invalid streamed plan step: %s", raw[:160])
             try:
                 final = await stream.get_final_message()
-                if getattr(final, "stop_reason", None) == "max_tokens":
+                reason = getattr(final, "stop_reason", None)
+                if reason:
+                    log.info("plan stream stop_reason=%s", reason)
+                if reason == "max_tokens":
                     log.warning("plan stream truncated at max_tokens")
             except Exception:
                 pass
@@ -937,8 +965,8 @@ async def stream_plan(
             yield Done(DirectorPlan.model_validate_json(buffer))
         except Exception:
             log.warning("plan stream ended without a valid DirectorPlan")
-    except Exception:
-        log.exception("stream_plan failed")
+    except Exception as exc:
+        log.exception("stream_plan failed (%s)", type(exc).__name__)
     finally:
         log.info("stream_plan %s (%s) finished in %.2fs", tier, model, time.monotonic() - started)
 
@@ -959,9 +987,9 @@ async def _stream_anthropic(
     consumed = 0
     async with client.messages.stream(
         model=model,
-        max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": _build_user_content(text, frame)}],
+        **_anthropic_json_stream_kwargs(max_tokens=4096),
     ) as stream:
         async for chunk in stream.text_stream:
             buffer += chunk

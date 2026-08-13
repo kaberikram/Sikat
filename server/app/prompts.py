@@ -65,8 +65,9 @@ Ambient/idle motion stays subtle (amplitude 0.1–0.3, animate_repeat); "stagger
 """
 
 FAST_ADDENDUM = """Prefer known motion ids for literal verbs (bounce uses pro physics).
-Bare animate / creative / multi-beat direction → needs_deeper_creativity true and an
-empty steps array immediately (escalate to the animation director).
+Bare animate / creative / multi-beat direction → needs_deeper_creativity true
+(escalate to the animation director). Emit mutating steps if you have them —
+do not empty the array just to escalate.
 """
 
 LAYER_BOUNCE_HINT = "Layer bounce/float onto an existing XZ path when one exists."

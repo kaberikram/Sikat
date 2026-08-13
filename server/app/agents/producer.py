@@ -833,7 +833,7 @@ class Producer:
                     emit_suggest,
                     _noop_question,
                     _noop_emit,
-                    prefer_strong=is_animation_seeking(text) or _CREATIVE_LANGUAGE.search(text),
+                    prefer_strong=True,
                 )
 
         grammar_handled_indices: set[int] = set()

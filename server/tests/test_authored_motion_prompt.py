@@ -26,6 +26,7 @@ def test_fast_prompt_escalates_bare_creative_animate():
     )
     assert "needs_deeper_creativity" in prompt
     assert "literal verbs" in prompt.lower()
+    assert "empty steps" not in prompt.lower()
     assert "Bare animate → float" not in prompt
 
 

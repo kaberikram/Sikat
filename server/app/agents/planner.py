@@ -5,7 +5,8 @@ import asyncio
 import logging
 import time
 
-from .. import fallback_parser, llm, motion_floor, session_context
+from .. import creative_parse, fallback_parser, llm, motion_floor, session_context
+from ..converse import is_open_speech
 from ..schema import CommandPacket, Intent, SceneState, plan_update_message
 
 log = logging.getLogger("director.planner")
@@ -38,6 +39,7 @@ class PlanRunner:
         """Run a streamed DirectorPlan, returning staged packets and describe state."""
         session = session_context.get_session()
         session.begin_plan()
+        await emit_status("Producer", "active", command_id, "on it")
         started = time.monotonic()
         all_packets: list[CommandPacket] = []
         all_steps: list[Intent] = []
@@ -200,8 +202,9 @@ class PlanRunner:
     ) -> tuple[list[CommandPacket], bool]:
         """Escalation chain: corrective re-plan -> motion floor -> honest state."""
         action_seeking = motion_floor.is_animation_seeking(text) or not describe_only
-        if not all_packets and plan_mode != "pitch":
-            if plan_say or action_seeking:
+        open_brief = creative_parse.is_open_direction(text)
+        if not all_packets and plan_mode != "pitch" and not is_open_speech(text):
+            if plan_say or action_seeking or open_brief:
                 await emit_status("Producer", "active", command_id, "rethinking that…")
                 recovery_steps = 0
                 async for event in llm.stream_plan(
@@ -235,7 +238,7 @@ class PlanRunner:
                             emit_cancel, scene_now, utterance=text,
                         )
                         all_packets.extend(built)
-            if not all_packets and action_seeking:
+            if not all_packets:
                 await emit_log("Producer", "plan didn't land — improvising a take", "warn")
                 floor = motion_floor.motion_floor_packets(text, command_id, scene_now)
                 for pkt in floor:

@@ -21,6 +21,12 @@ test('the phrasings people actually use are recognised', () => {
     'something cool',
     'choreograph a take',
     'wow me',
+    'blow my mind',
+    'I trust you',
+    'go off',
+    'make it insane',
+    'neon Tokyo',
+    'make this feel like a music video intro',
   ]) {
     assert.ok(isCreativeBrief(raw), raw)
   }
