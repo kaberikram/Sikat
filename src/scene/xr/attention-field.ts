@@ -39,7 +39,7 @@ const TONES: Record<AttentionTone, ToneSpec> = {
   aimed: { color: XR_UI.mint, opacity: 0.22, spread: 1.35, breathe: 0.06, breatheHz: 0.5 },
   addressed: { color: XR_UI.mintDeep, opacity: 0.45, spread: 1.55, breathe: 0.1, breatheHz: 0.9 },
   missed: { color: XR_UI.pinkDeep, opacity: 0.5, spread: 1.35, breathe: 0, breatheHz: 0 },
-  landed: { color: XR_UI.sun, opacity: 0.35, spread: 1.45, breathe: 0, breatheHz: 0 },
+  landed: { color: XR_UI.accent, opacity: 0.35, spread: 1.45, breathe: 0, breatheHz: 0 },
 }
 
 /** One-shot tones play an envelope and hand back to the resting tone. */

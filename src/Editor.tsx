@@ -70,7 +70,7 @@ export const Editor: React.FC = () => {
             onClick={() => void handleEnterXr()}
             className="absolute top-3 left-3 z-30"
           >
-            ENTER XR
+            enter xr
           </Button>
         )}
 
@@ -80,24 +80,33 @@ export const Editor: React.FC = () => {
             onClick={() => void handleExitXr()}
             className="absolute top-3 left-3 z-30"
           >
-            EXIT XR
+            exit xr
           </Button>
         )}
 
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => setSelected(VIRTUAL_CAMERA_ID)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') setSelected(VIRTUAL_CAMERA_ID)
-          }}
-          className={`pip-frame z-20 rounded-[var(--radius-card)] overflow-hidden bg-ink shadow-[var(--shadow-soft)] ring-1 ring-line relative cursor-pointer ${xrActive ? 'sr-only fixed left-[-9999px] w-[320px] h-[180px]' : ''}`}
-        >
-          <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-full bg-white/80 backdrop-blur text-[10px] font-mono text-ink">
-            VIRTUAL_CAM
+        {xrActive ? (
+          <div className="sr-only fixed left-[-9999px] w-[320px] h-[180px]">
+            <div ref={setPipMountEl} className="absolute inset-0" />
           </div>
-          <div ref={setPipMountEl} className="absolute inset-0" />
-        </div>
+        ) : (
+          <div className="pip-card">
+            <div className="pip-card-header">
+              <span className="status-dot status-dot--accent" />
+              <span className="pip-card-title">virtual_cam</span>
+            </div>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setSelected(VIRTUAL_CAMERA_ID)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') setSelected(VIRTUAL_CAMERA_ID)
+              }}
+              className="pip-frame relative"
+            >
+              <div ref={setPipMountEl} className="absolute inset-0" />
+            </div>
+          </div>
+        )}
 
         <TimelineOverlay />
         <ObjectsOverlay />

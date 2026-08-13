@@ -92,7 +92,7 @@ export function PostStackEditor({
                 type="button"
                 aria-expanded={expanded}
                 onClick={() => setOpenSections((s) => ({ ...s, [section.id]: !s[section.id] }))}
-                className="p-0.5 rounded-lg bg-white/80 hover:bg-candy-sun/60 transition-colors shrink-0"
+                className="p-0.5 rounded-lg bg-card hover:bg-chip transition-colors shrink-0"
               >
                 {expanded ? <ChevronDown size={14} strokeWidth={2.5} /> : <ChevronRight size={14} strokeWidth={2.5} />}
               </button>
@@ -132,7 +132,7 @@ export function PostStackEditor({
                             step={sl.step}
                             value={value}
                             onChange={(e) => updateSectionSlider(section.id, sl.key, parseFloat(e.target.value))}
-                            className="w-full accent-[var(--color-candy-blue-deep)] h-2"
+                            className="w-full accent-[var(--color-accent)] h-2"
                           />
                         </label>
                       )

@@ -208,7 +208,7 @@ export function updateRoomResponse(nowMs: number, delta: number): void {
   // --- the ring's own tint ---
   let wantOpacity = NEUTRAL_OPACITY
   if (state === 'listening') {
-    wantColor.set(XR_UI.sunDeep)
+    wantColor.set(XR_UI.accent)
     wantOpacity = Math.min(
       LISTEN_MAX_OPACITY,
       LISTEN_BASE_OPACITY + smoothedLevel * LISTEN_LEVEL_GAIN

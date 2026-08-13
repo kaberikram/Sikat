@@ -102,7 +102,7 @@ function makeLabel(name: string, color: string): {
     ctx.textBaseline = 'middle'
     let fontPx = 64
     do {
-      ctx.font = `700 ${fontPx}px "Baloo 2", ui-rounded, system-ui, sans-serif`
+      ctx.font = `700 ${fontPx}px "Nunito", ui-rounded, system-ui, sans-serif`
       fontPx -= 2
     } while (fontPx > 24 && ctx.measureText(label).width > w - 96)
     ctx.fillText(label, w / 2, h / 2 - 2)
@@ -259,7 +259,7 @@ function drawNote(cursor: Cursor, text: string): void {
     return
   }
 
-  const font = '600 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
+  const font = '600 56px "Nunito", ui-rounded, system-ui, sans-serif'
   const measureCanvas = document.createElement('canvas')
   const measureCtx = measureCanvas.getContext('2d')!
   measureCtx.font = font

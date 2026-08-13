@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react'
 import { Mic, Plus, X } from 'lucide-react'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
 import { getDirectorSocket, type SocketStatus } from './socket'
 import type { AgentQuestionMessage, AgentSuggestionMessage, PlanUpdateMessage } from './protocol'
 import { startSceneStateSync } from './scene-state-sync'
@@ -79,8 +79,7 @@ const ROW_MOTION = {
 /**
  * Press feedback for the pod's own controls. Feedback belongs on the way down —
  * a control that only reacts to hover feels dead the moment you actually use it.
- * `Button`/`buttonCn` carry this already; these are for the pod's inline chrome,
- * whose shapes (full-bleed edges, square corners) don't fit the pill component.
+ * `Button`/`buttonCn` carry this already; these are for the pod's inline chrome.
  */
 const PRESSABLE =
   // `scale` is a standalone property in Tailwind v4, not part of `transform`.
@@ -88,20 +87,12 @@ const PRESSABLE =
   'active:scale-[var(--press-scale)] active:ease-[var(--ease-spring)]'
 
 const CHIP_CLASS =
-  `px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-white/85 shadow-[var(--shadow-chip)] ` +
+  `px-2.5 py-0.5 text-[11px] font-semibold rounded-full bg-chip text-ink-soft ` +
   `hover:bg-ink hover:text-white ${PRESSABLE}`
 
 const MENU_ROW_CLASS =
-  `block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[10px] ` +
-  `hover:bg-candy-sun/60 ${PRESSABLE}`
-
-/**
- * The form's controls sit flush against the pod's rounded edges, so they can't
- * scale without tearing the seam. They depress by tone instead — same intent,
- * same timing, no geometry change.
- */
-const EDGE_PRESSABLE =
-  'transition-[filter,background-color,color] duration-150 ease-[var(--ease-settle)] active:brightness-90'
+  `block w-full text-left px-2.5 py-1.5 text-[11px] font-semibold rounded-[16px] lowercase ` +
+  `hover:bg-wash ${PRESSABLE}`
 
 const STATUS_COLORS: Record<SocketStatus, string> = {
   open: '#30d158',
@@ -158,7 +149,7 @@ function RecReadout({ takeNumber }: { takeNumber: number }) {
   return (
     <div className="transport-readout transport-readout--rec">
       <span className="transport-dot transport-dot--rec" />
-      ● TAKE {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s REC
+      ● take {takeNumber} {(currentTime - takeStartTime).toFixed(1)}s rec
     </div>
   )
 }
@@ -168,7 +159,7 @@ function PlayReadout({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} className="transport-readout">
       <span className="transport-dot" />
-      {currentTime.toFixed(2)}s — PAUSE
+      {currentTime.toFixed(2)}s — pause
     </button>
   )
 }
@@ -210,6 +201,7 @@ export function DirectorPod() {
   const stopMicRef = useRef<() => void>(() => {})
 
   const speechAvailable = isSpeechAvailable()
+  const reduceMotion = useReducedMotion()
   const hasContext = selectedId !== null
   // Never-connected ≠ error: without a server the LOCAL CREW grammar runs the
   // set, so the pod shows a calm amber mode instead of a red failure.
@@ -520,10 +512,10 @@ export function DirectorPod() {
         {showCueChip && (
           <motion.div
             key="set-day-cue"
-            initial={{ opacity: 0, y: 10 }}
+            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 26, delay: 0.8 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
+            transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
             className="flex flex-col items-center gap-1.5"
           >
             <span className="text-[10px] font-mono tracking-wide text-ink-soft">
@@ -547,7 +539,7 @@ export function DirectorPod() {
 
       <motion.div
         layout
-        className="director-pod relative z-30 rounded-[var(--radius-panel)] ring-1 ring-line bg-card/90 backdrop-blur-xl shadow-[var(--shadow-soft)]"
+        className="director-pod relative z-30 rounded-[var(--radius-panel)] bg-card shadow-[var(--shadow-soft)]"
         transition={SETTLE}
       >
         <AnimatePresence>
@@ -556,11 +548,11 @@ export function DirectorPod() {
               key="menu"
               // Grows out of the + that summoned it, and collapses back into it.
               style={{ transformOrigin: 'bottom left' }}
-              initial={{ opacity: 0, scale: 0.9, y: 6 }}
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: 6 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 6 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: 6 }}
               transition={ROW_SETTLE}
-              className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] ring-1 ring-line shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1"
+              className="absolute bottom-full left-0 mb-2 bg-card rounded-[var(--radius-card)] shadow-[var(--shadow-lift)] overflow-hidden min-w-[150px] z-40 p-1"
             >
               {OVERLAY_COMMANDS.map((cmd) => (
                 <button
@@ -577,12 +569,12 @@ export function DirectorPod() {
                 className={MENU_ROW_CLASS}
                 onClick={() => { setSoundEnabled(!soundOn); setSoundOn(!soundOn) }}
               >
-                Sound {soundOn ? 'ON' : 'OFF'}
+                sound {soundOn ? 'on' : 'off'}
               </button>
             </motion.div>
           )}
         </AnimatePresence>
-        <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col">
+        <div className="rounded-[var(--radius-panel)] overflow-hidden flex flex-col px-[14px] pt-[13px] pb-[14px] gap-[10px]">
         <AnimatePresence initial={false}>
           {hasContext && (
             <motion.div
@@ -591,71 +583,81 @@ export function DirectorPod() {
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
               transition={SETTLE}
-              className="overflow-hidden border-b border-line"
+              className="overflow-hidden"
             >
-              <div className="px-3 py-2 bg-candy-pink/30">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold text-ink-soft">Context</span>
+              <div className="px-1 py-1 bg-wash rounded-[20px]">
+                <div className="flex items-center justify-between mb-1 px-2 pt-1">
+                  <span className="text-[10px] font-semibold text-ink-soft lowercase">context</span>
                   <button
                     type="button"
                     onClick={() => setSelected(null)}
-                    className={`p-0.5 rounded-full hover:bg-[rgba(59,58,72,0.08)] ${PRESSABLE}`}
+                    className={`p-0.5 rounded-full hover:bg-chip ${PRESSABLE}`}
                     title="Deselect (Esc)"
                   >
                     <X size={12} />
                   </button>
                 </div>
-                <ContextProperties />
+                <div className="px-2 pb-2">
+                  <ContextProperties />
+                </div>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
         <div
-          className={`max-h-24 overflow-y-auto px-3 py-1.5 text-[10px] font-mono leading-tight director-log-panel${logHovered ? ' director-log-panel--paused' : ''}`}
-            onMouseEnter={() => setLogHovered(true)}
-            onMouseLeave={() => setLogHovered(false)}
-          >
-            {log.length === 0 ? (
-              <div className="opacity-40 italic">awaiting direction…</div>
-            ) : (
-              log.map((entry) => (
-                <div key={entry.id} className={`director-log-line ${logLineClass(entry)}`}>
-                  <span className="opacity-50">[{entry.source}]</span> {entry.text}
-                </div>
-              ))
-            )}
-          </div>
-
-        <div
-          className="flex items-center gap-2 px-3 py-1 bg-ink text-white text-[10px] font-mono select-none"
+          className="flex items-center justify-between px-1.5 select-none"
           title={
             offlineLocal
               ? 'offline — cue grammar runs on-device; connect an agent server (VITE_DIRECTOR_WS_URL) for freeform direction'
               : status
           }
         >
-          <span
-            className="inline-block w-2 h-2 rounded-full shrink-0"
-            style={{ background: offlineLocal ? LOCAL_CREW_COLOR : STATUS_COLORS[status] }}
-          />
-          <span className="font-bold tracking-wider flex-1">DIRECTOR_LINK</span>
-          <span className="opacity-60 uppercase">{offlineLocal ? 'LOCAL CREW' : status}</span>
+          <div className="flex items-center gap-[7px]">
+            <span
+              className="status-dot"
+              style={{ background: offlineLocal ? LOCAL_CREW_COLOR : STATUS_COLORS[status] }}
+            />
+            <span className="text-[11.5px] font-semibold text-ink-soft tracking-[-0.05px]">
+              director_link
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-faint">
+            {log.length === 0
+              ? 'awaiting direction…'
+              : offlineLocal
+                ? 'local crew'
+                : status}
+          </span>
         </div>
+
+        {log.length > 0 && (
+          <div
+            className={`max-h-24 overflow-y-auto px-1.5 text-[10px] font-mono leading-tight director-log-panel${logHovered ? ' director-log-panel--paused' : ''}`}
+            onMouseEnter={() => setLogHovered(true)}
+            onMouseLeave={() => setLogHovered(false)}
+          >
+            {log.map((entry) => (
+              <div key={entry.id} className={`director-log-line ${logLineClass(entry)}`}>
+                <span className="text-faint">[{entry.source}]</span> {entry.text}
+              </div>
+            ))}
+          </div>
+        )}
 
         <AnimatePresence initial={false}>
           {planProgress && (
             <motion.div key="plan" {...ROW_MOTION}>
-              <div className="px-3 py-1.5 border-t border-line bg-candy-blue/30 text-[10px] font-mono">
+              <div className="px-3 py-1.5 bg-wash rounded-[16px] text-[10px] font-mono">
                 <div className="flex items-center gap-1.5">
                   {activeAgentSessionId() === planProgress.commandId && (
-                    <span className="px-1.5 rounded-full bg-ink text-white font-bold">AGENT</span>
+                    <span className="px-1.5 rounded-full bg-ink text-white font-bold lowercase">agent</span>
                   )}
                   <span className="font-bold flex-1">{planProgress.say ?? 'planning the take…'}</span>
                   {activeAgentSessionId() === planProgress.commandId && (
                     <button
                       type="button"
-                      className={`px-2 rounded-full bg-white/80 font-bold shadow-[var(--shadow-chip)] hover:bg-rec hover:text-white ${PRESSABLE}`}
+                      className={`px-2 rounded-full bg-card font-bold hover:bg-rec hover:text-white ${PRESSABLE}`}
                       onClick={() => {
                         getDirectorSocket().sendAgentAbort(planProgress.commandId)
                         clearAgentSession(planProgress.commandId)
@@ -663,11 +665,11 @@ export function DirectorPod() {
                         pushLog('DIRECTOR', 'agent stopped', 'info')
                       }}
                     >
-                      STOP
+                      stop
                     </button>
                   )}
                 </div>
-                <div className="opacity-70 uppercase">
+                <div className="text-ink-soft lowercase">
                   {planProgress.stepIndex ?? 0}/{planProgress.stepsTotal ?? '…'} · {planProgress.stepLabel ?? planProgress.status}
                 </div>
               </div>
@@ -676,7 +678,7 @@ export function DirectorPod() {
 
           {pendingSuggestions.map((pendingSuggestion) => (
             <motion.div key={pendingSuggestion.suggestionId} {...ROW_MOTION}>
-              <div className="px-3 py-2 border-t border-line bg-candy-sun/40">
+              <div className="px-3 py-2 bg-wash rounded-[16px]">
                 <p className="text-[11px] font-semibold mb-1.5">
                   [{pendingSuggestion.agent}] {pendingSuggestion.text}
                 </p>
@@ -694,7 +696,7 @@ export function DirectorPod() {
                         if (cmd) void submit(cmd)
                       }}
                     >
-                      DO IT
+                      do it
                     </button>
                   )}
                   <button
@@ -707,7 +709,7 @@ export function DirectorPod() {
                       suggestionExpiryRef.current.delete(pendingSuggestion.suggestionId)
                     }}
                   >
-                    DISMISS
+                    dismiss
                   </button>
                 </div>
               </div>
@@ -716,7 +718,7 @@ export function DirectorPod() {
 
           {pendingQuestion && (
             <motion.div key="question" {...ROW_MOTION}>
-              <div className="px-3 py-2 border-t border-line bg-candy-sun/30">
+              <div className="px-3 py-2 bg-wash rounded-[16px]">
                 <p className="text-[11px] font-semibold mb-1.5">
                   [{pendingQuestion.agent}] {pendingQuestion.question}
                 </p>
@@ -743,10 +745,10 @@ export function DirectorPod() {
             // The crew's answer — keyed on the text so a new reply re-runs the
             // reveal instead of silently swapping words in place.
             <motion.div key={`line-${directorLine.text}`} {...ROW_MOTION}>
-              <div className="flex items-center gap-2 px-3 py-1.5 border-t border-line text-[11px]">
+              <div className="flex items-center gap-2 px-1.5 py-1 text-[11px]">
                 <span
                   className="shrink-0 w-1.5 h-1.5 rounded-full"
-                  style={{ background: directorLine.kind === 'miss' ? '#F27BAC' : '#57CFA0' }}
+                  style={{ background: directorLine.kind === 'miss' ? '#ff3b30' : '#30d158' }}
                 />
                 <span className={directorLine.kind === 'miss' ? 'text-ink-soft' : 'font-semibold'}>
                   {directorLine.text}
@@ -757,7 +759,7 @@ export function DirectorPod() {
         </AnimatePresence>
 
         <form
-          className="flex items-stretch border-t border-line"
+          className="flex items-center gap-2"
           aria-busy={isProcessingCommand}
           onSubmit={(e) => {
             e.preventDefault()
@@ -769,7 +771,7 @@ export function DirectorPod() {
             onClick={() => setMenuOpen((o) => !o)}
             title="Summon panels"
             aria-expanded={menuOpen}
-            className={`shrink-0 px-2.5 py-1 border-r border-line bg-candy-sun hover:bg-candy-sun-deep ${EDGE_PRESSABLE}`}
+            className={`shrink-0 size-11 rounded-full bg-chip text-ink-soft flex items-center justify-center ${PRESSABLE}`}
           >
             <motion.span
               className="block"
@@ -779,45 +781,46 @@ export function DirectorPod() {
               <Plus size={12} />
             </motion.span>
           </button>
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              interim ||
-              (listening
-                ? 'listening…'
-                : isProcessingCommand
-                  ? 'crew is working…'
-                  : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
-            }
-            className="flex-1 px-3 py-2 text-[11px] font-sans bg-transparent placeholder:text-ink-soft outline-none min-w-0"
-          />
-          {speechAvailable && (
-            <button
-              type="button"
-              onClick={(e) => toggleMic(e.shiftKey)}
-              title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
-              aria-pressed={listening}
-              className={`relative px-2.5 border-l border-line ${EDGE_PRESSABLE} ${listening ? 'bg-rec text-white' : 'bg-transparent hover:bg-[rgba(59,58,72,0.06)]'}`}
-            >
-              {listening && (
-                // Breathes with your actual voice — the tell that it hears you.
-                <motion.span
-                  aria-hidden
-                  className="absolute inset-0 bg-white/25 pointer-events-none"
-                  animate={{ opacity: Math.min(micLevel * 6, 1) }}
-                  transition={{ duration: 0.08, ease: 'linear' }}
-                />
-              )}
-              <Mic size={12} className="relative" />
-            </button>
-          )}
+          <div className="flex flex-1 min-w-0 items-center gap-2.5 h-11 pl-4 pr-3.5 rounded-full bg-wash">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={
+                interim ||
+                (listening
+                  ? 'listening…'
+                  : isProcessingCommand
+                    ? 'crew is working…'
+                    : currentDemoHint() ?? PLACEHOLDERS[placeholderIdx])
+              }
+              className="flex-1 min-w-0 bg-transparent text-[13px] font-semibold text-ink-soft placeholder:text-ink-soft outline-none"
+            />
+            {speechAvailable && (
+              <button
+                type="button"
+                onClick={(e) => toggleMic(e.shiftKey)}
+                title={listening ? 'Stop voice direction (Esc)' : 'Live voice direction (Shift+click to attach viewfinder)'}
+                aria-pressed={listening}
+                className={`relative shrink-0 size-4 ${PRESSABLE} ${listening ? 'text-rec' : 'text-faint'}`}
+              >
+                {listening && (
+                  <motion.span
+                    aria-hidden
+                    className="absolute inset-0 bg-rec/20 rounded-sm pointer-events-none"
+                    animate={{ opacity: Math.min(micLevel * 6, 1) }}
+                    transition={{ duration: 0.08, ease: 'linear' }}
+                  />
+                )}
+                <Mic size={16} className="relative" />
+              </button>
+            )}
+          </div>
           <button
             type="submit"
-            className={`px-4 py-1 bg-ink text-white text-[11px] font-semibold hover:bg-candy-sun-deep hover:text-ink border-l border-line ${EDGE_PRESSABLE}`}
+            className={`h-11 px-5 rounded-full bg-ink text-white text-[13px] font-semibold shrink-0 ${PRESSABLE}`}
           >
-            SEND
+            send
           </button>
         </form>
         </div>

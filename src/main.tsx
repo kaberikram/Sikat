@@ -7,7 +7,7 @@ import './index.css';
 
 installGlobalErrorHandlers();
 
-// Start fetching Baloo 2 now so XR canvas textures rasterize the real font.
+// Start fetching Nunito now so XR canvas textures rasterize the real font.
 preloadXrUiFonts();
 
 createRoot(document.getElementById('root')!).render(

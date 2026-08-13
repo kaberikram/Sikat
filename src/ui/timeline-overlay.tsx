@@ -1,30 +1,31 @@
 import React from 'react'
-import { useEditorStore } from '../store'
-import { Button } from './button'
+import { Pause, Play } from 'lucide-react'
+import { useEditorStore, VIRTUAL_CAMERA_ID } from '../store'
 import { OverlayPanel } from './overlay-panel'
+import { cn } from './cn'
+
+function displayName(name: string): string {
+  return name.toLowerCase()
+}
 
 function TimelineTrackRow({
   name,
   keyframes,
   duration,
-  currentTime,
   onSeek,
-  showScrub,
+  selected,
 }: {
   name: string
   keyframes: { time: number }[]
   duration: number
-  currentTime: number
   onSeek: (t: number) => void
-  showScrub: boolean
+  selected: boolean
 }) {
   return (
-    <div className="track relative group min-h-8">
-      <span className="text-[11px] font-semibold w-24 px-3 rounded-full bg-white/70 text-ink mr-4 my-1 truncate flex items-center self-center h-6">
-        {name}
-      </span>
+    <div className="timeline-track">
+      <span className="timeline-track-label">{displayName(name)}</span>
       <div
-        className="flex-1 h-full min-h-8 relative cursor-pointer"
+        className="timeline-lane"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect()
           const x = e.clientX - rect.left
@@ -34,22 +35,55 @@ function TimelineTrackRow({
         {keyframes.map((kf, idx) => (
           <div
             key={idx}
-            className="keyframe absolute top-1/2 -translate-y-1/2"
-            style={{ left: `${(kf.time / duration) * 100}%` }}
+            className={cn('keyframe', selected && 'active')}
+            style={{ left: `${(kf.time / Math.max(duration, 0.001)) * 100}%` }}
           />
         ))}
-        {showScrub ? (
-          <input
-            type="range"
-            min={0}
-            max={duration}
-            step={0.01}
-            value={currentTime}
-            onChange={(e) => onSeek(parseFloat(e.target.value))}
-            className="absolute inset-0 opacity-0 cursor-pointer w-full z-10"
-          />
-        ) : null}
       </div>
+    </div>
+  )
+}
+
+function TimelineRuler({
+  duration,
+  currentTime,
+  onSeek,
+}: {
+  duration: number
+  currentTime: number
+  onSeek: (t: number) => void
+}) {
+  const span = Math.max(duration, 0.001)
+  const lastTick = Math.max(1, Math.ceil(span))
+  const ticks: number[] = []
+  for (let t = 0; t <= lastTick; t++) ticks.push(t)
+
+  return (
+    <div
+      className="timeline-ruler"
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect()
+        const x = e.clientX - rect.left
+        onSeek((x / rect.width) * span)
+      }}
+    >
+      {ticks.map((t) => {
+        const left = `${(t / lastTick) * 100}%`
+        return (
+          <React.Fragment key={t}>
+            {t > 0 && t < lastTick ? (
+              <div className="timeline-tick-line" style={{ left }} />
+            ) : null}
+            <span className="timeline-tick" style={{ left: `calc(${left} + 9px)` }}>
+              {t}
+            </span>
+          </React.Fragment>
+        )
+      })}
+      <div
+        className="timeline-playhead"
+        style={{ left: `${(currentTime / span) * 100}%` }}
+      />
     </div>
   )
 }
@@ -67,37 +101,35 @@ function TimelineBody() {
   const togglePlay = useEditorStore((s) => s.togglePlay)
   const objects = useEditorStore((s) => s.objects)
   const virtualCamera = useEditorStore((s) => s.virtualCamera)
+  const selectedId = useEditorStore((s) => s.selectedId)
 
   return (
     <>
-      <div className="timeline-controls">
-        <div className="flex gap-4 items-center">
-          <Button variant="dark" size="sm" onClick={togglePlay}>
-            {isPlaying ? 'PAUSE' : 'PLAY'}
-          </Button>
-          <span className="text-xs font-mono font-bold">{currentTime.toFixed(2)}s</span>
-        </div>
+      <div className="timeline-transport-row">
+        <button type="button" className="timeline-transport" onClick={togglePlay}>
+          {isPlaying ? <Pause size={11} fill="currentColor" /> : <Play size={11} fill="currentColor" />}
+          <span>{currentTime.toFixed(2)}s</span>
+        </button>
+        <TimelineRuler duration={duration} currentTime={currentTime} onSeek={setTime} />
       </div>
-      <div className="timeline-tracks flex-grow overflow-y-auto max-h-40">
+      <div className="timeline-tracks">
         <TimelineTrackRow
-          name="VIRTUAL_CAMERA"
+          name="virtual_camera"
           keyframes={virtualCamera.keyframes}
           duration={duration}
-          currentTime={currentTime}
           onSeek={setTime}
-          showScrub
+          selected={selectedId === VIRTUAL_CAMERA_ID}
         />
         {objects.map((obj) => (
-          <div key={obj.id}>
+          <React.Fragment key={obj.id}>
             <TimelineTrackRow
               name={obj.name}
               keyframes={obj.keyframes}
               duration={duration}
-              currentTime={currentTime}
               onSeek={setTime}
-              showScrub
+              selected={selectedId === obj.id}
             />
-          </div>
+          </React.Fragment>
         ))}
       </div>
     </>
@@ -108,7 +140,7 @@ export function TimelineOverlay() {
   const open = useEditorStore((s) => s.overlayTimeline)
 
   return (
-    <OverlayPanel overlayKey="timeline" title="TIMELINE" className="overlay-timeline" open={open}>
+    <OverlayPanel overlayKey="timeline" title="timeline" className="overlay-timeline" open={open}>
       <TimelineBody />
     </OverlayPanel>
   )

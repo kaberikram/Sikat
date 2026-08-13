@@ -1,43 +1,48 @@
 /**
- * Pastel-glass tokens baked for XR meshes (Three.js can't use CSS).
- * Mirrors src/index.css: --color-ink / --color-candy-* / --shadow-soft.
+ * Figma UI ELEMENTS tokens baked for XR meshes (Three.js can't use CSS).
+ * Mirrors src/index.css: --color-ink / --color-accent / --shadow-soft.
  * Panels are visionOS-style faux frost: translucent rounded cards with a
  * painted soft shadow (no real backdrop blur — not worth it in XR).
  */
 import * as THREE from 'three'
 
 export const XR_UI = {
-  ink: '#3B3A48',
-  inkSoft: '#7A7786',
-  paper: '#FFFDF9',
-  glass: 'rgba(255, 253, 249, 0.88)',
+  ink: '#17171a',
+  inkSoft: '#6b6b75',
+  faint: '#a9a9b3',
+  paper: '#ffffff',
+  glass: 'rgba(255, 255, 255, 0.92)',
   glassStroke: 'rgba(255, 255, 255, 0.85)',
+  chip: '#f1f1f4',
+  wash: '#f5f5f8',
+  accent: '#2c6bf5',
+  status: '#30d158',
+  // Agent identity — not chrome.
   pink: '#FFB1CE',
   pinkDeep: '#F27BAC',
-  blue: '#A8D8FF',
-  blueDeep: '#5EAEF2',
+  blue: '#2c6bf5',
+  blueDeep: '#1f54c9',
   mint: '#B9EBD3',
   mintDeep: '#57CFA0',
   sun: '#FFE092',
   sunDeep: '#FFC43D',
   rec: '#FF6B7E',
-  screen: '#2E2D38',
-  shadow: 'rgba(59, 58, 72, 0.3)',
+  screen: '#17171a',
+  shadow: 'rgba(10, 10, 23, 0.18)',
 } as const
 
-const SANS = '600 44px "Baloo 2", ui-rounded, system-ui, sans-serif'
-const SANS_LG = '700 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
+const SANS = '600 44px "Nunito", ui-rounded, system-ui, sans-serif'
+const SANS_LG = '700 56px "Nunito", ui-rounded, system-ui, sans-serif'
 export const XR_FONT_SANS = SANS
 export const XR_FONT_SANS_LG = SANS_LG
 export const XR_FONT_MONO = 'bold 36px "JetBrains Mono", ui-monospace, monospace'
-export const XR_FONT_MONO_LG = 'bold 52px "JetBrains Mono", ui-monospace, monospace'
 
-const FONT_PROBE = '700 56px "Baloo 2"'
+const FONT_PROBE = '700 56px "Nunito"'
 
-/** Kick off Baloo 2 loading before any XR canvas rasterizes — call at app boot. */
+/** Kick off Nunito loading before any XR canvas rasterizes — call at app boot. */
 export function preloadXrUiFonts(): void {
   if (typeof document === 'undefined' || !('fonts' in document)) return
-  void document.fonts.load('600 44px "Baloo 2"')
+  void document.fonts.load('600 44px "Nunito"')
   void document.fonts.load(FONT_PROBE)
 }
 
@@ -57,13 +62,13 @@ export function makeCanvasTexture(
   }
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
-  // No mipmaps — UI labels stay sharp when the panel is close in XR.
-  tex.generateMipmaps = false
-  tex.minFilter = THREE.LinearFilter
+  tex.generateMipmaps = true
+  tex.minFilter = THREE.LinearMipmapLinearFilter
   tex.magFilter = THREE.LinearFilter
+  tex.anisotropy = 8
   tex.needsUpdate = true
 
-  // Labels painted before Baloo 2 arrives rasterize the fallback font —
+  // Labels painted before Nunito arrives rasterize the fallback font —
   // repaint once the font face is ready.
   if (ctx && 'fonts' in document && !document.fonts.check(FONT_PROBE)) {
     void document.fonts.ready.then(() => {
@@ -159,9 +164,9 @@ export function drawGlassCard(
   ctx.restore()
 
   ctx.strokeStyle = XR_UI.glassStroke
-  ctx.lineWidth = 3
+  ctx.lineWidth = 5
   ctx.beginPath()
-  ctx.roundRect(pad + 1.5, pad + 1.5, cw - 3, ch - 3, Math.max(radius - 1.5, 0))
+  ctx.roundRect(pad + 2.5, pad + 2.5, cw - 5, ch - 5, Math.max(radius - 2.5, 0))
   ctx.stroke()
 
   // Top-edge highlight
@@ -202,6 +207,11 @@ export function drawPill(
   ctx.roundRect(x, y, w, h, r)
   ctx.fill()
   ctx.restore()
+  ctx.strokeStyle = XR_UI.glassStroke
+  ctx.lineWidth = 5
+  ctx.beginPath()
+  ctx.roundRect(x + 2.5, y + 2.5, w - 5, h - 5, Math.max(r - 2.5, 0))
+  ctx.stroke()
   if (opts.hover) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.22)'
     ctx.beginPath()
@@ -210,7 +220,7 @@ export function drawPill(
   }
 }
 
-/** Transport / action pill button. Default: sunny yellow with ink label. */
+/** Transport / action pill button. Default: wash chip with ink label. */
 export function makeButtonTexture(
   label: string,
   opts: { bg?: string; fg?: string; w?: number; h?: number; hover?: boolean } = {}
@@ -218,7 +228,7 @@ export function makeButtonTexture(
   const w = opts.w ?? 576
   const h = opts.h ?? 192
   const pad = 28
-  const bg = opts.bg ?? XR_UI.sun
+  const bg = opts.bg ?? XR_UI.chip
   const fg = opts.fg ?? XR_UI.ink
 
   return makeCanvasTexture(w, h, (ctx, cw, ch) => {
@@ -247,7 +257,7 @@ export function makeCloseTexture(hover = false): THREE.CanvasTexture {
       ctx.shadowBlur = 20
       ctx.shadowOffsetY = 8
     }
-    ctx.fillStyle = hover ? 'rgba(59, 58, 72, 0.16)' : 'rgba(255, 255, 255, 0.7)'
+    ctx.fillStyle = hover ? XR_UI.wash : XR_UI.chip
     ctx.beginPath()
     ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2)
     ctx.fill()
@@ -270,7 +280,7 @@ export function makeCloseTexture(hover = false): THREE.CanvasTexture {
   })
 }
 
-/** Scale handle — candy-blue disk with a white corner arrow. */
+/** Scale handle — accent disk with a white corner arrow. */
 export function makeScaleHandleTexture(): THREE.CanvasTexture {
   return makeCanvasTexture(256, 256, (ctx, w, h) => {
     const pad = 28
@@ -280,7 +290,7 @@ export function makeScaleHandleTexture(): THREE.CanvasTexture {
     ctx.shadowColor = XR_UI.shadow
     ctx.shadowBlur = 20
     ctx.shadowOffsetY = 8
-    ctx.fillStyle = XR_UI.blue
+    ctx.fillStyle = XR_UI.accent
     ctx.beginPath()
     ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2)
     ctx.fill()
@@ -307,14 +317,14 @@ export function makeScrubTrackTexture(): THREE.CanvasTexture {
   return makeCanvasTexture(1024, 96, (ctx, w, h) => {
     const pad = 10
     ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = 'rgba(59, 58, 72, 0.12)'
+    ctx.fillStyle = 'rgba(23, 23, 26, 0.1)'
     ctx.beginPath()
     ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, (h - pad * 2) / 2)
     ctx.fill()
   })
 }
 
-/** Playhead — round white thumb with a sunny ring. */
+/** Playhead — round white thumb with an accent ring. */
 export function makePlayheadTexture(): THREE.CanvasTexture {
   return makeCanvasTexture(160, 160, (ctx, w, h) => {
     const pad = 22
@@ -329,7 +339,7 @@ export function makePlayheadTexture(): THREE.CanvasTexture {
     ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
-    ctx.strokeStyle = XR_UI.sunDeep
+    ctx.strokeStyle = XR_UI.accent
     ctx.lineWidth = 12
     ctx.beginPath()
     ctx.arc(w / 2, h / 2, r - 6, 0, Math.PI * 2)
@@ -337,7 +347,7 @@ export function makePlayheadTexture(): THREE.CanvasTexture {
   })
 }
 
-/** Title chip — sunny pill with ink Baloo label (replaces the black slab). */
+/** Title chip — wash pill with ink Nunito label. */
 export function makeTitleTexture(
   label: string,
   opts: { w?: number; h?: number } = {}
@@ -347,7 +357,7 @@ export function makeTitleTexture(
   return makeCanvasTexture(w, h, (ctx, cw, ch) => {
     ctx.clearRect(0, 0, cw, ch)
     const pad = 20
-    drawPill(ctx, pad, pad, cw - pad * 2, ch - pad * 2, XR_UI.sun, { pad })
+    drawPill(ctx, pad, pad, cw - pad * 2, ch - pad * 2, XR_UI.chip, { pad })
     ctx.fillStyle = XR_UI.ink
     ctx.font = SANS_LG
     ctx.textAlign = 'center'
@@ -373,7 +383,7 @@ export function makeReviewCardTexture(): THREE.CanvasTexture {
     const bezelH = 1019 // FILM_H + 0.04
     const bezelCy = 646 // FILM_Y
     ctx.save()
-    ctx.shadowColor = 'rgba(59, 58, 72, 0.25)'
+    ctx.shadowColor = 'rgba(10, 10, 23, 0.18)'
     ctx.shadowBlur = 24
     ctx.fillStyle = XR_UI.screen
     ctx.beginPath()
@@ -392,7 +402,7 @@ export function makeReviewCardTexture(): THREE.CanvasTexture {
   })
 }
 
-/** PiP-style badge: glass pill chip, ink Baloo label. Optional REC dot with glow. */
+/** PiP-style badge: glass pill chip, ink Nunito label. Optional REC dot with glow. */
 export function makeBadgeTexture(
   label: string,
   opts: { recDot?: boolean } = {}

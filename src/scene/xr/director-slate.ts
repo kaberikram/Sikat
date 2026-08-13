@@ -63,12 +63,12 @@ export interface DirectorSlate {
 }
 
 const STATE_ACCENT: Record<SlateState, string> = {
-  idle: XR_UI.mint,
-  listening: XR_UI.sun,
-  sending: XR_UI.blue,
-  thinking: XR_UI.blue,
-  replying: XR_UI.mint,
-  misheard: XR_UI.pink,
+  idle: XR_UI.status,
+  listening: XR_UI.accent,
+  sending: XR_UI.accent,
+  thinking: XR_UI.accent,
+  replying: XR_UI.status,
+  misheard: XR_UI.rec,
   offline: XR_UI.rec,
 }
 
@@ -251,13 +251,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       ctx.fill()
 
       ctx.fillStyle = XR_UI.inkSoft
-      ctx.font = '700 48px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      ctx.font = '700 48px "Nunito", ui-rounded, system-ui, sans-serif'
       ctx.textAlign = 'left'
       ctx.textBaseline = 'middle'
       ctx.fillText(STATE_LABEL[st], 100, rowY + 2)
 
       ctx.textAlign = 'right'
-      ctx.font = '600 40px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      ctx.font = '600 40px "Nunito", ui-rounded, system-ui, sans-serif'
       const hint =
         st === 'listening'
           ? 'RELEASE TO SEND'
@@ -270,7 +270,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       const bodyY = 130
       const bodyH = h - bodyY - 34
       const maxW = w - 128
-      const bodyFont = '600 56px "Baloo 2", ui-rounded, system-ui, sans-serif'
+      const bodyFont = '600 56px "Nunito", ui-rounded, system-ui, sans-serif'
       const lineH = 68
 
       if (st === 'listening') {
@@ -296,7 +296,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
           const shimmer = 0.65 + 0.35 * Math.sin(pulsePhase * 2 + i * 1.7)
           const amp = Math.min(smoothedLevel * 6, 1) * centerBias * shimmer
           const bh = 8 + amp * 48
-          ctx.fillStyle = amp > 0.08 ? XR_UI.sunDeep : 'rgba(122, 119, 134, 0.35)'
+          ctx.fillStyle = amp > 0.08 ? XR_UI.accent : 'rgba(169, 169, 179, 0.35)'
           ctx.beginPath()
           ctx.roundRect(64 + i * (barW + gap), baseY - bh, barW, bh, barW / 2)
           ctx.fill()

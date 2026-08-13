@@ -440,7 +440,7 @@ export function createCamcorderRig(
       }
       lastTakeNumber = takeNumber
       // One badge: TAKE N + red REC dot on the right edge (no separate box).
-      const tex = makeBadgeTexture(`TAKE ${takeNumber}`, { recDot: true })
+      const tex = makeBadgeTexture(`take ${takeNumber}`, { recDot: true })
       takeLabel = new THREE.Mesh(
         new THREE.PlaneGeometry(0.1, 0.022),
         new THREE.MeshBasicMaterial({

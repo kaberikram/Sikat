@@ -1,32 +1,30 @@
 import React from 'react'
 import { cn } from './cn'
 
-export type ButtonVariant = 'primary' | 'dark' | 'ghost' | 'danger' | 'pink'
+export type ButtonVariant = 'primary' | 'dark' | 'ghost' | 'danger' | 'pink' | 'wash'
 export type ButtonSize = 'sm' | 'md'
 
 // Hover settles, press springs back — overshoot is only for the release of an
 // actual press, never for a pointer drifting across the control.
 const BASE =
   'inline-flex items-center justify-center gap-1 rounded-full font-sans font-semibold cursor-pointer select-none ' +
-  'shadow-[var(--shadow-chip)] border border-[rgba(59,58,72,0.06)] ' +
-  // scale/translate are standalone properties in Tailwind v4, not `transform` —
-  // they have to be named here or the press snaps instead of easing.
-  'transition-[scale,translate,background-color,color,box-shadow] duration-150 ease-[var(--ease-settle)] ' +
-  'hover:-translate-y-px hover:shadow-[var(--shadow-soft)] ' +
-  'active:scale-[var(--press-scale)] active:translate-y-0 active:ease-[var(--ease-spring)] ' +
-  'disabled:opacity-50 disabled:pointer-events-none'
+  'border border-transparent ' +
+  'transition-[scale,background-color,color,box-shadow] duration-150 ease-[var(--ease-settle)] ' +
+  'active:scale-[var(--press-scale)] active:ease-[var(--ease-spring)] ' +
+  'disabled:opacity-50 disabled:pointer-events-none ui-hover-lift'
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-candy-sun text-ink hover:bg-candy-sun-deep',
-  dark: 'bg-ink text-white hover:bg-candy-sun-deep hover:text-ink',
-  ghost: 'bg-transparent border-transparent shadow-none text-ink-soft hover:bg-[rgba(59,58,72,0.08)] hover:text-ink hover:shadow-none',
-  danger: 'bg-rec text-white hover:bg-[#f2536b]',
-  pink: 'bg-candy-pink-deep text-white hover:bg-[#e9639c]',
+  primary: 'bg-accent text-white shadow-[var(--shadow-chip)]',
+  dark: 'bg-ink text-white shadow-[var(--shadow-chip)]',
+  wash: 'bg-chip text-ink-soft shadow-none',
+  ghost: 'bg-transparent shadow-none text-ink-soft',
+  danger: 'bg-rec text-white shadow-[var(--shadow-chip)]',
+  pink: 'bg-ink text-white shadow-[var(--shadow-chip)]',
 }
 
 const SIZES: Record<ButtonSize, string> = {
-  sm: 'px-3 py-1 text-[11px]',
-  md: 'px-4 py-1.5 text-[12px]',
+  sm: 'h-[30px] px-[13px] text-[12px]',
+  md: 'h-[40px] px-[14px] text-[12.5px]',
 }
 
 /** Class string for pill buttons — for non-<button> elements (labels, links). */

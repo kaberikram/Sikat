@@ -8,6 +8,10 @@ import { cn } from './cn'
 import { OverlayPanel } from './overlay-panel'
 import { pushToast } from './toast'
 
+function displayName(name: string): string {
+  return name.toLowerCase()
+}
+
 export function ObjectsOverlay() {
   const open = useEditorStore((s) => s.overlayObjects)
   const objects = useEditorStore((s) => s.objects)
@@ -41,39 +45,48 @@ export function ObjectsOverlay() {
   }
 
   return (
-    <OverlayPanel overlayKey="objects" title="OBJECTS" className="overlay-objects" open={open}>
-      <div className="flex flex-wrap gap-1.5 mb-3">
+    <OverlayPanel overlayKey="objects" title="objects" className="overlay-objects" open={open}>
+      <div className="flex flex-wrap gap-[7px]">
         <label className={buttonCn('primary', 'sm', 'cursor-pointer')}>
-          IMPORT
+          import
           <input type="file" accept=".gltf,.glb" onChange={handleImport} className="hidden" />
         </label>
         <Button
+          variant="wash"
           size="sm"
           onClick={() => addObject({ name: 'BOX_MDL_01', type: 'mesh', mesh: createBoxMesh() })}
         >
-          BOX
+          box
         </Button>
         <Button
+          variant="wash"
           size="sm"
           onClick={() => addObject({ name: 'SPHERE_MDL_02', type: 'mesh', mesh: createSphereMesh() })}
         >
-          SPHERE
+          sphere
         </Button>
         <Button
+          variant="wash"
           size="sm"
           onClick={() => addObject({ name: 'TAG_PLANE_00', type: 'mesh', mesh: createTextTagMesh() })}
         >
-          TAG
+          tag
         </Button>
       </div>
 
-      <div className="flex flex-col gap-2 overflow-y-auto flex-1 min-h-0">
+      <div className="flex flex-col gap-[6px] overflow-y-auto flex-1 min-h-0">
         <div
           onClick={() => setSelected(VIRTUAL_CAMERA_ID)}
           className={cn('layer-item group', selectedId === VIRTUAL_CAMERA_ID && 'active')}
         >
-          <span className="opacity-50 text-[10px] font-mono">00.</span>
-          <span className="truncate flex-1 font-mono">VIRTUAL_CAMERA</span>
+          <span className="text-[10px] font-mono text-faint">00.</span>
+          <span className="truncate flex-1">{displayName('virtual_camera')}</span>
+          <span
+            className={cn(
+              'status-dot',
+              selectedId === VIRTUAL_CAMERA_ID ? 'status-dot--accent' : ''
+            )}
+          />
         </div>
         {objects.map((obj, i) => (
           <div
@@ -81,18 +94,19 @@ export function ObjectsOverlay() {
             onClick={() => setSelected(obj.id)}
             className={cn('layer-item group', selectedId === obj.id && 'active')}
           >
-            <span className="opacity-50 text-[10px] font-mono">{String(i + 1).padStart(2, '0')}.</span>
-            <span className="truncate flex-1">{obj.name}</span>
+            <span className="text-[10px] font-mono text-faint">{String(i + 1).padStart(2, '0')}.</span>
+            <span className="truncate flex-1">{displayName(obj.name)}</span>
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 removeObject(obj.id)
               }}
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              className="opacity-0 group-hover:opacity-100 transition-opacity text-ink-soft"
             >
               <Trash2 size={12} />
             </button>
+            <span className={cn('status-dot', selectedId === obj.id ? 'status-dot--accent' : '')} />
           </div>
         ))}
       </div>

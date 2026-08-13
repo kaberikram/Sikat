@@ -50,10 +50,10 @@ export function Toasts() {
           RENDER LOOP HALTED — the 3D view stopped after repeated errors
           <button
             type="button"
-            className="px-2.5 py-0.5 rounded-full bg-white text-rec hover:bg-candy-sun transition-colors"
+            className="px-2.5 py-0.5 rounded-full bg-white text-rec hover:bg-chip transition-colors"
             onClick={() => location.reload()}
           >
-            RELOAD
+            reload
           </button>
         </div>
       )}

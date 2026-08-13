@@ -20,7 +20,7 @@ import {
   makeReviewCardTexture,
   makeScrubTrackTexture,
   makeTitleTexture,
-  XR_FONT_MONO_LG,
+  XR_FONT_MONO,
   XR_UI,
 } from './xr-ui-chrome'
 
@@ -88,10 +88,10 @@ function makeDockLegendTexture(): THREE.CanvasTexture {
     ctx.roundRect(8, 8, w - 16, h - 16, (h - 16) / 2)
     ctx.fill()
     ctx.fillStyle = XR_UI.paper
-    ctx.font = XR_FONT_MONO_LG
+    ctx.font = XR_FONT_MONO
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('B PLAY  ·  HOLD B CLOSE  ·  STICK SCRUB', w / 2, h / 2 + 2)
+    ctx.fillText('HOLD B CLOSE  ·  STICK SCRUB', w / 2, h / 2 + 2)
   })
 }
 
@@ -134,9 +134,9 @@ export function createReviewScreen(
   group.add(card)
 
   // Title chip only here (not baked into cardTex — that caused double text).
-  const titleTex = makeTitleTexture('TAKE REVIEW')
-  const titleChip = texturedPlane(0.67, 0.115, titleTex)
-  titleChip.position.set(-0.28, CARD_H / 2 - 0.1, 0.008)
+  const titleTex = makeTitleTexture('take review')
+  const titleChip = texturedPlane(0.48, 0.09, titleTex)
+  titleChip.position.set(-0.38, CARD_H / 2 - 0.1, 0.008)
   group.add(titleChip)
 
   const screenMat = new THREE.MeshBasicMaterial({
@@ -149,8 +149,8 @@ export function createReviewScreen(
   group.add(screenMesh)
 
   // Transport dock — status chrome only (buttons drive play/scrub/close).
-  const playTex = makeButtonTexture('PLAY', { bg: XR_UI.sun, fg: XR_UI.ink })
-  const pauseTex = makeButtonTexture('PAUSE', { bg: XR_UI.mint, fg: XR_UI.ink })
+  const playTex = makeButtonTexture('play', { bg: XR_UI.ink, fg: '#ffffff' })
+  const pauseTex = makeButtonTexture('pause', { bg: XR_UI.chip, fg: XR_UI.ink })
   const playMat = new THREE.MeshBasicMaterial({
     map: playTex,
     transparent: true,
@@ -172,8 +172,8 @@ export function createReviewScreen(
   group.add(scrubThumb)
 
   const legendTex = makeDockLegendTexture()
-  const legend = texturedPlane(1.15, 0.088, legendTex)
-  legend.position.set(0.12, CARD_H / 2 - 0.1, 0.02)
+  const legend = texturedPlane(0.7, 0.07, legendTex)
+  legend.position.set(0.3, CARD_H / 2 - 0.1, 0.02)
   group.add(legend)
 
   setEditorLayer(group)

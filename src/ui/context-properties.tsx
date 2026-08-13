@@ -62,7 +62,7 @@ function VectorFields({
               next[i] = v
               onChange(next)
             }}
-            className="w-full rounded-[10px] bg-white/70 border border-line p-1 text-[10px] font-mono font-bold outline-none focus:ring-2 focus:ring-candy-blue"
+            className="w-full rounded-[16px] bg-wash border border-line p-1 text-[10px] font-mono font-bold outline-none focus:ring-2 focus:ring-accent"
           />
         ))}
       </div>
@@ -128,19 +128,19 @@ export function ContextProperties() {
   if (cameraMode) {
     return (
       <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
-        <div className="text-[11px] font-bold text-ink-soft">Viewfinder / Lens</div>
+        <div className="text-[11px] font-bold text-ink-soft lowercase">viewfinder / lens</div>
         <VectorFields
-          label="POSITION"
+          label="position"
           values={virtualCamera.position}
           onChange={(v) => commitCameraVector('position', v)}
         />
         <VectorFields
-          label="ROTATION"
+          label="rotation"
           values={virtualCamera.rotation}
           onChange={(v) => commitCameraVector('rotation', v)}
         />
         <label className="text-[10px] font-semibold text-ink-soft block">
-          FOV
+          fov
           <input
             type="number"
             value={virtualCamera.fov}
@@ -148,13 +148,13 @@ export function ContextProperties() {
               const v = parseFloat(e.target.value)
               if (!Number.isNaN(v)) commitCameraFov(v)
             }}
-            className="w-full rounded-[10px] bg-white/70 border border-line p-1 text-[10px] font-mono font-bold text-ink outline-none focus:ring-2 focus:ring-candy-blue mt-0.5"
+            className="w-full rounded-[16px] bg-wash border border-line p-1 text-[10px] font-mono font-bold text-ink outline-none focus:ring-2 focus:ring-accent mt-0.5"
           />
         </label>
         <Button variant="dark" size="sm" onClick={() => snapshotCameraKeyframes(currentTime)} className="w-full">
-          ADD_KEYFRAME
+          add keyframe
         </Button>
-        <span className="text-[11px] font-mono font-bold">POST_STACK</span>
+        <span className="text-[11px] font-mono font-bold lowercase">post stack</span>
         <PostStackEditor
           openSections={openSections}
           setOpenSections={setOpenSections}
@@ -178,17 +178,17 @@ export function ContextProperties() {
     <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
       <div className="text-[11px] font-bold truncate">{selected.name}</div>
       <VectorFields
-        label="POSITION"
+        label="position"
         values={selected.position}
         onChange={(v) => commitObjectVector(selected, 'position', v)}
       />
       <VectorFields
-        label="ROTATION"
+        label="rotation"
         values={selected.rotation}
         onChange={(v) => commitObjectVector(selected, 'rotation', v)}
       />
       <VectorFields
-        label="SCALE"
+        label="scale"
         values={selected.scale}
         onChange={(v) => commitObjectVector(selected, 'scale', v)}
       />
@@ -198,10 +198,10 @@ export function ContextProperties() {
         onClick={() => snapshotObjectKeyframes(selected.id, currentTime)}
         className="w-full"
       >
-        ADD_KEYFRAME
+        add keyframe
       </Button>
       <Button
-        variant="pink"
+        variant="wash"
         size="sm"
         onClick={() => {
           const kfs = buildTurnaroundRotationKeyframes(selected.rotation, duration)
@@ -210,12 +210,12 @@ export function ContextProperties() {
         }}
         className="w-full"
       >
-        360_TURNAROUND
+        360 turnaround
       </Button>
       {subMeshes.length > 0 && (
         <div className="fx-row pt-2">
           <div className="text-[11px] font-semibold block mb-2">
-            MESHES
+            meshes
             <div className="text-[9px] font-mono font-bold opacity-60 mt-0.5 flex justify-end gap-3">
               <span>α</span>
               <span>SHD</span>
@@ -230,7 +230,7 @@ export function ContextProperties() {
                 <label className="flex items-center justify-center text-[8px] cursor-pointer" title="Transparent">
                   <input
                     type="checkbox"
-                    className="h-3.5 w-3.5 rounded accent-[var(--color-candy-mint-deep)]"
+                    className="h-3.5 w-3.5 rounded accent-[var(--color-accent)]"
                     checked={getEffectiveMeshTransparent(m, selected.subMeshTransparent)}
                     onChange={(e) => setSubMeshTransparent(selected.id, m.uuid, e.target.checked)}
                   />
@@ -238,7 +238,7 @@ export function ContextProperties() {
                 <label className="flex items-center justify-center text-[8px] cursor-pointer" title="Cast and receive shadows">
                   <input
                     type="checkbox"
-                    className="h-3.5 w-3.5 rounded accent-[var(--color-candy-mint-deep)]"
+                    className="h-3.5 w-3.5 rounded accent-[var(--color-accent)]"
                     checked={getEffectiveMeshShadow(m, selected.subMeshShadow)}
                     onChange={(e) => setSubMeshShadow(selected.id, m.uuid, e.target.checked)}
                   />

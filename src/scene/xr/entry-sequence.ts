@@ -131,7 +131,7 @@ function buildObjects(): void {
   const positions = new Float32Array(PARTICLES * 3)
   const colors = new Float32Array(PARTICLES * 3)
   particleSeeds = new Float32Array(PARTICLES * 2) // radius, phase
-  const palette = [XR_UI.mint, XR_UI.sun, XR_UI.pink, XR_UI.blue].map((c) => new THREE.Color(c))
+  const palette = [XR_UI.accent, XR_UI.mint, XR_UI.ink, XR_UI.wash].map((c) => new THREE.Color(c))
   for (let i = 0; i < PARTICLES; i++) {
     const r = 0.35 + Math.random() * (stage.radius + 0.4)
     const a = Math.random() * Math.PI * 2
