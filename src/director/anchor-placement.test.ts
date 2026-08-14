@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { BESIDE_GAP_M, resolveAnchor, type AnchorBox } from './anchor-placement.ts'
+import {
+  BESIDE_GAP_M,
+  findOpenSpot,
+  footprintRadius,
+  resolveAnchor,
+  SPAWN_LIFT_M,
+  type AnchorBox,
+} from './anchor-placement.ts'
 
 /** A box by centre and size — how a person describes a prop. */
 const box = (
@@ -116,4 +123,91 @@ test('the stage relocating carries placement with it', () => {
   const [x, y, z] = resolveAnchor('on', moved, SNEAKER)
   assert.ok(close(x, 3) && close(z, -2), `x=${x} z=${z}`)
   assert.ok(close(y, 0.84 + 0.055), `y=${y}`)
+})
+
+// ---- finding a spot when the direction never named one --------------------
+//
+// "add a box" says nothing about where it goes. This used to answer with one
+// hard-coded coordinate, so the second prop spawned inside the first.
+
+const STAGE = { center: [0, 0, 0] as [number, number, number], radius: 3 }
+
+/** Horizontal gap between two spots, which is all placement cares about. */
+const flatGap = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[2] - b[2])
+
+test('an empty stage puts the first prop in the middle', () => {
+  const [x, y, z] = findOpenSpot([], STAGE, 0.25)
+  assert.equal(x, 0)
+  assert.equal(z, 0)
+  assert.ok(close(y, SPAWN_LIFT_M), `y=${y}`)
+})
+
+test('a second prop clears the first instead of landing inside it', () => {
+  const spot = findOpenSpot([PEDESTAL], STAGE, 0.25)
+  const clearance = footprintRadius(PEDESTAL) + 0.25 + BESIDE_GAP_M
+  assert.ok(
+    flatGap(spot, [0, 0, 0]) >= clearance,
+    `spot ${spot} is inside the pedestal (needs ${clearance})`
+  )
+})
+
+test('each new prop finds its own spot on a filling stage', () => {
+  const placed: AnchorBox[] = []
+  const radius = 0.3
+  for (let i = 0; i < 6; i++) {
+    const spot = findOpenSpot(placed, STAGE, radius)
+    for (const other of placed) {
+      const need = footprintRadius(other) + radius + BESIDE_GAP_M
+      assert.ok(flatGap(spot, [
+        (other.min[0] + other.max[0]) / 2,
+        0,
+        (other.min[2] + other.max[2]) / 2,
+      ]) >= need, `prop ${i} overlaps an earlier one`)
+    }
+    placed.push({
+      min: [spot[0] - radius, 0, spot[2] - radius],
+      max: [spot[0] + radius, 1, spot[2] + radius],
+    })
+  }
+})
+
+test('props stay on the stage', () => {
+  const placed: AnchorBox[] = []
+  for (let i = 0; i < 12; i++) {
+    const spot = findOpenSpot(placed, STAGE, 0.3)
+    assert.ok(
+      flatGap(spot, [0, 0, 0]) <= STAGE.radius,
+      `prop ${i} walked off the stage to ${spot}`
+    )
+    placed.push({
+      min: [spot[0] - 0.3, 0, spot[2] - 0.3],
+      max: [spot[0] + 0.3, 1, spot[2] + 0.3],
+    })
+  }
+})
+
+test('the same set always stages the same way', () => {
+  const first = findOpenSpot([PEDESTAL, SNEAKER], STAGE, 0.25)
+  const again = findOpenSpot([PEDESTAL, SNEAKER], STAGE, 0.25)
+  assert.deepEqual(first, again)
+})
+
+test('a full stage still places the prop rather than refusing it', () => {
+  const wall: AnchorBox[] = []
+  for (let x = -3; x <= 3; x += 0.5) {
+    for (let z = -3; z <= 3; z += 0.5) {
+      wall.push({ min: [x - 0.25, 0, z - 0.25], max: [x + 0.25, 1, z + 0.25] })
+    }
+  }
+  const [x, , z] = findOpenSpot(wall, STAGE, 0.25)
+  assert.equal(x, 0)
+  assert.equal(z, 0)
+})
+
+test('a prop still mid entrance-pop is not spawned into', () => {
+  // A box 0.15s into its 0.35s pop measures ~40% of full size. The next prop
+  // must reserve room for what it is becoming, not what it momentarily is.
+  const popping = box(0, 0.1, 0, 0.02, 0.02, 0.02)
+  const spot = findOpenSpot([popping], STAGE, 0.25)
+  assert.ok(flatGap(spot, [0, 0, 0]) > 0.25, `landed on the popping prop at ${spot}`)
 })
