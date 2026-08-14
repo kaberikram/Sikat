@@ -149,24 +149,27 @@ export function createCamcorderRig(
   panel.rotation.set((-PANEL_TILT_DEG * Math.PI) / 180, 0, 0)
   group.add(panel)
 
-  // The card first, so the screen composites over its preview well.
   const directorSlate = createDirectorSlate(panel)
 
-  // Rear LCD facing the shooter (+Z) — plane default faces +Z, leave that.
-  // A sibling of the card rather than a child: the card's ambient fade takes
-  // the chrome away without taking the shot with it.
+  // Rear LCD facing the shooter (+Z) — plane default faces +Z, leave that. It
+  // sits in the window the card cuts for it, as a sibling rather than a child
+  // so the card's state animation never scales the shot.
+  //
+  // This material is the one the shot ends up on: `xr-viewfinder.ts` re-points
+  // its map at the render target, so these flags are the screen's for the whole
+  // session. `depthTest: false` keeps a prop the director leaned into from
+  // slicing the panel; `depthWrite` stays on (the default) because the screen is
+  // opaque and sorts nearest — without it, farther geometry drawn afterwards
+  // would paint straight through.
   const screenMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(PREVIEW_W, PREVIEW_H),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       side: THREE.DoubleSide,
-      // No depth test, matching the card. Half a panel sliced by a prop the
-      // director leaned into reads as broken, not as depth.
       depthTest: false,
     })
   )
   screenMesh.position.set(0, PREVIEW_Y, 0.0005)
-  screenMesh.renderOrder = 14
   panel.add(screenMesh)
   // The world answers first; the slate is what's left when it can't.
   directorSlate.setAmbient(true)
@@ -510,8 +513,7 @@ export function createCamcorderRig(
       )
       // Tucked inside the frame's top edge rather than floating over the shot.
       takeLabel.position.set(0, (PREVIEW_H - BADGE_H) / 2 - BADGE_INSET_M, 0.001)
-      // Above the screen's own order, or the LCD paints over it — neither
-      // depth-tests, so the later draw simply wins.
+      // Above the card's order so REC reads over the chrome as well as the shot.
       takeLabel.renderOrder = 15
       screenMesh.add(takeLabel)
       setEditorLayer(takeLabel)
