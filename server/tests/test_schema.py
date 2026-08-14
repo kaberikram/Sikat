@@ -3,6 +3,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.schema import (
+    Intent,
+    PlacementAnchor,
     SceneState,
     Target,
     Telemetry,
@@ -118,3 +120,27 @@ def test_intent_suggest_action():
     )
     assert intent.action == "suggest"
     assert intent.suggestion_command == "make the box bounce"
+
+
+def test_flat_anchor_fields_become_nested_anchor():
+    intent = Intent.model_validate(
+        {
+            "action": "spawn",
+            "primitive": "box",
+            "anchor_target": "CORE_SPHERE",
+            "anchor_relation": "left_of",
+        }
+    )
+    assert intent.anchor is not None
+    assert intent.anchor.target.name == "CORE_SPHERE"
+    assert intent.anchor.relation == "left_of"
+
+
+def test_nested_anchor_still_works_and_fills_flat_siblings():
+    intent = Intent(
+        action="spawn",
+        primitive="box",
+        anchor=PlacementAnchor(target=Target(name="PEDESTAL"), relation="on"),
+    )
+    assert intent.anchor_target == "PEDESTAL"
+    assert intent.anchor_relation == "on"

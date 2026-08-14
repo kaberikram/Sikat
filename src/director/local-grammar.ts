@@ -193,7 +193,13 @@ function parseMood(t: string): LocalPacketSpec | null {
  */
 const SPAWN_RELATIONS: Record<string, AnchorRelation> = {
   'on top of': 'on',
+  'on the left of': 'left_of',
+  'on the right of': 'right_of',
+  'to the left of': 'left_of',
+  'to the right of': 'right_of',
   'in front of': 'in_front_of',
+  'left of': 'left_of',
+  'right of': 'right_of',
   'next to': 'beside',
   alongside: 'beside',
   beside: 'beside',

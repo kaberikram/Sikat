@@ -9,6 +9,8 @@ _RELATION_WORDS: dict[str, str] = {
     "beside": "beside",
     "in_front_of": "in front of",
     "behind": "behind",
+    "left_of": "left of",
+    "right_of": "right of",
 }
 
 _COLOR_WORDS: dict[str, str] = {

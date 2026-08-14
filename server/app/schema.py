@@ -80,7 +80,9 @@ class Target(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-AnchorRelation = Literal["on", "above", "beside", "in_front_of", "behind"]
+AnchorRelation = Literal[
+    "on", "above", "beside", "in_front_of", "behind", "left_of", "right_of"
+]
 
 
 class PlacementAnchor(BaseModel):
@@ -897,6 +899,9 @@ class Intent(BaseModel):
     payload, where the client resolves it against live bounds. Without this
     field the crew has no way to say it and every relative spawn lands centre
     stage."""
+    anchor_target: str | None = None
+    """Flat sibling of `anchor` — models drop nested objects; they keep strings."""
+    anchor_relation: AnchorRelation | None = None
     rotation: Vec3 | None = None
     scale: Vec3 | None = None
     mode: Literal["absolute", "relative"] | None = None
@@ -941,6 +946,26 @@ class Intent(BaseModel):
     clarify_options: list[str] | None = None
     # suggest (server-internal — surfaced as agent_suggestion after command)
     suggestion_command: str | None = None
+
+    @model_validator(mode="after")
+    def _coerce_flat_anchor(self):
+        """Build nested `anchor` from flat siblings the model actually emits.
+
+        Structured output drops `anchor: {target, relation}`. It keeps
+        `anchor_target` + `anchor_relation` the same way it keeps `target`.
+        Specialists still read `intent.anchor`. Nested `anchor` still works.
+        """
+        if self.anchor is None and self.anchor_target and self.anchor_relation:
+            self.anchor = PlacementAnchor(
+                target=Target(name=self.anchor_target),
+                relation=self.anchor_relation,
+            )
+        elif self.anchor is not None:
+            if not self.anchor_target:
+                self.anchor_target = self.anchor.target.name
+            if not self.anchor_relation:
+                self.anchor_relation = self.anchor.relation
+        return self
 
 
 class IntentList(BaseModel):

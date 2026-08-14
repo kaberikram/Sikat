@@ -13,7 +13,7 @@ from typing import AsyncIterator, Awaitable, Callable, Literal
 from . import session_context
 from .performers import brief as performers_brief
 from .performers import crew_brief
-from .prompts import ANIMATION_EDIT_PROMPT, build_plan_prompt
+from .prompts import ANIMATION_EDIT_PROMPT, MOTION_CRAFT_ADDENDUM, SPATIAL_ADDENDUM, build_plan_prompt
 from .salvage import salvage_step
 from .scene_context import format_scene_brief
 from .schema import DirectorPlan, Intent, IntentList, PlanMode, PlanStep, SceneFrame, SceneState
@@ -68,9 +68,9 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 ## Actions
 | action | use when | key fields |
 |--------|----------|------------|
-| spawn | new primitive | primitive, color, name, text, position OR anchor |
+| spawn | new primitive | primitive, color, name, text, position OR anchor_target+anchor_relation |
 | remove | delete object | target (name) |
-| transform | move/rotate/scale | target, position OR anchor, rotation/scale, mode (absolute\\|relative), transition |
+| transform | move/rotate/scale | target, position OR anchor_target+anchor_relation, rotation/scale, mode (absolute\\|relative), transition |
 | animate | motion on object | target, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
 | move_camera | frame shot | position, rotation, look_at (ONLY when explicitly framing), fov, transition |
 
@@ -103,17 +103,7 @@ guess at size or work a surface height out from a scale multiplier:
 - `NOW` differs from `base` whenever a track is active. Reason about `NOW` for
   where something *is*; write `base` values when moving an unanimated object.
 
-**Prefer `anchor` over computing a position.** For anything placed relative to
-another object, emit `anchor: {{target, relation, offset?}}` with relation one of
-`on | above | beside | in_front_of | behind`, and omit `position`. The client
-resolves it against live bounds at apply time, which is both more accurate than
-arithmetic and stays correct when the anchor animates, is rescaled, or the whole
-stage relocates (it does, in XR). `in_front_of` / `behind` are relative to the
-camera, not a world axis.
-
-Use an absolute `position` only when no relation expresses it — a specific
-coordinate, a formation you are laying out yourself, or a spot in empty space.
-Keep new objects inside the stage radius; the brief flags anything OFF STAGE.
+{spatial_addendum}
 
 ### Creative direction
 Author a unique take for THIS scene. Do not follow a stock beat list or copy SET DAY.
@@ -257,25 +247,10 @@ Only use track_keyframes when the path is scenic/emotional; bounce can stay moti
 | swing | pendulum arc | span, amplitude |
 | squash | flatten then recover | flat (0-1) |
 
-Drop vs bounce (critical — they must look different):
-- drop: object starts ABOVE rest position, falls ONCE with gravity, lands and STOPS. No repeated hops.
-- bounce: object stays on ground, hops 2-4 times with shrinking parabolic arcs.
-- "three hops" / "high bounce" → bounce with hops=3, height=2.5+
-- "move the ball freely" / "wander" / "explore the stage" → motion wander (NOT orbit)
-- "orbit" alone = small local circle; "orbit the stage" = pivot 1, big ring
-
 Do NOT default to orbit for vague "move it" / "make it move" — compose keyframes
 that match what they said. Read STAGE center + radius from the briefing.
 
-## Motion language (craft terms → existing tools)
-- "pop in" / "scale in" / "appear" → motion pop (snappy reveal); "fade in/out" → set_material opacity 0↔1 with a transition
-- "slide in" / "enter from off-stage" → track_keyframes from just outside the stage toward BASE, front-loaded (big early steps, small late ones)
-- "idle" / "ambient" / "keep it alive" → float or pulse, amplitude 0.1–0.3, animate_repeat true — subtle beats showy for anything looping
-- "stagger" / "cascade" → same motion across objects with start times offset 0.1–0.3s each
-- "anticipation" → one small keyframe opposite the travel direction before the main move
-- "follow-through" / "overshoot" / "settle" → keyframes passing the end pose ~2–5% then returning
-- "springy" / "bouncy" → bounce (tune hops/decay) or overshoot keyframes; keep it subtle unless asked for playful
-Easing defaults: entrances/reveals easeOut; on-screen A→B easeInOut; constant loops linear. Quick feedback beats short (~0.3–0.6s), scenic travel 1.5–3s.
+{motion_craft_addendum}
 
 ## Custom motion (fallback note)
 `track_keyframes` overrides `motion` when both are set. Never emit freeform-only text.
@@ -564,6 +539,8 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
         history_section=_history_section(),
         parse_hints=parse_hints,
         animation_edit=ANIMATION_EDIT_PROMPT,
+        spatial_addendum=SPATIAL_ADDENDUM,
+        motion_craft_addendum=MOTION_CRAFT_ADDENDUM,
     )
 
 
@@ -572,6 +549,10 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
 _JSON_SCHEMA_HINT = """
 Respond with a single JSON object of exactly this shape:
 {"intents": [ {"action": "<one of the actions above>", "say": "<in-character radio line>", ...only relevant fields...}, ... ]}
+Example for "place a box on the left of the sphere":
+{"intents": [
+  {"action": "spawn", "primitive": "box", "anchor_target": "CORE_SPHERE", "anchor_relation": "left_of", "say": "box in, camera left of the sphere"}
+]}
 Example for "add a blue sphere and make it float":
 {"intents": [
   {"action": "spawn", "primitive": "sphere", "color": "#0a84ff", "say": "sphere in, blue, stage left"},

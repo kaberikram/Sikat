@@ -1,10 +1,58 @@
 """Prompt construction for the whole-utterance Director planning loop."""
 from __future__ import annotations
 
+from .motion_vocab import CANONICAL_MOTIONS
 from .performers import brief as performers_brief
 from .performers import crew_brief
 from .scene_context import format_scene_brief
 from .schema import SceneState
+
+SPATIAL_ADDENDUM = """\
+## Placement (critical)
+Prefer `anchor_target` + `anchor_relation` over a computed `position` whenever
+they place something relative to an object on set. Omit `position`. Nested
+`anchor: {target, relation}` is accepted but models drop it — emit the flat
+siblings. The client measures live bounds.
+
+Relations: on | above | beside | in_front_of | behind | left_of | right_of.
+`in_front_of` / `behind` / `left_of` / `right_of` are camera-relative (what the
+shot sees), not world axes. `beside` is a neighbour on the narrowest floor axis.
+
+Use object names from the scene briefing. If the referent is not on set, spawn
+it first, then place the new prop relative to it. A bare spawn with no relation
+lands in an open spot — that is not "on the left of the sphere".
+
+`NOW` is where something is at the playhead; `BASE` is the rest pose. Revise a
+track by emitting the FULL replacement (there is no partial keyframe edit).
+Pronouns and an omitted target refer to the most recently mentioned object in
+the history / last take journal.
+"""
+
+MOTION_CRAFT_ADDENDUM = f"""\
+## Motion craft
+Canonical ids: {", ".join(sorted(CANONICAL_MOTIONS))}.
+Literal verb → `motion` id (client craft synths). Bare "animate it" / feeling /
+story with no verb → `track_keyframes` around BASE. Layer bounce/float/shake
+onto an existing XZ path — do not snap back to BASE.
+
+Drop vs bounce (they must look different):
+- drop: starts ABOVE rest, falls ONCE, lands and STOPS. No hops.
+- bounce: stays on ground, hops 2–4 times with shrinking arcs.
+- "three hops" / "high bounce" → bounce hops=3, height=2.5+
+- wander/roam/explore/freely → wander (NOT orbit)
+- "orbit" alone = small local circle; "orbit the stage" = pivot 1
+
+Craft terms → existing tools:
+- "pop in" / "scale in" / "appear" → motion pop
+- "fade in/out" → set_material opacity 0↔1 with a transition
+- "slide in" / "enter from off-stage" → track_keyframes from just outside stage toward BASE
+- "idle" / "ambient" / "keep it alive" → float or pulse, amplitude 0.1–0.3, animate_repeat
+- "stagger" / "cascade" → same motion, start offsets 0.1–0.3s per object
+- "anticipation" → one small key opposite travel before the main move
+- "follow-through" / "overshoot" / "settle" → pass the end pose ~2–5% then return
+- "springy" / "bouncy" → bounce (tune hops/decay) or overshoot keys
+Easing: entrances/reveals easeOut; on-screen A→B easeInOut; loops linear.
+"""
 
 CORE_PROMPT = """You are the Director's Assistant on RADIO_EDIT.EXE.
 Turn the director's complete instruction into one JSON DirectorPlan. Return JSON only,
@@ -23,6 +71,7 @@ For pitch, return up to three suggest steps and no mutating actions. For transpo
 map hold/stop to pause, action/go to play, cut to cut, and back to one to seek 0.
 Use object names from the scene. Colors are lowercase #rrggbb and rotations are radians.
 
+""" + SPATIAL_ADDENDUM + MOTION_CRAFT_ADDENDUM + """
 ## Creative direction
 Author a unique take for THIS scene. Constraints only: stay inside stage radius;
 in XR do not move CAMERA / VIRTUAL_CAMERA position or rotation (the grip owns
@@ -64,12 +113,6 @@ Craft defaults: entrances/reveals ease out; on-screen A→B moves ease in-out; l
 Ambient/idle motion stays subtle (amplitude 0.1–0.3, animate_repeat); "stagger" → offset start times 0.1–0.3s per object.
 """
 
-FAST_ADDENDUM = """Prefer known motion ids for literal verbs (bounce uses pro physics).
-Bare animate / creative / multi-beat direction → needs_deeper_creativity true
-(escalate to the animation director). Emit mutating steps if you have them —
-do not empty the array just to escalate.
-"""
-
 LAYER_BOUNCE_HINT = "Layer bounce/float onto an existing XZ path when one exists."
 
 ANIMATION_EDIT_PROMPT = """\
@@ -86,6 +129,12 @@ is the right-hand camcorder the director is holding and recording with; agent
 keyframed pose fights the grip. Prefer animating scene objects. For lens feel
 use one-shot move_camera with fov (or desktop framing), never a camera motion path.
 """
+
+FAST_ADDENDUM = """Prefer known motion ids for literal verbs (bounce uses pro physics).
+Bare animate / creative / multi-beat direction → needs_deeper_creativity true
+(escalate to the animation director). Emit mutating steps if you have them —
+do not empty the array just to escalate.
+""" + ANIMATION_EDIT_PROMPT
 
 STRONG_ADDENDUM = "You are the animation director. " + (
     "Open briefs (surprise me, goes crazy, neon Tokyo, I trust you) MUST author "

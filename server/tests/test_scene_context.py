@@ -12,6 +12,23 @@ def test_format_scene_brief_empty_scene():
     assert "VIRTUAL CAMERA" in brief
     assert "LIGHTING:" in brief
     assert "STAGE:" in brief
+    assert "LIVE MOTION: none" in brief
+
+
+def test_live_motion_line_names_running_object():
+    brief = format_scene_brief(animated_sphere_scene())
+    line = next(row for row in brief.splitlines() if row.startswith("LIVE MOTION:"))
+    assert "CORE_SPHERE" in line
+    assert "running now" in line
+
+
+def test_live_motion_line_includes_named_bounce():
+    scene = animated_sphere_scene()
+    scene.objects[0].motion = "bounce"
+    scene.objects[0].motionLoop = True
+    brief = format_scene_brief(scene)
+    line = next(row for row in brief.splitlines() if row.startswith("LIVE MOTION:"))
+    assert "CORE_SPHERE bounce looping · running now" in line
 
 
 def test_format_scene_brief_heartbeat_vs_full():

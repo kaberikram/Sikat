@@ -6,7 +6,7 @@ from app.prompts import build_plan_prompt
 
 def test_intent_prompt_has_motion_language_section():
     prompt = _system_prompt(None)
-    assert "Motion language" in prompt
+    assert "Motion craft" in prompt
     assert "fade in/out" in prompt
     assert "anticipation" in prompt
     assert "follow-through" in prompt
@@ -29,7 +29,10 @@ def test_strong_prompt_teaches_anticipation_and_follow_through():
 
 def test_fast_prompt_stays_lean():
     prompt = build_plan_prompt(None, "", tier="fast")
-    assert "follow-through" not in prompt
+    # Shared craft mapping lives on CORE. Strong-tier animation-director
+    # teaching stays off the fast path.
+    assert "You are the animation director" not in prompt
+    assert "MUST author track_keyframes" not in prompt
 
 
 def test_craft_lines_do_not_weaken_bare_animate_policy():

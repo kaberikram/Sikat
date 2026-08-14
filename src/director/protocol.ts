@@ -27,7 +27,14 @@ export interface Target {
  *
  * `position` remains the escape hatch for anything these relations don't cover.
  */
-export type AnchorRelation = 'on' | 'above' | 'beside' | 'in_front_of' | 'behind'
+export type AnchorRelation =
+  | 'on'
+  | 'above'
+  | 'beside'
+  | 'in_front_of'
+  | 'behind'
+  | 'left_of'
+  | 'right_of'
 
 export interface PlacementAnchor {
   target: Target

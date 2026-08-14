@@ -166,6 +166,18 @@ export function resolveAnchor(
       out = [ax + dir[0] * reach * sign, ay, az + dir[2] * reach * sign]
       break
     }
+    case 'left_of':
+    case 'right_of': {
+      const right = cameraRight(center(anchor), cameraPos)
+      const reach = footprintRadius(anchor) + movingRadius + BESIDE_GAP_M
+      const sign = relation === 'right_of' ? 1 : -1
+      out = [ax + right[0] * reach * sign, ay, az + right[2] * reach * sign]
+      break
+    }
+    default: {
+      const _exhaustive: never = relation
+      throw new Error(`unhandled anchor relation: ${_exhaustive}`)
+    }
   }
 
   if (offset) return [out[0] + offset[0], out[1] + offset[1], out[2] + offset[2]]
@@ -187,4 +199,10 @@ function towardCamera(anchorCenter: Vec3, cameraPos?: Vec3 | null): Vec3 {
   const len = Math.hypot(dx, dz)
   if (len < 1e-4) return [0, 0, 1]
   return [dx / len, 0, dz / len]
+}
+
+/** Camera-right on the floor plane. `left_of` / `right_of` are from the shot. */
+function cameraRight(anchorCenter: Vec3, cameraPos?: Vec3 | null): Vec3 {
+  const [tx, , tz] = towardCamera(anchorCenter, cameraPos)
+  return [tz, 0, -tx]
 }

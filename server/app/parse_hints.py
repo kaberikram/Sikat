@@ -16,6 +16,10 @@ def _intent_summary(intent: Intent) -> str:
         parts.append(f"color={intent.color}")
     if intent.name:
         parts.append(f"name={intent.name}")
+    if intent.anchor is not None:
+        rel = intent.anchor.relation.replace("_", " ")
+        name = intent.anchor.target.name or "it"
+        parts.append(f"anchor={rel} {name}")
     motion = intent.motion or intent.preset
     if motion:
         parts.append(f"motion={motion}")

@@ -76,12 +76,10 @@ async def test_deterministic_line_still_goes_to_the_llm(monkeypatch, scene):
 
 
 async def test_the_crew_read_outranks_the_grammar_read(monkeypatch, scene):
-    """The line that started all this.
+    """Exactly one spawn reaches the set, and it is beside the cube.
 
-    "add sphere beside the cube" used to spawn a box at dead centre, because
-    the grammar answered outright and its table matched `cube` before `sphere`.
-    Whatever the grammar makes of a line now, exactly one spawn reaches the set
-    and it is the crew's.
+    Grammar can parse this, but the keyed path asks the crew. Duplicate
+    detection drops a second spawn if both answer.
     """
     async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         yield Intent(
@@ -103,6 +101,56 @@ async def test_the_crew_read_outranks_the_grammar_read(monkeypatch, scene):
     assert spawns[0].payload.anchor is not None
     assert spawns[0].payload.anchor.target.name == "CUBE"
     assert spawns[0].payload.anchor.relation == "beside"
+    assert spawns[0].payload.position is None
+
+
+async def test_put_a_cube_on_the_pedestal_goes_to_the_llm(monkeypatch):
+    """Keyed path: the model owns the spawn. Salvage fills a dropped relation."""
+    stream_started = False
+
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
+        nonlocal stream_started
+        stream_started = True
+        yield Intent(action="spawn", primitive="box", color="#ff3b30")
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+
+    _, _, packets, _, _ = await _collect_llm(
+        Producer(), "put a red cube on the pedestal", scene_with("PEDESTAL")
+    )
+    spawns = [p for p in packets if p.command == "SPAWN_OBJECT"]
+    assert stream_started is True
+    assert len(spawns) == 1
+    assert spawns[0].payload.anchor is not None
+    assert spawns[0].payload.anchor.relation == "on"
+    assert spawns[0].payload.anchor.target.name == "PEDESTAL"
+
+
+async def test_place_a_box_left_of_sphere_uses_flat_anchor(monkeypatch):
+    async def fake_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
+        yield Intent(
+            action="spawn",
+            primitive="box",
+            anchor_target="CORE_SPHERE",
+            anchor_relation="left_of",
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "stream_intents", fake_stream)
+    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
+
+    _, _, packets, _, _ = await _collect_llm(
+        Producer(),
+        "place a box on the left of a sphere",
+        scene_with("CORE_SPHERE"),
+    )
+    spawns = [p for p in packets if p.command == "SPAWN_OBJECT"]
+    assert len(spawns) == 1
+    assert spawns[0].payload.anchor is not None
+    assert spawns[0].payload.anchor.relation == "left_of"
+    assert spawns[0].payload.anchor.target.name == "CORE_SPHERE"
     assert spawns[0].payload.position is None
 
 

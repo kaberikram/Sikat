@@ -6,13 +6,28 @@ from tests.helpers import scene_with
 
 
 def test_spawn_defers_when_llm_available():
-    """Anything that changes the set belongs to the crew that can read a
-    sentence. The grammar read "add sphere beside the cube" as a box."""
+    """A spawn belongs to the crew that can read a sentence — keyed path."""
     scene = scene_with("BOX")
     intent = parse_one_clause("add a red box", scene)
     assert intent is not None
     assert defer_clause_to_llm("add a red box", intent, llm_available=True) is True
     assert is_llm_owned_clause("add a red box", intent, llm_available=True) is True
+
+
+def test_anchored_spawn_defers_when_llm_available():
+    """'On the pedestal' still goes to the model when a key is set.
+
+    Grammar can parse it, but it is not the authority. Flattened
+    `anchor_target` / `anchor_relation` (and salvage) are how the relation
+    survives, not a regex intercept.
+    """
+    scene = scene_with("PEDESTAL")
+    intent = parse_one_clause("put a red cube on the pedestal", scene)
+    assert intent is not None
+    assert intent.anchor is not None
+    assert defer_clause_to_llm(
+        "put a red cube on the pedestal", intent, llm_available=True
+    ) is True
 
 
 def test_spawn_grammar_owned_with_no_llm():
@@ -65,10 +80,22 @@ def test_playback_grammar_owned_when_llm_available():
     assert defer_clause_to_llm("play", intent, llm_available=True) is False
 
 
-def test_fx_defers_when_llm_available():
+def test_fx_toggle_grammar_owned_when_llm_available():
+    """Simple on/off is instant — no magnitude to infer."""
     intent = parse_one_clause("enable bloom", None)
     assert intent is not None
-    assert defer_clause_to_llm("enable bloom", intent, llm_available=True) is True
+    assert intent.action == "update_fx"
+    assert not intent.fx_set
+    assert defer_clause_to_llm("enable bloom", intent, llm_available=True) is False
+
+
+def test_fx_complaint_defers_when_llm_available():
+    """'Too much bloom' writes fx_set — the model owns the magnitude."""
+    intent = parse_one_clause("too much bloom", None)
+    assert intent is not None
+    assert intent.action == "update_fx"
+    assert intent.fx_set
+    assert defer_clause_to_llm("too much bloom", intent, llm_available=True) is True
 
 
 def test_fx_grammar_owned_with_no_llm():

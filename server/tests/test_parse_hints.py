@@ -15,6 +15,18 @@ def test_hints_include_handled_marker():
     assert "spawn" in hints
 
 
+def test_hints_include_the_placement_anchor():
+    scene = scene_with("PEDESTAL")
+    parsed = [
+        (
+            "put a red cube on the pedestal",
+            parse_one_clause("put a red cube on the pedestal", scene),
+        )
+    ]
+    hints = format_parse_hints(parsed, scene, handled_indices={0})
+    assert "anchor=on PEDESTAL" in hints
+
+
 def test_hints_empty_when_nothing_parsed():
     hints = format_parse_hints([("xyzzy", None)], None, handled_indices=set())
     assert hints == ""

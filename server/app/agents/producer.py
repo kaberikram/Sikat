@@ -19,7 +19,7 @@ from ..motion_policy import soften_default_motion
 from ..motion_floor import is_animation_seeking
 from ..grammar_say import intent_with_radio
 from ..parse_hints import format_parse_hints
-from ..clause_handlers import clause_names_primitive, find_placement_anchor
+from ..clause_handlers import clause_names_primitive, find_placement_anchor, split_placement
 from ..fallback_parser import parse_one_clause, split_clauses
 from ..mood_presets import mood_packets
 from ..shine_presets import resolve_hero, shine_packets
@@ -134,6 +134,20 @@ def _salvage_spawn_anchor(
         if len(named) != 1:
             return None
         clause = named[0]
+        found = find_placement_anchor(clause, scene)
+        if found:
+            return found
+        # "put a red cube, on the pedestal" — the comma splits the destination
+        # onto its own clause. Only steal a leftover that *is* the placement
+        # (starts with the relation); "turn on the bloom" has a head and is not.
+        for other in clauses:
+            if other == clause:
+                continue
+            split = split_placement(other)
+            if split is None or split[0].strip():
+                continue
+            return find_placement_anchor(other, scene)
+        return None
     return find_placement_anchor(clause, scene)
 
 

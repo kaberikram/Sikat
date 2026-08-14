@@ -90,6 +90,8 @@ test('every placement phrase maps to a relation the client can resolve', () => {
     ['alongside the pedestal', 'beside'],
     ['in front of the pedestal', 'in_front_of'],
     ['behind the pedestal', 'behind'],
+    ['on the left of the pedestal', 'left_of'],
+    ['to the right of the pedestal', 'right_of'],
   ]
   for (const [phrase, relation] of cases) {
     const specs = parseOfflineClauses(`add a cone ${phrase}`)

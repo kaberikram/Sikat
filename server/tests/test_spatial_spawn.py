@@ -96,6 +96,8 @@ def test_grammar_reads_the_phrase_relations():
         ("next to the pedestal", "beside"),
         ("in front of the pedestal", "in_front_of"),
         ("behind the pedestal", "behind"),
+        ("on the left of the pedestal", "left_of"),
+        ("to the right of the pedestal", "right_of"),
     ):
         (i,) = parse(f"add a cone {phrase}", scene)
         assert i.anchor is not None, phrase
@@ -156,6 +158,43 @@ async def test_salvage_fills_the_anchor_the_model_dropped(producer: Producer):
     assert packets[0].payload.anchor is not None
     assert packets[0].payload.anchor.target.name == "PEDESTAL"
     assert packets[0].payload.anchor.relation == "beside"
+
+
+async def test_salvage_put_a_cube_on_the_pedestal(producer: Producer):
+    scene = scene_with("PEDESTAL")
+    packets = await producer._build_packets_for_intent(
+        Intent(action="spawn", primitive="box", color="#ff3b30"),
+        scene=scene,
+        utterance="put a red cube on the pedestal",
+    )
+    assert packets[0].payload.anchor is not None
+    assert packets[0].payload.anchor.target.name == "PEDESTAL"
+    assert packets[0].payload.anchor.relation == "on"
+
+
+async def test_salvage_left_of_a_sphere(producer: Producer):
+    scene = scene_with("CORE_SPHERE")
+    packets = await producer._build_packets_for_intent(
+        Intent(action="spawn", primitive="box"),
+        scene=scene,
+        utterance="place a box on the left of a sphere",
+    )
+    assert packets[0].payload.anchor is not None
+    assert packets[0].payload.anchor.relation == "left_of"
+    assert packets[0].payload.anchor.target.name == "CORE_SPHERE"
+
+
+async def test_salvage_recovers_a_comma_split_destination(producer: Producer):
+    """Spoken comma: 'put a red cube, on the pedestal' must not lose 'on'."""
+    scene = scene_with("PEDESTAL")
+    packets = await producer._build_packets_for_intent(
+        Intent(action="spawn", primitive="box"),
+        scene=scene,
+        utterance="put a red cube, on the pedestal",
+    )
+    assert packets[0].payload.anchor is not None
+    assert packets[0].payload.anchor.target.name == "PEDESTAL"
+    assert packets[0].payload.anchor.relation == "on"
 
 
 async def test_salvage_leaves_the_models_own_anchor_alone(producer: Producer):

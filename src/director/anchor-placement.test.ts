@@ -96,6 +96,23 @@ test('"behind" is the opposite side from the camera', () => {
   assert.ok(front[0] > 0 && back[0] < 0, `front=${front[0]} back=${back[0]}`)
 })
 
+test('"left of" / "right of" are camera-relative and oppose each other', () => {
+  // Camera on +X looking at origin: right is -Z, left is +Z.
+  const camera: [number, number, number] = [5, 1, 0]
+  const left = resolveAnchor('left_of', PEDESTAL, null, camera)
+  const right = resolveAnchor('right_of', PEDESTAL, null, camera)
+  assert.ok(close(left[0], 0, 1e-6) && close(right[0], 0, 1e-6), `x left=${left[0]} right=${right[0]}`)
+  assert.ok(left[2] > 0 && right[2] < 0, `z left=${left[2]} right=${right[2]}`)
+  const beside = resolveAnchor('beside', PEDESTAL, null, camera)
+  assert.ok(!close(left[0], beside[0]) || !close(left[2], beside[2]), 'left_of must not equal beside')
+})
+
+test('left/right fall back to camera-right = +X with no camera', () => {
+  const right = resolveAnchor('right_of', PEDESTAL, null, null)
+  assert.ok(right[0] > 0, `x=${right[0]}`)
+  assert.ok(close(right[2], 0, 1e-6), `z=${right[2]}`)
+})
+
 test('front/behind fall back to the default camera side with no camera', () => {
   const [, , z] = resolveAnchor('in_front_of', PEDESTAL, null, null)
   assert.ok(z > 0, `z=${z}`)

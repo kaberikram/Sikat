@@ -1,12 +1,11 @@
 """Clause ownership: grammar vs LLM.
 
-**Grammar-owned** (instant, final): spawn, transform, remove, material, lights,
-fx, camera, playback, complete assign, and an explicit default/stock showcase.
-Literal bounce/orbit/spin stay grammar instruments.
+**Grammar-owned** (instant, final): playback, complete assign, explicit
+default/stock showcase, and a simple FX on/off with no amount to infer.
 
-**LLM-owned**: unparsed clauses, clarify, animate, creative/mood/shine/surprise
-speech, or incomplete grammar reads (describe, partial animate). Catalogs are
-the keyless fallback only.
+**LLM-owned** when a key is set: spawn, transform, animate, lights, mood,
+camera, describe-the-shot, and FX *adjustments* ("too much bloom"). Grammar is
+keyless + total-parse-fail only.
 """
 from __future__ import annotations
 
@@ -69,6 +68,15 @@ def _grammar_has_complete_intent(intent: Intent) -> bool:
     return True
 
 
+def _is_simple_fx_toggle(intent: Intent) -> bool:
+    """True for 'enable bloom' / 'kill the glitch' — on/off, no magnitude."""
+    return (
+        intent.action == "update_fx"
+        and intent.fx_enabled is not None
+        and not intent.fx_set
+    )
+
+
 def defer_clause_to_llm(
     clause: str, intent: Intent | None, *, llm_available: bool = False
 ) -> bool:
@@ -94,14 +102,12 @@ def defer_clause_to_llm(
     # most of these itself — see local-commands.ts.)
     if intent.action == "playback":
         return False
+    if _is_simple_fx_toggle(intent):
+        return False
     if intent.action == "assign":
         return not _grammar_has_complete_intent(intent)
-    # Everything that changes the *set* belongs to the LLM when one is on the
-    # line. The grammar is a bag of ordered regexes: it read "add sphere beside
-    # the cube" as a box, because `cube` sits above `sphere` in PRIMITIVE_WORDS
-    # and it matched against the whole clause. Its guess is still worth having —
-    # it drives the instant preview and rides along as a parse hint — but it is
-    # a guess, and a model that can actually read the sentence outranks it.
+    # Scene changes (spawn, animate, lights, mood, FX *adjustments*) belong to
+    # the LLM when one is on the line. Simple FX on/off is handled above.
     return True
 
 

@@ -136,14 +136,8 @@ def _track_window(obj: ObjectSnapshot) -> tuple[float, float] | None:
     return min(times), max(times)
 
 
-def _format_motion(obj: ObjectSnapshot, now_t: float) -> str | None:
-    """What this object is doing, named where the name is known.
-
-    `summarize_track` can only guess "spin-like" from rotation-Y numbers, which
-    is not something the crew can amend — "make that spin faster" needs to know
-    it *is* a spin, with which params, over what window. The motion id is now
-    carried through from ANIMATE_OBJECT rather than discarded.
-    """
+def _live_motion_bits(obj: ObjectSnapshot, now_t: float) -> list[str]:
+    """Named motion + playhead state — shared by the LIVE MOTION line and object cards."""
     bits: list[str] = []
     if obj.motion:
         named = obj.motion
@@ -158,13 +152,44 @@ def _format_motion(obj: ObjectSnapshot, now_t: float) -> str | None:
     if window:
         start, end = window
         bits.append(f"{start:.1f}–{end:.1f}s")
-        # Whether it is moving *now* is the fact a director is usually asking
-        # about, and it is not derivable from a keyframe list at a glance.
         bits.append("running now" if start <= now_t <= end else "not at playhead")
+    return bits
 
+
+def _format_motion(obj: ObjectSnapshot, now_t: float) -> str | None:
+    """What this object is doing, named where the name is known.
+
+    `summarize_track` can only guess "spin-like" from rotation-Y numbers, which
+    is not something the crew can amend — "make that spin faster" needs to know
+    it *is* a spin, with which params, over what window. The motion id is now
+    carried through from ANIMATE_OBJECT rather than discarded.
+    """
+    bits = _live_motion_bits(obj, now_t)
     if not bits:
         return None
     return f"  motion: {' · '.join(bits)}"
+
+
+def _live_motion_line(scene: SceneState) -> str:
+    """One-line playhead summary: name, motion id, looping, running now vs not."""
+    parts: list[str] = []
+    now_t = scene.currentTime
+    for obj in scene.objects:
+        bits: list[str] = []
+        if obj.motion:
+            named = obj.motion
+            if obj.motionLoop:
+                named += " looping"
+            bits.append(named)
+        window = _track_window(obj)
+        if window:
+            start, end = window
+            bits.append("running now" if start <= now_t <= end else "not at playhead")
+        if bits:
+            parts.append(f"{obj.name} {' · '.join(bits)}")
+    if not parts:
+        return "LIVE MOTION: none"
+    return "LIVE MOTION: " + "; ".join(parts)
 
 
 def _format_object(
@@ -320,6 +345,7 @@ def format_scene_brief(scene: SceneState | None) -> str:
     lines = [
         f"TIMELINE: t={scene.currentTime:.2f}s / {scene.duration:g}s | {play_state}"
         f"{_transport_suffix(scene)} | selected={selected}",
+        _live_motion_line(scene),
         f"STAGE: center {_fmt_vec(scene.stage.position)} radius {scene.stage.radius:g}",
         "",
         f"OBJECTS ({len(scene.objects)}):",
