@@ -23,8 +23,16 @@ import { setEditorLayer } from '../infrastructure'
 import { currentCoachHint } from './xr-coach'
 import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
-const SLATE_W = 0.3
-const SLATE_H = 0.11
+/**
+ * Card size in metres. The rig stacks the viewfinder above this and needs both
+ * numbers to lay the column out, so they are exported rather than private.
+ *
+ * Note the plane is 2.7:1 while the texture below is 1.9:1 — glyphs render
+ * wider than they are drawn. Long-standing and deliberately left alone; keep
+ * any resize uniform so the look doesn't shift.
+ */
+export const SLATE_W = 0.27
+export const SLATE_H = 0.099
 const TEX_W = 896
 const TEX_H = 480
 
@@ -137,8 +145,8 @@ function wrapLines(
 }
 
 export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
+  // Placement is the rig's call — it owns the column the card sits in.
   const group = new THREE.Group()
-  group.position.set(0, -0.09, 0.002)
   parent.add(group)
 
   let state: SlateState = 'idle'

@@ -31,7 +31,7 @@ import {
   resetAmbientSense,
   updateAmbientSense,
 } from './ambient-sense'
-import { createDirectorSlate } from './director-slate'
+import { createDirectorSlate, SLATE_H, SLATE_W } from './director-slate'
 import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
@@ -67,6 +67,45 @@ const WORKING_SAMPLE_STILLNESS = 0.75
 const WORKING_SAMPLE_INTERVAL_MS = 4000
 
 const LENS_FORWARD_M = 0.05
+
+/**
+ * The grip panel — viewfinder above, director card below, one column tilted
+ * back toward the eyes.
+ *
+ * The tilt pivots about the column's *centre*, which is what makes
+ * `PANEL_FORWARD_M` the real distance from the grip. It used to pivot about the
+ * viewfinder with the card parented 9cm beneath it, so the rotation swung the
+ * card back toward the hand: pushing the screen forward left the card behind,
+ * sitting on the controller.
+ *
+ * All three are tuning knobs, and only read properly on device.
+ */
+const PANEL_FORWARD_M = 0.12
+/**
+ * High enough that the tilt can't drop the card back onto the hand. Rotating a
+ * ~26cm column swings its bottom edge toward the grip by
+ * `halfHeight × sin(tilt)` ≈ 4.9cm and down by `halfHeight × (1 − cos(tilt))`,
+ * so at 0.09 the card's lower edge sat 3cm *below* the grip origin — still over
+ * the controller. This clears it.
+ */
+const PANEL_UP_M = 0.13
+const PANEL_TILT_DEG = 22
+
+/** Both panels share a width, so the column reads as one surface. */
+const PANEL_W = SLATE_W
+/** 16:9, matching the 640×360 viewfinder target in animate-loop — any other ratio distorts the shot. */
+const VIEWFINDER_H = (PANEL_W * 9) / 16
+/** Seam between viewfinder and card. */
+const PANEL_GAP_M = 0.01
+
+const COLUMN_H = VIEWFINDER_H + PANEL_GAP_M + SLATE_H
+const VIEWFINDER_Y = (COLUMN_H - VIEWFINDER_H) / 2
+const SLATE_Y = -(COLUMN_H - SLATE_H) / 2
+
+/** Take badge, proportioned against the frame it overlays rather than fixed. */
+const BADGE_W = PANEL_W * 0.71
+const BADGE_H = BADGE_W * 0.22
+const BADGE_INSET_M = 0.006
 
 /**
  * Which object is this packet about? Used to send attention to the target
@@ -113,23 +152,29 @@ export function createCamcorderRig(
   const group = new THREE.Group()
   setEditorLayer(group)
 
-  // Point-and-shoot: grip −Z = barrel. Screen is a rear LCD facing the shooter (+Z).
-  // Plane default faces +Z — leave that, tip slightly toward the eyes.
+  // Point-and-shoot: grip −Z = barrel. The panel sits out past the controller
+  // nose, above the aim axis, tipped back so a natural hold reads it head-on.
+  const panel = new THREE.Group()
+  panel.position.set(0, PANEL_UP_M, -PANEL_FORWARD_M)
+  panel.rotation.set((-PANEL_TILT_DEG * Math.PI) / 180, 0, 0)
+  group.add(panel)
+
+  // Rear LCD facing the shooter (+Z) — plane default faces +Z, leave that.
   const screenMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.14, 0.07875),
+    new THREE.PlaneGeometry(PANEL_W, VIEWFINDER_H),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       side: THREE.DoubleSide,
       depthTest: true,
     })
   )
-  // Above the grip (+Y), slightly toward the hand (+Z = back when −Z is aim).
-  screenMesh.position.set(0, 0.06, -0.0525)
-  screenMesh.rotation.set(-0.436, 0, 0) // −25° tip toward the eyes
+  screenMesh.position.set(0, VIEWFINDER_Y, 0)
   screenMesh.renderOrder = 10
-  group.add(screenMesh)
+  panel.add(screenMesh)
 
-  const directorSlate = createDirectorSlate(screenMesh)
+  // Sibling of the screen, not a child of it: the column has one pivot.
+  const directorSlate = createDirectorSlate(panel)
+  directorSlate.group.position.set(0, SLATE_Y, 0)
   // The world answers first; the slate is what's left when it can't.
   directorSlate.setAmbient(true)
   bindAmbientChannel(directorSlate)
@@ -442,7 +487,7 @@ export function createCamcorderRig(
       // One badge: TAKE N + red REC dot on the right edge (no separate box).
       const tex = makeBadgeTexture(`take ${takeNumber}`, { recDot: true })
       takeLabel = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.1, 0.022),
+        new THREE.PlaneGeometry(BADGE_W, BADGE_H),
         new THREE.MeshBasicMaterial({
           map: tex,
           transparent: true,
@@ -451,7 +496,8 @@ export function createCamcorderRig(
           toneMapped: false,
         })
       )
-      takeLabel.position.set(0, 0.032, 0.001)
+      // Tucked inside the frame's top edge rather than floating over the shot.
+      takeLabel.position.set(0, (VIEWFINDER_H - BADGE_H) / 2 - BADGE_INSET_M, 0.001)
       takeLabel.renderOrder = 11
       screenMesh.add(takeLabel)
       setEditorLayer(takeLabel)
