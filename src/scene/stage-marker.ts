@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { useEditorStore } from '../store'
 import { setEditorLayer, tagSceneInfrastructure } from './infrastructure'
 
-/** Flat ring + center cross on EDITOR_LAYER — main viewport only, never filmed. */
+/** Flat ring on EDITOR_LAYER — main viewport only, never filmed. */
 export function createStageMarker(scene: THREE.Scene): THREE.Group {
   const group = new THREE.Group()
   tagSceneInfrastructure(group)
@@ -14,18 +14,10 @@ export function createStageMarker(scene: THREE.Scene): THREE.Group {
     depthWrite: false,
   })
 
+  // Sole child: room-response.ts reads the tint material off children[0].
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.0, 64), mat)
   ring.rotation.x = -Math.PI / 2
   group.add(ring)
-
-  const crossLen = 0.55
-  const crossW = 0.04
-  const hBar = new THREE.Mesh(new THREE.PlaneGeometry(crossLen * 2, crossW), mat)
-  hBar.rotation.x = -Math.PI / 2
-  group.add(hBar)
-  const vBar = new THREE.Mesh(new THREE.PlaneGeometry(crossW, crossLen * 2), mat)
-  vBar.rotation.x = -Math.PI / 2
-  group.add(vBar)
 
   setEditorLayer(group)
   scene.add(group)
