@@ -25,8 +25,11 @@ const MAX_PATIENCE = 1.8
 const CONFIDENT_HESITATION = 0.2
 
 const LINES: Array<{ kind: CoachAction; text: string }> = [
-  { kind: 'rec', text: 'TRIGGER · FILM' },
-  { kind: 'talk', text: 'HOLD A · TALK' },
+  // Lowercase fragments: these rotate through the card's body block alongside
+  // the SET DAY shot list ("say “golden hour”"), so they read as one voice.
+  // The header row above them is the Figma's sentence case — different slot.
+  { kind: 'rec', text: 'pull the trigger to film' },
+  { kind: 'talk', text: 'hold A to talk' },
   { kind: 'stage', text: 'say “crew, set the stage”' },
 ]
 

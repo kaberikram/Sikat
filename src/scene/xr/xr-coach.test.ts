@@ -17,11 +17,11 @@ test('coach waits for the entry cinematic, then rotates all three lines', () => 
   resetXrCoachForTest()
   startXrCoach(0)
   assert.equal(currentCoachHint(1000), null, 'silent during the cinematic')
-  assert.equal(currentCoachHint(5300), 'TRIGGER · FILM')
-  assert.equal(currentCoachHint(5200 + 4100), 'HOLD A · TALK')
+  assert.equal(currentCoachHint(5300), 'pull the trigger to film')
+  assert.equal(currentCoachHint(5200 + 4100), 'hold A to talk')
   assert.equal(currentCoachHint(5200 + 8100), 'say “crew, set the stage”')
   // Second cycle wraps around.
-  assert.equal(currentCoachHint(5200 + 12100), 'TRIGGER · FILM')
+  assert.equal(currentCoachHint(5200 + 12100), 'pull the trigger to film')
 })
 
 test('coach ends after two full cycles', () => {
@@ -34,7 +34,7 @@ test('performing an action retires its line', () => {
   resetXrCoachForTest()
   startXrCoach(0)
   noteCoachAction('rec')
-  assert.equal(currentCoachHint(5300), 'HOLD A · TALK', 'rec line skipped')
+  assert.equal(currentCoachHint(5300), 'hold A to talk', 'rec line skipped')
   noteCoachAction('talk')
   assert.equal(currentCoachHint(5300), 'say “crew, set the stage”')
   noteCoachAction('stage')
@@ -67,7 +67,7 @@ test('a confident director is let go after one cycle', () => {
   noteCoachAction('rec')
   setCoachHesitation(0)
   // Two lines left, one cycle each — done after two slots.
-  assert.equal(currentCoachHint(5300), 'HOLD A · TALK')
+  assert.equal(currentCoachHint(5300), 'hold A to talk')
   assert.equal(currentCoachHint(5200 + 4100), 'say “crew, set the stage”')
   assert.equal(currentCoachHint(5200 + 8100), null, 'let go early')
 })

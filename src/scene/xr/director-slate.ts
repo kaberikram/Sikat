@@ -182,22 +182,22 @@ const STATE_ACCENT: Record<SlateState, string> = {
 }
 
 const STATE_LABEL: Record<SlateState, string> = {
-  idle: 'DIRECTOR',
-  listening: 'LISTENING',
-  sending: 'HEARD',
-  thinking: 'EXECUTING',
-  replying: 'DIRECTOR',
-  misheard: 'DIRECTOR',
-  offline: 'OFFLINE',
+  idle: 'Director',
+  listening: 'Listening',
+  sending: 'Heard',
+  thinking: 'Executing',
+  replying: 'Director',
+  misheard: 'Director',
+  offline: 'Offline',
 }
 
 const STATE_HINT: Record<SlateState, string> = {
-  idle: 'HOLD A · TALK',
-  listening: 'RELEASE TO SEND',
+  idle: 'Hold A to talk',
+  listening: 'Release to send',
   sending: '',
-  thinking: 'WORKING…',
-  replying: 'HOLD A · TALK',
-  misheard: 'HOLD A · TALK',
+  thinking: 'Working…',
+  replying: 'Hold A to talk',
+  misheard: 'Hold A to talk',
   offline: '',
 }
 
@@ -443,11 +443,14 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let progress: SlateProgress | null = null
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
+  // Depth-tested, so the controller/hand occluder in `camcorder-rig.ts` can put
+  // your real hand in front of the card where they overlap. The set can clip it
+  // in principle too, but the panel rides 12cm off the grip against a stage
+  // ~1.9m away, so in practice it never gets the chance.
   const mat = new THREE.MeshBasicMaterial({
     map: live.texture,
     transparent: true,
     toneMapped: false,
-    depthTest: false,
     side: THREE.DoubleSide,
   })
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(SLATE_W, SLATE_H), mat)
@@ -539,6 +542,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       const cardTop = h - BLEED - cardH
 
       drawGlassPanel(ctx, BLEED, cardTop, CARD_W_PX, cardH, {
+        // Opaque, unlike the design system's floating panels: this one is a
+        // screen housing you look *at*, and the default 92% frost let the room
+        // and every object behind it ghost through the card.
+        fill: XR_UI.paper,
         radius: CARD_RADIUS,
         shadow: BLEED,
       })

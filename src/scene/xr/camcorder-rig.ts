@@ -112,6 +112,43 @@ function resolvePacketTargetId(packet: CommandPacket): string | null {
   return resolveTarget(target)?.id ?? null
 }
 
+/**
+ * Turn the input visuals into occluders: depth without colour.
+ *
+ * `@iwsdk/xr-input` loads a GLTF controller (and hand) per side and draws it
+ * over the real one, so the director sees a plastic model floating on their
+ * actual hand. Hiding it outright would lose the one thing it is good for —
+ * writing the hand's silhouette into the depth buffer, which is what puts the
+ * real controller *in front of* the card instead of behind it. So it keeps
+ * drawing, just without touching a colour channel.
+ *
+ * The models arrive asynchronously, which is why this rides the per-frame
+ * traversal that already re-applies the editor layer for the same reason. The
+ * WeakSet keeps that down to one identity check per side once they have landed.
+ */
+const occluded = new WeakSet<THREE.Object3D>()
+
+function makeInputVisualsOccluders(xrInput: XRInputManagerType): void {
+  const { controller, hand } = xrInput.visualAdapters
+  for (const adapter of [controller.left, controller.right, hand.left, hand.right]) {
+    const model = adapter.visual?.model
+    if (!model || occluded.has(model)) continue
+    occluded.add(model)
+    model.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return
+      // Ahead of the panel in the opaque pass — an occluder has to have written
+      // its depth before the thing it occludes is drawn.
+      o.renderOrder = -100
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        m.colorWrite = false
+        m.depthWrite = true
+        m.depthTest = true
+        m.transparent = false
+      }
+    })
+  }
+}
+
 export interface CamcorderRig {
   group: THREE.Group
   screenMesh: THREE.Mesh
@@ -157,19 +194,27 @@ export function createCamcorderRig(
   //
   // This material is the one the shot ends up on: `xr-viewfinder.ts` re-points
   // its map at the render target, so these flags are the screen's for the whole
-  // session. `depthTest: false` keeps a prop the director leaned into from
-  // slicing the panel; `depthWrite` stays on (the default) because the screen is
-  // opaque and sorts nearest — without it, farther geometry drawn afterwards
-  // would paint straight through.
+  // session.
+  //
+  // `transparent` is what keeps the room dim off the shot. The entry sequence
+  // hangs a dark dome on the head to dim passthrough into shoot lighting; it is
+  // transparent, so it draws after every opaque object — and an opaque screen
+  // was being dimmed along with the room, which is what turned the image grey.
+  // Nothing can sort after a transparent object except another one, so the
+  // screen joins that list, above the dome's −10 and below the card's 13.
+  // The render target is cleared opaque, so alpha stays 1 and this looks
+  // identical to an opaque draw, minus the dimming.
   const screenMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(PREVIEW_W, PREVIEW_H),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       side: THREE.DoubleSide,
-      depthTest: false,
+      transparent: true,
+      depthWrite: false,
     })
   )
   screenMesh.position.set(0, PREVIEW_Y, 0.0005)
+  screenMesh.renderOrder = 12
   panel.add(screenMesh)
   // The world answers first; the slate is what's left when it can't.
   directorSlate.setAmbient(true)
@@ -506,7 +551,6 @@ export function createCamcorderRig(
         new THREE.MeshBasicMaterial({
           map: tex,
           transparent: true,
-          depthTest: false,
           side: THREE.DoubleSide,
           toneMapped: false,
         })
@@ -537,6 +581,7 @@ export function createCamcorderRig(
   function update(delta: number, timeSec: number, xrManager: THREE.WebXRManager): void {
     xrInput.update(xrManager, delta, timeSec)
     setEditorLayer(xrInput.xrOrigin)
+    makeInputVisualsOccluders(xrInput)
 
     // Entry waits for real head tracking: place the stage ahead of the user,
     // then roll the cinematic (ripple/title read the freshly placed stage).
