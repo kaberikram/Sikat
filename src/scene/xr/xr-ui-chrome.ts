@@ -5,7 +5,6 @@
  * painted soft shadow (no real backdrop blur — not worth it in XR).
  */
 import * as THREE from 'three'
-import * as L from './review-layout'
 
 export const XR_UI = {
   ink: '#17171a',
@@ -420,99 +419,6 @@ export function makeTitleTexture(
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, cw / 2, ch / 2 + 4)
-  })
-}
-
-/**
- * The whole review card in one texture: glass body, header (title + hint),
- * rounded screen bezel, play pill, and scrub track.
- *
- * Overlay planes used to carry the title, the play button, and the timeline.
- * A transparent quad over passthrough is exactly what reads as a dark
- * rectangular mask — square corners, room showing through the padding, cutoff
- * where the glass rounds. Painting them into the card once leaves only the
- * playhead thumb as a mesh (it has to move).
- *
- * Every position comes from `review-layout.ts`, so the canvas and the world
- * meshes cannot drift apart again.
- */
-export function paintReviewCard(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  opts: { playing?: boolean } = {}
-): void {
-  // Opaque paper, not the 92% frost: this is a monitor you look *at*, and the
-  // default glass let the room ghost through the dock the same way it used to
-  // ghost through the director card.
-  drawGlassCard(ctx, w, h, {
-    pad: L.GLASS_PAD_PX,
-    radius: L.GLASS_RADIUS_PX,
-    fill: XR_UI.paper,
-  })
-
-  // --- header: title pill left, hint right, both above the film ---
-  const titleW = L.pxX(L.TITLE_W)
-  const titleH = L.pxY(L.TITLE_H)
-  const titleX = L.canvasX(L.TITLE_X) - titleW / 2
-  const titleY = L.canvasY(L.HEADER_Y) - titleH / 2
-  drawPill(ctx, titleX, titleY, titleW, titleH, XR_UI.chip, { pad: 18 })
-  ctx.fillStyle = XR_UI.ink
-  ctx.font = SANS
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText('take review', titleX + titleW / 2, titleY + titleH / 2 + 2)
-
-  ctx.fillStyle = XR_UI.inkSoft
-  ctx.font = XR_FONT_MONO
-  ctx.textAlign = 'right'
-  ctx.textBaseline = 'middle'
-  ctx.fillText('HOLD B CLOSE  ·  STICK SCRUB', L.canvasX(L.HINT_RIGHT_X), L.canvasY(L.HEADER_Y) + 2)
-
-  // --- screen bezel: the dark plate the film sits inside ---
-  const bezelW = L.pxX(L.BEZEL_W)
-  const bezelH = L.pxY(L.BEZEL_H)
-  ctx.save()
-  ctx.shadowColor = XR_UI.shadow
-  ctx.shadowBlur = 24
-  ctx.fillStyle = XR_UI.screen
-  ctx.beginPath()
-  ctx.roundRect(
-    L.canvasX(0) - bezelW / 2,
-    L.canvasY(L.FILM_Y) - bezelH / 2,
-    bezelW,
-    bezelH,
-    L.pxX(L.BEZEL_RADIUS)
-  )
-  ctx.fill()
-  ctx.restore()
-
-  // --- transport, on the card, not as overlay quads ---
-  const playing = opts.playing === true
-  const playW = L.pxX(L.PLAY_W)
-  const playH = L.pxY(L.PLAY_H)
-  const playX = L.canvasX(L.PLAY_X) - playW / 2
-  const playY = L.canvasY(L.DOCK_Y) - playH / 2
-  drawPill(ctx, playX, playY, playW, playH, playing ? XR_UI.chip : XR_UI.ink, { pad: 18 })
-  ctx.fillStyle = playing ? XR_UI.ink : '#ffffff'
-  ctx.font = SANS_LG
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(playing ? 'pause' : 'play', playX + playW / 2, playY + playH / 2 + 2)
-
-  const scrubW = L.pxX(L.SCRUB_W)
-  const scrubH = L.pxY(L.SCRUB_H)
-  const scrubX = L.canvasX(L.SCRUB_X) - scrubW / 2
-  const scrubY = L.canvasY(L.DOCK_Y) - scrubH / 2
-  ctx.fillStyle = XR_UI.chip
-  ctx.beginPath()
-  ctx.roundRect(scrubX, scrubY, scrubW, scrubH, scrubH / 2)
-  ctx.fill()
-}
-
-export function makeReviewCardTexture(opts: { playing?: boolean } = {}): THREE.CanvasTexture {
-  return makeCanvasTexture(L.CANVAS_W, L.CANVAS_H, (ctx, w, h) => {
-    paintReviewCard(ctx, w, h, opts)
   })
 }
 

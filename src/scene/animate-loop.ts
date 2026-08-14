@@ -15,7 +15,6 @@ import { updateEntrySequence } from './xr/entry-sequence'
 import type { createViewfinderComposer } from '../pip-composer'
 import type { AgentCursors } from './agent-cursors'
 import type { CamcorderRig } from './xr/camcorder-rig'
-import type { ReviewScreen } from './xr/review-screen'
 import { syncXrStereoLayers } from './xr/xr-session'
 import type { XrViewfinder } from './xr/xr-viewfinder'
 
@@ -36,7 +35,6 @@ export function createAnimateLoop(ctx: {
   stageMarker: THREE.Group
   camcorderRig: CamcorderRig
   xrViewfinder: XrViewfinder
-  reviewScreen: ReviewScreen
   virtCamBackdrop: THREE.Mesh
 }) {
   let lastGizmoObject: THREE.Object3D | null = null
@@ -60,12 +58,6 @@ export function createAnimateLoop(ctx: {
   ctx.controls.addEventListener('start', cancelCameraCue)
 
   const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2)
-
-  // XR frame-budget helpers: with the review monitor open, the grip LCD drops
-  // to every-other-frame (attention is on the monitor), and the monitor itself
-  // skips re-rendering while paused on an unchanged frame.
-  let xrFrameParity = 0
-  let lastReviewRenderedT = -1
 
   const frame = (now: number, xrFrame?: XRFrame) => {
     const delta = (now - lastTime) / 1000
@@ -223,9 +215,19 @@ export function createAnimateLoop(ctx: {
       // Fixed RT size — desktop PiP is sr-only in XR (often 1×1), which made the LCD black.
       const XR_VF_W = 640
       const XR_VF_H = 360
-      xrFrameParity ^= 1
-      const reviewOpen = ctx.reviewScreen.isOpen()
-      if (!reviewOpen || xrFrameParity === 0) {
+      const reviewing = ctx.camcorderRig.isReviewing()
+      if (reviewing) {
+        ctx.camcorderRig.renderPlayback({
+          renderer: ctx.mainRenderer,
+          scene: ctx.scene,
+          objects: liveObjects,
+          stack,
+          delta,
+          t,
+          clearColor: lighting.background,
+          isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
+        })
+      } else {
         ctx.xrViewfinder.render({
           renderer: ctx.mainRenderer,
           scene: ctx.scene,
@@ -242,31 +244,11 @@ export function createAnimateLoop(ctx: {
         })
       }
 
-      // Review monitor: timeline camera playback (separate from live grip LCD).
-      if (reviewOpen) {
-        ctx.reviewScreen.update(ctx.camcorderRig.xrInput)
-        if (isPlaying || t !== lastReviewRenderedT) {
-          lastReviewRenderedT = t
-          ctx.reviewScreen.renderPlayback({
-            renderer: ctx.mainRenderer,
-            scene: ctx.scene,
-            objects: liveObjects,
-            stack,
-            delta,
-            t,
-            clearColor: lighting.background,
-            isObjectGizmoActive: (obj) => gizmo.dragging && gizmo.object === obj.mesh,
-          })
-        }
-      } else {
-        lastReviewRenderedT = -1
-      }
-
       // Headset view: passthrough / transparent composite over the real world.
       // (Viewfinder already filmed studio CG above — passthrough is eyes only.)
       ctx.scene.background = null
-    } else if (ctx.reviewScreen.isOpen()) {
-      ctx.reviewScreen.hide()
+    } else if (ctx.camcorderRig.isReviewing()) {
+      ctx.camcorderRig.endReview()
     }
 
     ctx.mainRenderer.render(ctx.scene, ctx.userCamera)

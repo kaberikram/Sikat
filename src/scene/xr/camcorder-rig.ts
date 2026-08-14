@@ -20,8 +20,8 @@ import {
   startVoiceSession,
   stopVoiceSession,
 } from '../../director/voice-session'
-import { beatTick, missedBuzz } from '../../director/sound'
-import { useEditorStore } from '../../store'
+import { beatTick, missedBuzz, replyChime } from '../../director/sound'
+import { useEditorStore, type MotionObject, type PostProcessingStack } from '../../store'
 import { setEditorLayer, tagSceneInfrastructure } from '../infrastructure'
 import { bindAmbientChannel, resetAmbientChannel, respond } from './ambient-channel'
 import {
@@ -32,6 +32,7 @@ import {
   updateAmbientSense,
 } from './ambient-sense'
 import { createDirectorSlate, PREVIEW_H, PREVIEW_W, PREVIEW_Y } from './director-slate'
+import { createTakePlayback } from './take-playback'
 import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
@@ -45,7 +46,7 @@ import {
   type V3,
 } from './stage-placement'
 import { getProfile, noteSessionStart, noteStandoff, preferredStandoff } from './director-profile'
-import { registerStagePlacer, registerTakeToggler } from './xr-bridge'
+import { registerReviewRecall, registerStagePlacer, registerTakeToggler } from './xr-bridge'
 import { noteCoachAction, setCoachHesitation, startXrCoach, stopXrCoach } from './xr-coach'
 import { makeBadgeTexture } from './xr-ui-chrome'
 
@@ -92,6 +93,14 @@ const PANEL_FORWARD_M = 0.12
 const PANEL_UP_M = 0.13
 const PANEL_TILT_DEG = 22
 
+const REVIEW_SCALE_ENTER = 1.15
+const REVIEW_SCALE_MIN = 1
+const REVIEW_SCALE_MAX = 1.75
+const REVIEW_SCALE_RATE = 1.2
+const B_HOLD_MS = 400
+const STICK_DEADZONE = 0.15
+const SCRUB_RATE_MIN = 0.5
+
 /** Take badge, proportioned against the frame it overlays rather than fixed. */
 const BADGE_W = PREVIEW_W * 0.71
 const BADGE_H = BADGE_W * 0.22
@@ -113,55 +122,21 @@ function resolvePacketTargetId(packet: CommandPacket): string | null {
 }
 
 /**
- * Depth-only occluder: writes the controller/hand silhouette into the depth
- * buffer so the real hardware sits in front of the grip card and the set, but
- * never touches a colour channel — no plastic ghost on top of the real thing.
+ * Hide the IWSDK controller/hand GLTFs. Passthrough (or the emulator overlay)
+ * is the hardware; the 3D stand-in was only useful as a depth occluder, and
+ * that still read as a silhouette. Grip spaces stay — the camcorder parents
+ * to those, not to the mesh.
  *
- * Mutating the GLTF's own PBR materials left a visible shape (colorWrite did
- * not stick on every mesh, and late-loaded children were skipped). Replacing
- * each mesh with one shared occluder material, every frame, is the version
- * that actually stays invisible.
+ * `toggleVisual` is the adapter's own hide; `model.visible` covers a GLTF that
+ * lands after the adapter has already been told off. Both run every frame
+ * because connect() can spawn a fresh visual.
  */
-const inputOccluderMat = new THREE.MeshBasicMaterial({
-  colorWrite: false,
-  depthWrite: true,
-  depthTest: true,
-  transparent: false,
-  fog: false,
-  toneMapped: false,
-  blending: THREE.NoBlending,
-})
-
-function makeInputVisualsOccluders(xrInput: XRInputManagerType): void {
+function hideInputVisuals(xrInput: XRInputManagerType): void {
   const { controller, hand } = xrInput.visualAdapters
   for (const adapter of [controller.left, controller.right, hand.left, hand.right]) {
+    adapter.toggleVisual(false)
     const model = adapter.visual?.model
-    if (!model) continue
-    model.visible = true
-    model.traverse((o) => {
-      if (
-        o instanceof THREE.Line
-        || o instanceof THREE.LineSegments
-        || o instanceof THREE.Sprite
-        || o instanceof THREE.Points
-      ) {
-        o.visible = false
-        return
-      }
-      if (!(o instanceof THREE.Mesh)) return
-      // Ahead of the panel in the opaque pass — an occluder has to have written
-      // its depth before the thing it occludes is drawn.
-      o.renderOrder = -100
-      o.castShadow = false
-      o.receiveShadow = false
-      const current = o.material
-      if (Array.isArray(current)) {
-        if (current.every((m) => m === inputOccluderMat)) return
-        o.material = current.map(() => inputOccluderMat)
-        return
-      }
-      if (current !== inputOccluderMat) o.material = inputOccluderMat
-    })
+    if (model) model.visible = false
   }
 }
 
@@ -175,13 +150,26 @@ export interface CamcorderRig {
     fn: ((takeStart: number, takeEnd: number, head: THREE.Object3D) => void) | null
   ) => void
   setSuppressRec: (fn: (() => boolean) | null) => void
+  isReviewing: () => boolean
+  endReview: () => void
+  renderPlayback: (ctx: {
+    renderer: THREE.WebGLRenderer
+    scene: THREE.Scene
+    objects: MotionObject[]
+    stack: PostProcessingStack
+    delta: number
+    t: number
+    clearColor: string
+    isObjectGizmoActive: (obj: MotionObject) => boolean
+  }) => void
   dispose: () => void
 }
 
 export function createCamcorderRig(
   scene: THREE.Scene,
   userCamera: THREE.PerspectiveCamera,
-  virtCamera: THREE.PerspectiveCamera
+  virtCamera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer
 ): CamcorderRig {
   const xrInput = new XRInputManager({
     scene,
@@ -191,6 +179,7 @@ export function createCamcorderRig(
   tagSceneInfrastructure(xrInput.xrOrigin)
   setEditorLayer(xrInput.xrOrigin)
   scene.add(xrInput.xrOrigin)
+  hideInputVisuals(xrInput)
 
   const group = new THREE.Group()
   setEditorLayer(group)
@@ -203,6 +192,7 @@ export function createCamcorderRig(
   group.add(panel)
 
   const directorSlate = createDirectorSlate(panel)
+  const takePlayback = createTakePlayback(scene, renderer, virtCamera.far)
 
   // Rear LCD facing the shooter (+Z) — plane default faces +Z, leave that. It
   // sits in the window the card cuts for it, as a sibling rather than a child
@@ -250,6 +240,14 @@ export function createCamcorderRig(
   let thinkingLine: string | null = null
   /** Last non-empty interim of the current hold — what to show on release. */
   let lastInterim = ''
+  let reviewing = false
+  let reviewTakeStart = 0
+  let reviewTakeEnd = 0
+  let panelScale = 1
+  let panelScaleTarget = 1
+  let bDownAt: number | null = null
+  let bHoldFired = false
+  let lastReviewInputMs = performance.now()
 
   // Route director replies / misses / first-work through the ambient channel,
   // which decides whether the set answers or the slate does.
@@ -389,19 +387,130 @@ export function createCamcorderRig(
   }
   registerStagePlacer(placeStageAtCurrentUser)
 
+  function beginReview(start: number, end: number): void {
+    reviewTakeStart = start
+    reviewTakeEnd = Math.max(end, start + 0.05)
+    reviewing = true
+    panelScaleTarget = REVIEW_SCALE_ENTER
+    bDownAt = null
+    bHoldFired = false
+    lastReviewInputMs = performance.now()
+    directorSlate.setReviewing(true)
+    directorSlate.setTransport({ playing: true, ratio: 0 })
+    const mat = screenMesh.material as THREE.MeshBasicMaterial
+    if (mat.map !== takePlayback.texture) {
+      mat.map = takePlayback.texture
+      mat.toneMapped = false
+      mat.needsUpdate = true
+    }
+    replyChime()
+    const st = useEditorStore.getState()
+    st.setTime(reviewTakeStart)
+    st.setPlayOnceEnd(reviewTakeEnd)
+    if (!st.isPlaying) st.togglePlay()
+  }
+
+  function endReview(): void {
+    if (!reviewing) return
+    reviewing = false
+    panelScaleTarget = 1
+    bDownAt = null
+    bHoldFired = false
+    directorSlate.setReviewing(false)
+    const st = useEditorStore.getState()
+    st.setPlayOnceEnd(null)
+    if (st.isPlaying) st.togglePlay()
+  }
+
+  function isReviewing(): boolean {
+    return reviewing
+  }
+
+  function reviewRatio(time: number): number {
+    const span = Math.max(reviewTakeEnd - reviewTakeStart, 0.001)
+    return THREE.MathUtils.clamp((time - reviewTakeStart) / span, 0, 1)
+  }
+
+  function syncTransport(): void {
+    if (!reviewing) return
+    const st = useEditorStore.getState()
+    directorSlate.setTransport({ playing: st.isPlaying, ratio: reviewRatio(st.currentTime) })
+  }
+
+  function tickReview(delta: number, nowMs: number): void {
+    const dt = Math.min((nowMs - lastReviewInputMs) / 1000, 0.1)
+    lastReviewInputMs = nowMs
+
+    if (reviewing) syncTransport()
+
+    panelScale += (panelScaleTarget - panelScale) * Math.min(1, 10 * delta)
+    panel.scale.setScalar(panelScale)
+
+    if (!reviewing) return
+
+    const pad = padRef
+    if (pad?.getButtonDown(InputComponent.B_Button)) {
+      bDownAt = nowMs
+      bHoldFired = false
+    }
+    if (pad?.getButtonPressed(InputComponent.B_Button) && bDownAt !== null && !bHoldFired) {
+      if (nowMs - bDownAt >= B_HOLD_MS) {
+        bHoldFired = true
+        pulse(pad, 0.35, 30)
+        endReview()
+        return
+      }
+    }
+    if (pad?.getButtonUp(InputComponent.B_Button)) {
+      if (!bHoldFired && bDownAt !== null) {
+        pulse(pad, 0.3, 25)
+        const st = useEditorStore.getState()
+        if (!st.isPlaying) {
+          if (st.currentTime >= reviewTakeEnd - 0.001) st.setTime(reviewTakeStart)
+          st.setPlayOnceEnd(reviewTakeEnd)
+        }
+        st.togglePlay()
+        syncTransport()
+      }
+      bDownAt = null
+      bHoldFired = false
+    }
+
+    const axes = pad?.getAxesValues(InputComponent.Thumbstick)
+    const stickX = axes && Math.abs(axes.x) > STICK_DEADZONE ? axes.x : 0
+    const stickY = axes && Math.abs(axes.y) > STICK_DEADZONE ? axes.y : 0
+
+    if (stickX !== 0) {
+      const span = Math.max(reviewTakeEnd - reviewTakeStart, SCRUB_RATE_MIN)
+      const st = useEditorStore.getState()
+      st.setTime(THREE.MathUtils.clamp(st.currentTime + stickX * span * dt, reviewTakeStart, reviewTakeEnd))
+      if (st.isPlaying) st.togglePlay()
+      syncTransport()
+    }
+
+    if (stickY !== 0) {
+      // Quest: stick forward is typically −Y — push forward to grow.
+      panelScaleTarget = THREE.MathUtils.clamp(
+        panelScaleTarget * (1 - stickY * REVIEW_SCALE_RATE * dt),
+        REVIEW_SCALE_MIN,
+        REVIEW_SCALE_MAX
+      )
+    }
+  }
+
   /**
    * The one path a take starts or stops by, whether the trigger pulled it or a
    * voice cue did. Returns false when the rig declined, so a voice caller can
    * fall back rather than silently doing nothing.
    */
   function toggleRecord(): boolean {
-    if (suppressRec?.()) {
-      // The review monitor owns the take controls right now — say so, don't go
-      // mute. This used to gate the trigger only, so a spoken "action" could
-      // start a take over an open, playing monitor.
+    if (reviewing || suppressRec?.()) {
+      // The grip well owns the take right now — say so, don't go mute. This
+      // used to gate the trigger only, so a spoken "action" could start a take
+      // over an open, playing review.
       missedBuzz()
       pulse(padRef, 0.3, 40)
-      respond({ kind: 'blocked', text: 'dismiss the monitor to roll again' })
+      respond({ kind: 'blocked', text: 'dismiss to roll again' })
       return false
     }
     const st = useEditorStore.getState()
@@ -412,9 +521,10 @@ export function createCamcorderRig(
       doublePulse(padRef, 0.5, 40)
       const takeEnd = useEditorStore.getState().currentTime
       noteAmbientTake(performance.now())
+      beginReview(takeStart, takeEnd)
       onTakeEnded?.(takeStart, takeEnd, xrInput.xrOrigin.head)
-      // The review monitor swinging into view is the answer; the line only
-      // carries the part the monitor can't — where the take went.
+      // The well swapping to the take is the answer; the line only carries
+      // the part the card can't — where the take went.
       respond({ kind: 'status', text: `take ${takeNumber} saved to the timeline — export on desktop` })
       return true
     }
@@ -425,8 +535,24 @@ export function createCamcorderRig(
   }
 
   // "action" / "cut" by voice runs exactly this, so a spoken take gets the
-  // haptics, the take timestamp and the monitor the trigger has always given it.
+  // haptics, the take timestamp and the review the trigger has always given it.
   registerTakeToggler(() => toggleRecord())
+
+  // Voice cue "where's the monitor" — pulse the grip card if reviewing, or
+  // re-enter the last take on the well (no teleport).
+  registerReviewRecall(() => {
+    if (reviewing) {
+      panelScale = Math.min(panelScale * 1.12, REVIEW_SCALE_MAX)
+      replyChime()
+      pulse(padRef, 0.3, 25)
+      return true
+    }
+    if (reviewTakeEnd > reviewTakeStart + 0.04) {
+      beginReview(reviewTakeStart, reviewTakeEnd)
+      return true
+    }
+    return false
+  })
 
   function beginTalk(): void {
     if (!isSpeechAvailable()) {
@@ -597,7 +723,7 @@ export function createCamcorderRig(
   function update(delta: number, timeSec: number, xrManager: THREE.WebXRManager): void {
     xrInput.update(xrManager, delta, timeSec)
     setEditorLayer(xrInput.xrOrigin)
-    makeInputVisualsOccluders(xrInput)
+    hideInputVisuals(xrInput)
 
     // Entry waits for real head tracking: place the stage ahead of the user,
     // then roll the cinematic (ripple/title read the freshly placed stage).
@@ -660,6 +786,7 @@ export function createCamcorderRig(
 
     updateRollingIndicator()
     directorSlate.update(timeSec * 1000)
+    tickReview(delta, timeSec * 1000)
 
     const grip = xrInput.xrOrigin.gripSpaces.right
     grip.updateWorldMatrix(true, false)
@@ -707,18 +834,27 @@ export function createCamcorderRig(
     setSuppressRec: (fn) => {
       suppressRec = fn
     },
+    isReviewing,
+    endReview,
+    renderPlayback: (ctx) => {
+      if (!reviewing) return
+      takePlayback.render(ctx)
+    },
     dispose: () => {
       offSlateLog()
       offSlatePacket()
       offSlatePlan()
       registerStagePlacer(null)
+      registerReviewRecall(null)
       stopXrCoach()
       resetAmbientChannel()
       resetAmbientSense()
       retireAllCursors()
       bindAmbientChannel(null)
       stopVoiceSession()
+      endReview()
       directorSlate.dispose()
+      takePlayback.dispose()
       group.removeFromParent()
       scene.remove(xrInput.xrOrigin)
       screenMesh.geometry.dispose()

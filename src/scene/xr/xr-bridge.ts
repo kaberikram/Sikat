@@ -6,10 +6,9 @@ let takeToggler: ((rolling: boolean) => boolean) | null = null
 
 /**
  * The camcorder rig registers this so a spoken "action" / "cut" runs the exact
- * same path as the trigger — haptics, the take timestamp, and above all the
- * review monitor. They used to diverge: the voice cue called `endTake()` and
- * nothing else, so a take ended by voice never reached the monitor the shot
- * list had just promised it would.
+ * same path as the trigger — haptics, the take timestamp, and the grip review.
+ * They used to diverge: the voice cue called `endTake()` and nothing else, so a
+ * take ended by voice never reached the well the shot list had just promised.
  */
 export function registerTakeToggler(fn: ((rolling: boolean) => boolean) | null): void {
   takeToggler = fn
@@ -17,7 +16,7 @@ export function registerTakeToggler(fn: ((rolling: boolean) => boolean) | null):
 
 /**
  * Start or stop a take through the rig. Returns false when the rig declined
- * (not in XR, or the monitor currently owns the take controls), so the caller
+ * (not in XR, or the grip well currently owns the take), so the caller
  * can fall back to a plain store toggle.
  */
 export function toggleTakeInXr(rolling: boolean): boolean {
@@ -34,12 +33,12 @@ export function placeStageAtUser(): void {
   stagePlacer?.()
 }
 
-/** The review screen registers this; re-places the take monitor in front of the head. */
+/** The camcorder rig registers this; pulse or re-enter grip take review. */
 export function registerReviewRecall(fn: (() => boolean) | null): void {
   reviewRecall = fn
 }
 
-/** True when a take monitor was open and got recalled. */
+/** True when a take was on the grip well and got recalled. */
 export function recallReviewScreen(): boolean {
   return reviewRecall?.() ?? false
 }

@@ -21,7 +21,6 @@ import { disposeRoomResponse, initRoomResponse } from './xr/room-response'
 import { initEntrySequence } from './xr/entry-sequence'
 import { bindFlyControls } from './fly-controls'
 import { createCamcorderRig } from './xr/camcorder-rig'
-import { createReviewScreen } from './xr/review-screen'
 import { initXrSession } from './xr/xr-session'
 import { createXrViewfinder } from './xr/xr-viewfinder'
 
@@ -163,7 +162,7 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
   initRoomResponse(scene, stageMarker)
   const unbindFly = bindFlyControls(mainRenderer.domElement)
 
-  const camcorderRig = createCamcorderRig(scene, userCamera, virtCamera)
+  const camcorderRig = createCamcorderRig(scene, userCamera, virtCamera, mainRenderer)
   const xrViewfinderComposer = createViewfinderComposer(
     scene,
     virtCamera,
@@ -171,11 +170,6 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     mainRenderer.getPixelRatio()
   )
   const xrViewfinder = createXrViewfinder(xrViewfinderComposer)
-  const reviewScreen = createReviewScreen(scene, mainRenderer, cameraFar)
-  camcorderRig.setTakeEndedHandler((takeStart, takeEnd, head) => {
-    reviewScreen.showAfterTake(takeStart, takeEnd, head)
-  })
-  camcorderRig.setSuppressRec(() => reviewScreen.isOpen())
   initEntrySequence(scene, camcorderRig.xrInput.xrOrigin.head)
   const disposeXr = initXrSession(mainRenderer, camcorderRig)
 
@@ -194,7 +188,6 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     stageMarker,
     camcorderRig,
     xrViewfinder,
-    reviewScreen,
     virtCamBackdrop,
   })
 
@@ -239,7 +232,6 @@ export function bootstrapScene(container: HTMLDivElement, pipMount: HTMLDivEleme
     disposeXr()
     camcorderRig.dispose()
     xrViewfinder.dispose()
-    reviewScreen.dispose()
     unsubStore()
     unsubShadows()
     roMain.disconnect()

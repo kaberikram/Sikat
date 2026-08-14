@@ -49,28 +49,30 @@ Full `@iwsdk/core` (`World.create`) owns the renderer, camera, and animation loo
 | Session (`immersive-ar` → `immersive-vr`) | [`xr-session.ts`](./xr-session.ts) |
 | Exit session | [`xr-bridge.ts`](./xr-bridge.ts) `endXrSession()` + **EXIT XR** button in Editor |
 | Chrome emulator Layers compat | [`xr-compat.ts`](./xr-compat.ts) |
-| Grip / ray / head spaces + controller GLTF | `@iwsdk/xr-input` `XRInputManager` |
-| Camcorder screen + virt cam pose + REC | [`camcorder-rig.ts`](./camcorder-rig.ts) |
+| Grip / ray / head spaces (controller/hand GLTFs hidden) | `@iwsdk/xr-input` `XRInputManager` |
+| Camcorder screen + virt cam pose + REC + take review | [`camcorder-rig.ts`](./camcorder-rig.ts) |
 | Viewfinder RT (same FX as desktop PiP) | [`xr-viewfinder.ts`](./xr-viewfinder.ts) + `viewfinder-pass.ts` |
-| Post-cut take review monitor | [`review-screen.ts`](./review-screen.ts) |
+| Take playback (timeline cam → grip well) | [`take-playback.ts`](./take-playback.ts) |
 
 ## Wiring
 
-1. `bootstrap.ts` — `createCamcorderRig` + `createReviewScreen`; cut handler opens review.
-2. `animate-loop.ts` (XR frames) — camcorder update → grip LCD RT → review playback RT (if open).
+1. `bootstrap.ts` — `createCamcorderRig(scene, userCamera, virtCamera, mainRenderer)`; cut enters grip review.
+2. `animate-loop.ts` (XR frames) — camcorder update → live grip LCD **or** take playback into the same well.
 3. Camcorder group is parented to `xrOrigin.gripSpaces.right`.
-4. REC: `gamepads.right.getButtonDown(InputComponent.Trigger)` or `getSelectStart()` (suppressed while review is open).
-5. Controller/hand meshes forced to **EDITOR_LAYER (3)** so they never appear in the virtual cam film.
+4. REC: `gamepads.right.getButtonDown(InputComponent.Trigger)` or `getSelectStart()` (suppressed while reviewing).
+5. Grip origin forced to **EDITOR_LAYER (3)** so editor chrome never appears in the virtual cam film.
    **Do not use layers 1 or 2** — Three.js WebXR reserves those for left/right eye cameras; objects on layer 1 only draw in the left eye.
 
-## Dual monitors
+## Grip LCD
 
-| Surface | Camera source | Purpose |
-|---------|---------------|---------|
-| Grip LCD | Live right-grip pose | Record / aim |
-| Floating review panel | Timeline keyframes (`playbackCam`) | Watch the take after cut |
+One well, two feeds. The 16:9 cutout on the director card does not move when the card grows.
 
-Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is headset eyes only.
+| Mode | Camera source | Purpose |
+|------|---------------|---------|
+| Live aim | Right-grip pose | Record / frame |
+| Take review | Timeline keyframes (`playbackCam`) | Watch the take after cut |
+
+Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is headset eyes only. There is no second world-space monitor.
 
 **UI chrome:** XR panels use the same desktop Figma tokens (ink `#17171a`, accent `#2c6bf5`, white floating cards) via canvas textures in [`xr-ui-chrome.ts`](./xr-ui-chrome.ts) — Three.js meshes can't use CSS. Cards are visionOS-style faux frost drawn by `drawGlassCard`: rounded translucent fill + painted soft shadow, so every texture reserves a transparent `pad` margin for shadow bleed and its material must stay `transparent: true`. Buttons are wash/ink pills whose hover is a soft glow + lighten (never inversion); labels render in Nunito, preloaded via `preloadXrUiFonts()` at app boot so canvases don't rasterize the fallback font.
 
@@ -83,59 +85,27 @@ Both film **studio CG** (white `#f2f2f2`), never passthrough. Passthrough is hea
 
 | Input | Action |
 |-------|--------|
-| **Trigger** | REC / cut take |
+| **Trigger** | REC / cut take (blocked while reviewing) |
 | **Hold A** | Push-to-talk → Director crew (Web Speech → `user_command`) |
 
-A larger DIRECTOR slate hangs under the grip LCD: status (`DIRECTOR` / `LISTENING` / `OFFLINE`) + live transcript while holding A (ambient mode no longer hides listening/sending). Release keeps the captured line until the final lands. Reuses [`voice-session.ts`](../../director/voice-session.ts) + [`director-command.ts`](../../director/director-command.ts) — same path as the desktop mic, not a separate realtime voice API.
+A larger DIRECTOR slate hangs under the grip LCD: status (`DIRECTOR` / `LISTENING` / `OFFLINE` / `Take review`) + live transcript while holding A (ambient mode no longer hides listening/sending). Release keeps the captured line until the final lands. Reuses [`voice-session.ts`](../../director/voice-session.ts) + [`director-command.ts`](../../director/director-command.ts) — same path as the desktop mic, not a separate realtime voice API.
 
-## Review screen controls
+## Take review (same card)
 
-After cut, a ~1.2×0.675 m panel appears ~1.8 m in front of the headset and auto-plays the take once. No controller pointer / ray hit-tests — face buttons and stick only.
+After cut, the grip well swaps from live aim to timeline playback of that take and auto-plays once. Transport (play pill + scrub) grows in above the well as a slate body — existing ~190 ms dip/settle; the well stays put. The card eases to ~1.15× so the take is readable. No second compositor, no floating panel.
 
 | Input | Action |
 |-------|--------|
 | **B tap** | Play / pause |
-| **Hold B** (~400ms) | Close monitor |
+| **Hold B** (~400ms) | Exit review → live aim, scale back to 1 |
 | **Thumbstick X** | Scrub within the take |
-| **Squeeze** | Grab-move panel |
-| **Squeeze + thumbstick Y** | Scale panel (0.5–2.5×) |
+| **Thumbstick Y** | Scale the grip card (1.0–1.75×) |
 
-Trigger stays REC (still suppressed while the monitor is open). Hold A stays PTT. Voice `play` / `pause` / `where's the monitor` still work.
+Trigger stays REC (still suppressed while reviewing). Hold A stays PTT. Voice `play` / `pause` / `where's the monitor` still work — recall pulses the card if already reviewing, or re-enters the last take on the grip (no teleport).
 
-## Review card layout
+## Review chrome
 
-The post-cut monitor is **three stacked bands** inside the glass pad — header,
-16:9 film, transport dock — and they must not overlap. Every number lives in
-[`review-layout.ts`](./review-layout.ts); nothing in `review-screen.ts` or
-`makeReviewCardTexture` may hardcode a position.
-
-World metres are the source of truth and the canvas is derived from them
-(`pxX` / `pxY` / `canvasX` / `canvasY`), because that is the direction that
-can't rot: a band that fits in metres cannot fail to fit in pixels. The two used
-to carry the same numbers independently behind a "keep these in sync" comment,
-and they drifted — the title chip and legend sat at y ≈ 0.405 while the film
-reached 0.395, so the header painted over the video.
-
-Rules that hold the fix in place:
-
-- **Size the film from the bezel inward.** The dark plate is what has to clear
-  the bands, so the reveal comes out of the budget *before* the 16:9 is derived.
-  Fitting the film first and painting a bezel around it is how the plate ends up
-  wider than the space it was measured for.
-- **Header, hint, play pill, and scrub track are baked into the card**, not
-  separate meshes. A transparent quad in front of the glass is what reads as a
-  dark rectangular mask against passthrough (square corners, room showing
-  through the padding). The playhead thumb is the only overlay — two opaque
-  discs, because it has to slide.
-- **The film is a rounded `ShapeGeometry`**, radius `BEZEL_RADIUS − FILM_INSET`
-  so its corners are concentric with the bezel's. Square corners on a rounded
-  plate punch through the glass. `ShapeGeometry` UVs are raw vertex coords, so
-  they need remap to 0..1 or the render target samples off the edge.
-- **Play and scrub share `DOCK_Y`** so the transport is one row; the hint stays
-  in the header.
-
-Guarded by [`review-layout.test.ts`](./review-layout.test.ts) — band order, gaps
-of at least `BAND_GAP`, controls inside the groove, and the canvas mapping.
+Transport metrics live in [`director-slate.ts`](./director-slate.ts) next to `PROCESSING_H_U` so they fit `MAX_BODY_H_U`. Header copy is `Take review` / `Hold B to close` — the same Nunito hint as `Hold A to talk`, not a mono shout. Play + scrub paint into the card; the playhead is the only extra mesh (two opaque discs). Scale the **panel** group, not the whole rig, so the well stays in the cutout.
 
 ## Peers / versions
 
@@ -147,6 +117,7 @@ of at least `BAND_GAP`, controls inside the groove, and the canvas mapping.
 
 - Full desktop timeline UI in XR
 - Ray/grab pointers (`pointerSettings.enabled: false`) — no controller laser; review is button-driven
+- Detaching the card from the grip / floating “lift off”
 - Aim-pick / point-and-speak deictics (removed with the pointer)
 - UIKitML spatial UI
 - Locomotion / physics / scene understanding
@@ -158,9 +129,8 @@ of at least `BAND_GAP`, controls inside the groove, and the canvas mapping.
 - [ ] EXIT XR button ends session without refresh
 - [ ] Viewfinder shows studio CG / white bg (not black, not passthrough)
 - [ ] Trigger toggles TAKE / REC — blinking red dot on LCD while rolling
-- [ ] Cut → floating review screen appears, plays camera path on studio bg
-- [ ] Review card is one rounded glass: no square tab, hint readable in the header, film corners follow the bezel, play + scrub on one line in the dock
-- [ ] Review: B play/pause, hold B close, stick scrub, squeeze move, squeeze+stick Y scale
-- [ ] Grip LCD stays live aim; review shows timeline playback
+- [ ] Cut → grip well swaps to the take, transport grows in, card eases to ~1.15×
+- [ ] Review: B play/pause, hold B back to live, stick X scrub, stick Y scale (1.0–1.75×)
+- [ ] While reviewing, well shows timeline playback (not live aim); Hold A still PTT; trigger blocked
 - [ ] Hold A → larger slate stays up with live STT; release keeps the line, then finals reach crew when server up
 - [ ] Quest Browser: same, with passthrough on headset view only

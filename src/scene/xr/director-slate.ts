@@ -63,6 +63,12 @@ const BUBBLE_LINE_U = 16
  * A second wrapped title line adds BUBBLE_LINE_U; see MAX_BODY_H_U.
  */
 const PROCESSING_H_U = 68
+/** Play + scrub row while reviewing a take — fits inside MAX_BODY_H_U. */
+const TRANSPORT_H_U = 44
+const PLAY_W_U = 68
+const PLAY_H_U = 28
+const SCRUB_H_U = 12
+const TRANSPORT_GUTTER_U = 8
 /** Live level meter, tucked under the interim text while holding A. */
 const BARS_H_U = 12
 /** Transparent margin around the card so its soft shadow isn't clipped. */
@@ -95,6 +101,17 @@ export const PREVIEW_H = PREVIEW_H_U * M_PER_U
  * cancels; this is purely how far the well sits below the middle of the card.
  */
 export const PREVIEW_Y = (PAD_U + PREVIEW_H_U / 2 - CARD_MAX_H_U / 2) * M_PER_U
+/**
+ * Transport row centre relative to the plane's centre. Same bottom-anchor
+ * math as PREVIEW_Y, so the playhead sits on the painted scrub track.
+ */
+export const TRANSPORT_Y =
+  (PAD_U + PREVIEW_H_U + BLOCK_GAP_U + TRANSPORT_H_U / 2 - CARD_MAX_H_U / 2) * M_PER_U
+const SCRUB_LEFT_U = PAD_U + BUBBLE_PAD_U + PLAY_W_U + TRANSPORT_GUTTER_U
+const SCRUB_W_U = CONTENT_W_U - BUBBLE_PAD_U * 2 - PLAY_W_U - TRANSPORT_GUTTER_U
+export const SCRUB_LEFT = (SCRUB_LEFT_U - CARD_W_U / 2) * M_PER_U
+export const SCRUB_TRACK_W = SCRUB_W_U * M_PER_U
+export const THUMB_D = 0.014
 
 // ---- canvas, at 4px per design unit -------------------------------------------
 
@@ -109,6 +126,11 @@ const PREVIEW_H_PX = PREVIEW_H_U * PX
 const BUBBLE_PAD = BUBBLE_PAD_U * PX
 const BUBBLE_LINE = BUBBLE_LINE_U * PX
 const PROCESSING_H = PROCESSING_H_U * PX
+const TRANSPORT_H = TRANSPORT_H_U * PX
+const PLAY_W = PLAY_W_U * PX
+const PLAY_H = PLAY_H_U * PX
+const SCRUB_H = SCRUB_H_U * PX
+const TRANSPORT_GUTTER = TRANSPORT_GUTTER_U * PX
 const BARS_H = BARS_H_U * PX
 const BLEED = BLEED_U * PX
 const CARD_W_PX = CARD_W_U * PX
@@ -132,6 +154,7 @@ export type SlateState =
   | 'replying'
   | 'misheard'
   | 'offline'
+  | 'reviewing'
 
 export interface SlateProgress {
   /** What the crew is doing — the plan's own line. */
@@ -163,6 +186,10 @@ export interface DirectorSlate {
    * Null clears it.
    */
   setProgress: (progress: SlateProgress | null) => void
+  /** Cut → the well is the take. Transport body grows in above it. */
+  setReviewing: (on: boolean) => void
+  /** Play/pause pill + playhead ratio 0..1. No-op unless reviewing. */
+  setTransport: (next: { playing: boolean; ratio: number }) => void
   /**
    * Ambient mode (the default in XR): fade out and stop repainting for every
    * state the world already carries. Turn it off to get the old always-on card.
@@ -183,6 +210,7 @@ const STATE_ACCENT: Record<SlateState, string> = {
   replying: XR_UI.status,
   misheard: XR_UI.rec,
   offline: XR_UI.rec,
+  reviewing: XR_UI.accent,
 }
 
 const STATE_LABEL: Record<SlateState, string> = {
@@ -193,6 +221,7 @@ const STATE_LABEL: Record<SlateState, string> = {
   replying: 'Director',
   misheard: 'Director',
   offline: 'Offline',
+  reviewing: 'Take review',
 }
 
 const STATE_HINT: Record<SlateState, string> = {
@@ -203,6 +232,7 @@ const STATE_HINT: Record<SlateState, string> = {
   replying: 'Hold A to talk',
   misheard: 'Hold A to talk',
   offline: '',
+  reviewing: 'Hold B to close',
 }
 
 const DEFAULT_MISHEARD = 'didn’t catch that — name an object or a move'
@@ -238,6 +268,7 @@ const STATE_DIP_OPACITY = 0.55
 type SlateBody =
   | { kind: 'text'; lines: string[]; ghost: boolean; bars: boolean }
   | { kind: 'progress'; progress: SlateProgress; titleLines: string[] }
+  | { kind: 'transport'; playing: boolean }
   | null
 
 /** Listening caps at two lines to leave room for the level meter; see BARS_H_U. */
@@ -251,6 +282,7 @@ function bodyHeight(body: SlateBody): number {
     const extra = Math.max(0, body.titleLines.length - 1) * BUBBLE_LINE
     return PROCESSING_H + extra
   }
+  if (body.kind === 'transport') return TRANSPORT_H
   return BUBBLE_PAD * 2 + body.lines.length * BUBBLE_LINE + (body.bars ? BARS_H : 0)
 }
 
@@ -395,6 +427,39 @@ function drawProgressBlock(
   }
 }
 
+function drawTransportBlock(
+  ctx: CanvasRenderingContext2D,
+  body: Extract<SlateBody, { kind: 'transport' }>,
+  top: number,
+  height: number
+): void {
+  ctx.fillStyle = XR_UI.wash
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
+  ctx.fill()
+
+  const innerX = CONTENT_X + BUBBLE_PAD
+  const playY = top + (height - PLAY_H) / 2
+  ctx.fillStyle = body.playing ? XR_UI.chip : XR_UI.ink
+  ctx.beginPath()
+  ctx.roundRect(innerX, playY, PLAY_W, PLAY_H, PLAY_H / 2)
+  ctx.fill()
+
+  ctx.fillStyle = body.playing ? XR_UI.ink : '#ffffff'
+  ctx.font = FONT_HINT
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(body.playing ? 'pause' : 'play', innerX + PLAY_W / 2, playY + PLAY_H / 2 + 1)
+
+  const scrubX = innerX + PLAY_W + TRANSPORT_GUTTER
+  const scrubW = CONTENT_W - BUBBLE_PAD * 2 - PLAY_W - TRANSPORT_GUTTER
+  const scrubY = top + (height - SCRUB_H) / 2
+  ctx.fillStyle = XR_UI.chip
+  ctx.beginPath()
+  ctx.roundRect(scrubX, scrubY, scrubW, SCRUB_H, SCRUB_H / 2)
+  ctx.fill()
+}
+
 /**
  * Cut the viewfinder's window out of the card rather than painting a well on it.
  *
@@ -450,12 +515,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let ambient = true
   /** Step-by-step of a running plan, when the crew is sending one. */
   let progress: SlateProgress | null = null
+  let reviewing = false
+  let transportPlaying = false
+  let transportRatio = 0
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
-  // Depth-tested, so the controller/hand occluder in `camcorder-rig.ts` can put
-  // your real hand in front of the card where they overlap. The set can clip it
-  // in principle too, but the panel rides 12cm off the grip against a stage
-  // ~1.9m away, so in practice it never gets the chance.
+  // Depth-tested against the set. The panel rides 12cm off the grip against a
+  // stage ~1.9m away, so in practice the world never clips it.
   const mat = new THREE.MeshBasicMaterial({
     map: live.texture,
     transparent: true,
@@ -465,11 +531,35 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(SLATE_W, SLATE_H), mat)
   mesh.renderOrder = 13
   group.add(mesh)
+
+  const thumbRing = new THREE.Mesh(
+    new THREE.CircleGeometry(THUMB_D / 2, 32),
+    new THREE.MeshBasicMaterial({ color: XR_UI.accent, toneMapped: false })
+  )
+  const thumbFace = new THREE.Mesh(
+    new THREE.CircleGeometry((THUMB_D / 2) * 0.72, 32),
+    new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false })
+  )
+  thumbFace.position.z = 0.001
+  const scrubThumb = new THREE.Group()
+  scrubThumb.add(thumbRing)
+  scrubThumb.add(thumbFace)
+  scrubThumb.position.set(SCRUB_LEFT, TRANSPORT_Y, 0.02)
+  scrubThumb.visible = false
+  group.add(scrubThumb)
   setEditorLayer(group)
 
   function effectiveState(): SlateState {
     if (offline) return 'offline'
+    if (reviewing && state !== 'listening' && state !== 'sending') return 'reviewing'
     return state
+  }
+
+  function syncThumb(): void {
+    scrubThumb.visible = reviewing
+    if (!reviewing) return
+    const u = Math.min(1, Math.max(0, transportRatio))
+    scrubThumb.position.set(SCRUB_LEFT + u * SCRUB_TRACK_W, TRANSPORT_Y, 0.02)
   }
 
   /**
@@ -501,6 +591,8 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
    * and the height decides where the card's top edge lands.
    */
   function bodyFor(ctx: CanvasRenderingContext2D, st: SlateState, nowMs: number): SlateBody {
+    if (st === 'reviewing') return { kind: 'transport', playing: transportPlaying }
+
     if (st === 'thinking') {
       // "Something is happening" is the room's job — the stage ring says it
       // better than a word could, so in ambient mode a bare thinking state gets
@@ -574,10 +666,20 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
 
       if (body) {
         y += BLOCK_GAP
-        if (body.kind === 'progress') {
-          drawProgressBlock(ctx, body, y, bodyH, pulsePhase)
-        } else {
-          drawTextBlock(ctx, body, y, bodyH, smoothedLevel, pulsePhase)
+        switch (body.kind) {
+          case 'progress':
+            drawProgressBlock(ctx, body, y, bodyH, pulsePhase)
+            break
+          case 'transport':
+            drawTransportBlock(ctx, body, y, bodyH)
+            break
+          case 'text':
+            drawTextBlock(ctx, body, y, bodyH, smoothedLevel, pulsePhase)
+            break
+          default: {
+            const _exhaustive: never = body
+            void _exhaustive
+          }
         }
         y += bodyH
       }
@@ -675,6 +777,24 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       progress = next
       repaint(true)
     },
+    setReviewing: (on) => {
+      if (on === reviewing) return
+      reviewing = on
+      if (on) holdUntil = 0
+      else {
+        transportPlaying = false
+        transportRatio = 0
+      }
+      syncThumb()
+      repaint(true)
+    },
+    setTransport: (next) => {
+      const playingChanged = next.playing !== transportPlaying
+      transportPlaying = next.playing
+      transportRatio = next.ratio
+      syncThumb()
+      if (reviewing && playingChanged) repaint(true)
+    },
     setReply: (text) => {
       state = 'replying'
       bodyText = text
@@ -740,6 +860,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       mesh.geometry.dispose()
       live.dispose()
       mat.dispose()
+      thumbRing.geometry.dispose()
+      thumbFace.geometry.dispose()
+      ;(thumbRing.material as THREE.Material).dispose()
+      ;(thumbFace.material as THREE.Material).dispose()
     },
   }
 }

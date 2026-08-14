@@ -94,7 +94,7 @@ answers; the slate (XR) / input placeholder (desktop) coaches the next line.
 3. **"make the clip float"** — the hero lifts into a hover.
 4. **"action"** — you're rolling; walk the set and film with the camcorder
    (trigger = REC on Quest).
-5. **"and cut"** — the take ends and replays on the review monitor.
+5. **"and cut"** — the take ends and replays on the grip viewfinder.
 6. **"strike the set"** — the crew clears the stage and restores the lights.
 
 Every beat runs through the same command pipeline as real directing — nothing
@@ -214,7 +214,7 @@ The scene runs on `THREE.WebGLRenderer` + `EffectComposer`. WebXR on Quest 3 cur
 
 ### Quest 3 / WebXR testing
 
-**XR input:** controller grips / hand visuals come from [`@iwsdk/xr-input`](https://iwsdk.dev/concepts/xr-input/) (`XRInputManager`). We do **not** use full IWSDK (`World.create` / ECS) — session, dual cameras, and viewfinder FX stay in Sikat. Camcorder parents to `xrOrigin.gripSpaces.right`; REC uses StatefulGamepad trigger / select edges. Peer: `three >= 0.160` (we ship `^0.184`). No controller laser/pointer — review monitor uses face buttons + stick; desktop gizmo still owns picking.
+**XR input:** controller grips / hand visuals come from [`@iwsdk/xr-input`](https://iwsdk.dev/concepts/xr-input/) (`XRInputManager`). We do **not** use full IWSDK (`World.create` / ECS) — session, dual cameras, and viewfinder FX stay in Sikat. Camcorder parents to `xrOrigin.gripSpaces.right`; REC uses StatefulGamepad trigger / select edges. Peer: `three >= 0.160` (we ship `^0.184`). No controller laser/pointer — take review uses face buttons + stick on the grip card; desktop gizmo still owns picking.
 
 **Desktop (Chrome + WebXR emulator extension):**
 
