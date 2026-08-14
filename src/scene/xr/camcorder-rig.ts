@@ -113,38 +113,54 @@ function resolvePacketTargetId(packet: CommandPacket): string | null {
 }
 
 /**
- * Turn the input visuals into occluders: depth without colour.
+ * Depth-only occluder: writes the controller/hand silhouette into the depth
+ * buffer so the real hardware sits in front of the grip card and the set, but
+ * never touches a colour channel — no plastic ghost on top of the real thing.
  *
- * `@iwsdk/xr-input` loads a GLTF controller (and hand) per side and draws it
- * over the real one, so the director sees a plastic model floating on their
- * actual hand. Hiding it outright would lose the one thing it is good for —
- * writing the hand's silhouette into the depth buffer, which is what puts the
- * real controller *in front of* the card instead of behind it. So it keeps
- * drawing, just without touching a colour channel.
- *
- * The models arrive asynchronously, which is why this rides the per-frame
- * traversal that already re-applies the editor layer for the same reason. The
- * WeakSet keeps that down to one identity check per side once they have landed.
+ * Mutating the GLTF's own PBR materials left a visible shape (colorWrite did
+ * not stick on every mesh, and late-loaded children were skipped). Replacing
+ * each mesh with one shared occluder material, every frame, is the version
+ * that actually stays invisible.
  */
-const occluded = new WeakSet<THREE.Object3D>()
+const inputOccluderMat = new THREE.MeshBasicMaterial({
+  colorWrite: false,
+  depthWrite: true,
+  depthTest: true,
+  transparent: false,
+  fog: false,
+  toneMapped: false,
+  blending: THREE.NoBlending,
+})
 
 function makeInputVisualsOccluders(xrInput: XRInputManagerType): void {
   const { controller, hand } = xrInput.visualAdapters
   for (const adapter of [controller.left, controller.right, hand.left, hand.right]) {
     const model = adapter.visual?.model
-    if (!model || occluded.has(model)) continue
-    occluded.add(model)
+    if (!model) continue
+    model.visible = true
     model.traverse((o) => {
+      if (
+        o instanceof THREE.Line
+        || o instanceof THREE.LineSegments
+        || o instanceof THREE.Sprite
+        || o instanceof THREE.Points
+      ) {
+        o.visible = false
+        return
+      }
       if (!(o instanceof THREE.Mesh)) return
       // Ahead of the panel in the opaque pass — an occluder has to have written
       // its depth before the thing it occludes is drawn.
       o.renderOrder = -100
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-        m.colorWrite = false
-        m.depthWrite = true
-        m.depthTest = true
-        m.transparent = false
+      o.castShadow = false
+      o.receiveShadow = false
+      const current = o.material
+      if (Array.isArray(current)) {
+        if (current.every((m) => m === inputOccluderMat)) return
+        o.material = current.map(() => inputOccluderMat)
+        return
       }
+      if (current !== inputOccluderMat) o.material = inputOccluderMat
     })
   }
 }

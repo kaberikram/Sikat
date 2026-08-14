@@ -40,6 +40,7 @@ import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { useEditorStore } from '../../store'
 import { setEditorLayer } from '../infrastructure'
 import { currentCoachHint } from './xr-coach'
+import { fitLine, wrapLines } from './text-wrap'
 import { drawGlassPanel, drawProgressTrack, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
 
 // ---- Figma metrics (node 49:4), in design units -------------------------------
@@ -57,7 +58,10 @@ const CONTENT_W_U = CARD_W_U - PAD_U * 2
 const PREVIEW_H_U = (CONTENT_W_U * 9) / 16
 const BUBBLE_PAD_U = 10
 const BUBBLE_LINE_U = 16
-/** Processing block: title row, track, caption — fixed height per the design. */
+/**
+ * Processing block at one title line: pad + title + track + caption.
+ * A second wrapped title line adds BUBBLE_LINE_U; see MAX_BODY_H_U.
+ */
 const PROCESSING_H_U = 68
 /** Live level meter, tucked under the interim text while holding A. */
 const BARS_H_U = 12
@@ -66,10 +70,10 @@ const BLEED_U = 8
 
 /**
  * Tallest body block, and therefore the card's maximum height. A three-line
- * bubble (10 + 3×16 + 10) and the processing block are both 68 — that
- * coincidence is what makes one fixed plane enough for every state.
+ * bubble is 68 (10 + 3×16 + 10). A progress block with a two-line crew say
+ * is 84. The plane is sized for that so the viewfinder well never moves.
  */
-const MAX_BODY_H_U = PROCESSING_H_U
+const MAX_BODY_H_U = PROCESSING_H_U + BUBBLE_LINE_U
 const CARD_MAX_H_U =
   PAD_U + HEADER_H_U + BLOCK_GAP_U + MAX_BODY_H_U + BLOCK_GAP_U + PREVIEW_H_U + PAD_U
 
@@ -225,33 +229,6 @@ const STATE_SETTLE_MS = 190
 const STATE_DIP_SCALE = 0.965
 const STATE_DIP_OPACITY = 0.55
 
-function wrapLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxW: number,
-  maxLines: number
-): string[] {
-  const words = text.split(/\s+/)
-  const rows: string[] = []
-  let row = ''
-  for (const word of words) {
-    const next = row ? `${row} ${word}` : word
-    if (ctx.measureText(next).width > maxW && row) {
-      rows.push(row)
-      row = word
-    } else {
-      row = next
-    }
-  }
-  if (row) rows.push(row)
-  if (rows.length > maxLines) {
-    const cut = rows.slice(0, maxLines)
-    cut[maxLines - 1] = `${cut[maxLines - 1].replace(/[.…,]?$/, '')}…`
-    return cut
-  }
-  return rows
-}
-
 /**
  * What sits between the header and the preview, if anything.
  *
@@ -260,7 +237,7 @@ function wrapLines(
  */
 type SlateBody =
   | { kind: 'text'; lines: string[]; ghost: boolean; bars: boolean }
-  | { kind: 'progress'; progress: SlateProgress }
+  | { kind: 'progress'; progress: SlateProgress; titleLines: string[] }
   | null
 
 /** Listening caps at two lines to leave room for the level meter; see BARS_H_U. */
@@ -270,8 +247,21 @@ function bodyLineCap(st: SlateState): number {
 
 function bodyHeight(body: SlateBody): number {
   if (body === null) return 0
-  if (body.kind === 'progress') return PROCESSING_H
+  if (body.kind === 'progress') {
+    const extra = Math.max(0, body.titleLines.length - 1) * BUBBLE_LINE
+    return PROCESSING_H + extra
+  }
   return BUBBLE_PAD * 2 + body.lines.length * BUBBLE_LINE + (body.bars ? BARS_H : 0)
+}
+
+/** Inner width of the wash bubble, minus room for a trailing `42%`. */
+function progressTitleMaxW(ctx: CanvasRenderingContext2D, progress: SlateProgress): number {
+  const innerW = CONTENT_W - BUBBLE_PAD * 2
+  if (progress.ratio === null) return innerW
+  ctx.font = FONT_HINT
+  const pctW = ctx.measureText(`${Math.round(progress.ratio * 100)}%`).width + 16
+  ctx.font = FONT_BODY
+  return Math.max(innerW - pctW, innerW * 0.55)
 }
 
 function drawHeader(
@@ -320,6 +310,11 @@ function drawTextBlock(
   ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
   ctx.fill()
 
+  ctx.save()
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
+  ctx.clip()
+
   ctx.fillStyle = body.ghost ? XR_UI.inkSoft : XR_UI.ink
   ctx.font = FONT_BODY
   ctx.textAlign = 'left'
@@ -329,6 +324,7 @@ function drawTextBlock(
     ctx.fillText(line, CONTENT_X + BUBBLE_PAD, y)
     y += BUBBLE_LINE
   }
+  ctx.restore()
 
   if (!body.bars) return
   // You can see it hear you: centre-weighted bars off the smoothed RMS.
@@ -350,24 +346,34 @@ function drawTextBlock(
 
 function drawProgressBlock(
   ctx: CanvasRenderingContext2D,
-  progress: SlateProgress,
+  body: Extract<SlateBody, { kind: 'progress' }>,
   top: number,
+  height: number,
   pulsePhase: number
 ): void {
+  const { progress, titleLines } = body
   ctx.fillStyle = XR_UI.wash
   ctx.beginPath()
-  ctx.roundRect(CONTENT_X, top, CONTENT_W, PROCESSING_H, BLOCK_RADIUS)
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
   ctx.fill()
 
   const innerX = CONTENT_X + BUBBLE_PAD
   const innerW = CONTENT_W - BUBBLE_PAD * 2
+  const extra = Math.max(0, titleLines.length - 1) * BUBBLE_LINE
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
+  ctx.clip()
 
   ctx.fillStyle = XR_UI.ink
   ctx.font = FONT_BODY
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   const titleY = top + 10 * PX + 8 * PX
-  ctx.fillText(progress.label, innerX, titleY)
+  titleLines.forEach((line, i) => {
+    ctx.fillText(line, innerX, titleY + i * BUBBLE_LINE)
+  })
 
   if (progress.ratio !== null) {
     ctx.fillStyle = XR_UI.sunDeep
@@ -376,13 +382,16 @@ function drawProgressBlock(
     ctx.fillText(`${Math.round(progress.ratio * 100)}%`, innerX + innerW, titleY)
   }
 
-  drawProgressTrack(ctx, innerX, top + 34 * PX, innerW, 4 * PX, progress.ratio, pulsePhase)
+  ctx.restore()
+
+  drawProgressTrack(ctx, innerX, top + 34 * PX + extra, innerW, 4 * PX, progress.ratio, pulsePhase)
 
   if (progress.caption) {
     ctx.fillStyle = XR_UI.inkSoft
     ctx.font = FONT_CAPTION
     ctx.textAlign = 'left'
-    ctx.fillText(progress.caption, innerX, top + 52 * PX)
+    ctx.textBaseline = 'middle'
+    ctx.fillText(fitLine(ctx, progress.caption, innerW), innerX, top + 52 * PX + extra)
   }
 }
 
@@ -497,7 +506,16 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       // better than a word could, so in ambient mode a bare thinking state gets
       // no block at all. *Which* step, of how many, is not something a pulsing
       // ring can carry, so a plan that reports its steps earns one.
-      if (progress) return { kind: 'progress', progress }
+      if (progress) {
+        ctx.font = FONT_BODY
+        const titleLines = wrapLines(
+          ctx,
+          progress.label.trim() || 'working the take',
+          progressTitleMaxW(ctx, progress),
+          2
+        )
+        return { kind: 'progress', progress, titleLines }
+      }
       if (ambient) return null
     }
 
@@ -557,7 +575,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       if (body) {
         y += BLOCK_GAP
         if (body.kind === 'progress') {
-          drawProgressBlock(ctx, body.progress, y, pulsePhase)
+          drawProgressBlock(ctx, body, y, bodyH, pulsePhase)
         } else {
           drawTextBlock(ctx, body, y, bodyH, smoothedLevel, pulsePhase)
         }

@@ -122,14 +122,15 @@ Rules that hold the fix in place:
   the bands, so the reveal comes out of the budget *before* the 16:9 is derived.
   Fitting the film first and painting a bezel around it is how the plate ends up
   wider than the space it was measured for.
-- **Header and hint are baked into the card**, not separate meshes. A
-  transparent quad in front of the glass is what reads as a white square tab
-  against passthrough — and the legend's translucent plate was the dark strip
-  over the film.
+- **Header, hint, play pill, and scrub track are baked into the card**, not
+  separate meshes. A transparent quad in front of the glass is what reads as a
+  dark rectangular mask against passthrough (square corners, room showing
+  through the padding). The playhead thumb is the only overlay — two opaque
+  discs, because it has to slide.
 - **The film is a rounded `ShapeGeometry`**, radius `BEZEL_RADIUS − FILM_INSET`
   so its corners are concentric with the bezel's. Square corners on a rounded
   plate punch through the glass. `ShapeGeometry` UVs are raw vertex coords, so
-  they need remapping to 0..1 or the render target samples off the edge.
+  they need remap to 0..1 or the render target samples off the edge.
 - **Play and scrub share `DOCK_Y`** so the transport is one row; the hint stays
   in the header.
 

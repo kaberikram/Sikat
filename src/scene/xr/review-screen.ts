@@ -21,19 +21,12 @@ import {
   FILM_RADIUS,
   FILM_W,
   FILM_Y,
-  PLAY_H,
-  PLAY_W,
-  PLAY_X,
-  SCRUB_H,
   SCRUB_W,
   SCRUB_X,
   THUMB_D,
 } from './review-layout'
 import {
-  makeButtonTexture,
-  makePlayheadTexture,
   makeReviewCardTexture,
-  makeScrubTrackTexture,
   XR_UI,
 } from './xr-ui-chrome'
 
@@ -150,13 +143,23 @@ export function createReviewScreen(
     depthBuffer: true,
   })
 
-  // One glass card: shadow, header (title + hint), screen bezel and dock groove
-  // are all baked in. Nothing floats in front of it, which is what removes the
-  // square white tab the overlay planes used to show against passthrough.
-  const cardTex = makeReviewCardTexture()
-  const card = texturedPlane(CARD_W, CARD_H, cardTex)
+  // One opaque card: shadow, header, bezel, play pill and scrub track are all
+  // baked in. Overlay quads over passthrough were the dark rectangular mask
+  // around the transport — same class of bug as the old title tab.
+  const cardIdleTex = makeReviewCardTexture({ playing: false })
+  const cardPlayTex = makeReviewCardTexture({ playing: true })
+  const card = texturedPlane(CARD_W, CARD_H, cardIdleTex)
   card.position.z = 0
   group.add(card)
+  const cardMat = card.material as THREE.MeshBasicMaterial
+  let cardPlaying = false
+
+  function setCardPlaying(playing: boolean): void {
+    if (playing === cardPlaying) return
+    cardPlaying = playing
+    cardMat.map = playing ? cardPlayTex : cardIdleTex
+    cardMat.needsUpdate = true
+  }
 
   const screenMat = new THREE.MeshBasicMaterial({
     map: target.texture,
@@ -168,29 +171,20 @@ export function createReviewScreen(
   screenMesh.position.set(0, FILM_Y, 0.01)
   group.add(screenMesh)
 
-  // Transport dock — status chrome only (buttons drive play/scrub/close).
-  const playTex = makeButtonTexture('play', { bg: XR_UI.ink, fg: '#ffffff' })
-  const pauseTex = makeButtonTexture('pause', { bg: XR_UI.chip, fg: XR_UI.ink })
-  const playMat = new THREE.MeshBasicMaterial({
-    map: playTex,
-    transparent: true,
-    toneMapped: false,
-    side: THREE.DoubleSide,
-  })
-  // Play and scrub share DOCK_Y, so the transport reads as one row. The hint
-  // that used to sit here lives in the header now.
-  const playBtn = new THREE.Mesh(new THREE.PlaneGeometry(PLAY_W, PLAY_H), playMat)
-  playBtn.position.set(PLAY_X, DOCK_Y, 0.02)
-  group.add(playBtn)
-
-  const scrubTex = makeScrubTrackTexture()
-  const scrubTrack = texturedPlane(SCRUB_W, SCRUB_H, scrubTex)
-  scrubTrack.position.set(SCRUB_X, DOCK_Y, 0.02)
-  group.add(scrubTrack)
-
-  const playheadTex = makePlayheadTexture()
-  const scrubThumb = texturedPlane(THUMB_D, THUMB_D, playheadTex)
-  scrubThumb.position.set(SCRUB_X - SCRUB_W / 2, DOCK_Y, 0.03)
+  // Playhead only — it has to slide. Two opaque discs, no transparent quad.
+  const scrubThumb = new THREE.Group()
+  const thumbRing = new THREE.Mesh(
+    new THREE.CircleGeometry(THUMB_D / 2, 32),
+    new THREE.MeshBasicMaterial({ color: XR_UI.accent, toneMapped: false })
+  )
+  const thumbFace = new THREE.Mesh(
+    new THREE.CircleGeometry((THUMB_D / 2) * 0.72, 32),
+    new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false })
+  )
+  thumbFace.position.z = 0.001
+  scrubThumb.add(thumbRing)
+  scrubThumb.add(thumbFace)
+  scrubThumb.position.set(SCRUB_X - SCRUB_W / 2, DOCK_Y, 0.02)
   group.add(scrubThumb)
 
   setEditorLayer(group)
@@ -255,6 +249,7 @@ export function createReviewScreen(
     st.setTime(takeStart)
     st.setPlayOnceEnd(takeEnd)
     if (!st.isPlaying) st.togglePlay()
+    setCardPlaying(true)
   }
 
   // Voice cue "where's the monitor" — re-place the open card in front of the head.
@@ -269,13 +264,11 @@ export function createReviewScreen(
     const { currentTime } = useEditorStore.getState()
     const span = Math.max(takeEnd - takeStart, 0.001)
     const u = THREE.MathUtils.clamp((currentTime - takeStart) / span, 0, 1)
-    scrubThumb.position.x = scrubTrack.position.x - SCRUB_W / 2 + u * SCRUB_W
+    scrubThumb.position.x = SCRUB_X - SCRUB_W / 2 + u * SCRUB_W
   }
 
   function syncPlayLabel(): void {
-    const playing = useEditorStore.getState().isPlaying
-    playMat.map = playing ? pauseTex : playTex
-    playMat.needsUpdate = true
+    setCardPlaying(useEditorStore.getState().isPlaying)
   }
 
   function update(xrInput: XRInputManager): void {
@@ -399,15 +392,15 @@ export function createReviewScreen(
     hide()
     scene.remove(group)
     target.dispose()
-    disposeMesh(card)
+    disposeMesh(card, false)
+    cardIdleTex.dispose()
+    cardPlayTex.dispose()
     screenMesh.geometry.dispose()
     screenMat.dispose()
-    playMat.map = null
-    disposeMesh(playBtn, false)
-    playTex.dispose()
-    pauseTex.dispose()
-    disposeMesh(scrubTrack)
-    disposeMesh(scrubThumb)
+    thumbRing.geometry.dispose()
+    thumbFace.geometry.dispose()
+    ;(thumbRing.material as THREE.Material).dispose()
+    ;(thumbFace.material as THREE.Material).dispose()
     playbackBackdrop.geometry.dispose()
     ;(playbackBackdrop.material as THREE.Material).dispose()
     viewfinder.pixelatedPass.dispose()
