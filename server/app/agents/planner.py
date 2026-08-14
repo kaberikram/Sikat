@@ -142,7 +142,7 @@ class PlanRunner:
                     )
                     built = await self._producer._emit_staged_intent(
                         step, command_id, emit_log, emit_packet, emit_status, emit_cancel, scene_now,
-                        utterance=text,
+                        utterance=text, emit_question=emit_question,
                     )
                     all_packets.extend(built)
                     await emit_plan_update(
@@ -176,7 +176,7 @@ class PlanRunner:
         all_packets, describe_only = await self._recover_empty_plan(
             text, scene_now, frame, command_id, plan_say, plan_mode,
             all_packets, all_steps, describe_only,
-            emit_log, emit_packet, emit_status, emit_cancel,
+            emit_log, emit_packet, emit_status, emit_cancel, emit_question,
         )
 
         session.clear_pending_plan()
@@ -188,7 +188,7 @@ class PlanRunner:
                 all_packets.extend(
                     await self._producer._stream_intents(
                         rescue, command_id, emit_log, emit_packet, emit_status,
-                        scene, emit_cancel, emit_suggest
+                        scene, emit_cancel, emit_suggest, emit_question=emit_question,
                     )
                 )
                 describe_only = not all_packets
@@ -221,6 +221,7 @@ class PlanRunner:
         emit_packet,
         emit_status,
         emit_cancel,
+        emit_question,
     ) -> tuple[list[CommandPacket], bool]:
         """Escalation chain: corrective re-plan -> motion floor -> honest state."""
         action_seeking = motion_floor.is_animation_seeking(text) or not describe_only
@@ -261,6 +262,7 @@ class PlanRunner:
                         built = await self._producer._emit_staged_intent(
                             step, command_id, emit_log, emit_packet, emit_status,
                             emit_cancel, scene_now, utterance=text,
+                            emit_question=emit_question,
                         )
                         all_packets.extend(built)
             if not all_packets or (open_brief and not any(

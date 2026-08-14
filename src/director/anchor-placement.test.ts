@@ -133,6 +133,41 @@ test('an offset is applied after the relation resolves', () => {
   assert.ok(close(nudged[2] - plain[2], 0.3))
 })
 
+test('a group sharing one anchor is separated only by its offsets', () => {
+  // How "put all three spheres on the pedestal" survives the trip: the server
+  // sends three packets naming the same anchor and relation, and the only thing
+  // keeping the props out of each other is `offset`. Without it all three
+  // resolve to one point — so this is the contract that fan-out depends on.
+  const ball = box(0, 0, 0, 0.16, 0.16, 0.16)
+  const ring: [number, number, number][] = [
+    [0.1, 0, 0],
+    [-0.05, 0, 0.09],
+    [-0.05, 0, -0.09],
+  ]
+  const placed = ring.map((o) => resolveAnchor('on', PEDESTAL, ball, null, o))
+
+  const heights = new Set(placed.map(([, y]) => y.toFixed(6)))
+  assert.equal(heights.size, 1, 'all three sit on the same surface')
+
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = i + 1; j < placed.length; j++) {
+      const gap = Math.hypot(placed[i][0] - placed[j][0], placed[i][2] - placed[j][2])
+      assert.ok(gap > 0.15, `props ${i} and ${j} overlap: gap=${gap}`)
+    }
+    const reach = Math.hypot(placed[i][0], placed[i][2])
+    assert.ok(reach <= footprintRadius(PEDESTAL), `prop ${i} overhangs: ${reach}`)
+  }
+})
+
+test('no offset means a group would land in one spot', () => {
+  // The failure the offsets exist to prevent, pinned so it cannot come back
+  // silently if `offset` ever stops being applied.
+  const ball = box(0, 0, 0, 0.16, 0.16, 0.16)
+  const a = resolveAnchor('on', PEDESTAL, ball)
+  const b = resolveAnchor('on', PEDESTAL, ball)
+  assert.deepEqual(a, b)
+})
+
 test('the stage relocating carries placement with it', () => {
   // In XR the set moves to wherever the director is standing. A relation
   // resolved against live bounds follows; a server-computed Y would not.

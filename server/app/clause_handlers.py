@@ -11,7 +11,12 @@ from .fx_vocab import FX_PARAM_KEYS, FX_WORDS, PRIMARY_FX_PARAM
 from .motion_vocab import extract_motion, extract_motion_params
 from .scene_context import describe_fallback_message
 from .schema import FxSetting, Intent, PlacementAnchor, SceneState, Target, Transition
-from .target_resolution import ambiguous_options, is_ambiguous, rank_targets
+from .target_resolution import (
+    ambiguous_options,
+    is_ambiguous,
+    rank_targets,
+    resolve_target_group,
+)
 
 COLOR_WORDS: dict[str, str] = {
     "red": "#ff3b30",
@@ -728,12 +733,40 @@ def _parse_material(
     return intent
 
 
+_WANTS_ANOTHER = re.compile(
+    r"\b(another|a\s+new|new|second|third|extra|one\s+more|more|duplicate|copy|also)\b"
+)
+
+_MOVE_ONLY_VERB = re.compile(r"\b(put|place|set|move|stack|arrange|gather)\b")
+
+
+def _asks_for_a_new_prop(clause: str, scene: SceneState | None) -> bool:
+    """Whether "put a sphere on the pedestal" means a *new* sphere.
+
+    The spawn verbs and the placement verbs overlap — put, place, drop — so this
+    clause is genuinely two sentences until you look at the set. If the noun is
+    already standing there and nothing in the line asks for another one, the
+    director is moving what they can see, not conjuring a duplicate. Guessing
+    wrong the other way is the whole "I said put the spheres on the pedestal and
+    it spawned a fourth" bug.
+    """
+    if _WANTS_ANOTHER.search(clause):
+        return True
+    if not _MOVE_ONLY_VERB.search(clause):
+        return True
+    head = split_placement(clause)
+    subject = head[0] if head else clause
+    return _find_scene_target(subject, scene) is None
+
+
 def _parse_spawn(
     clause: str, scene: SceneState | None, _transition: Transition | None
 ) -> Intent | None:
     if not re.search(
         r"\b(add|spawn|create|make|drop|place|give me|insert|reveal|introduce|put)\b", clause
     ):
+        return None
+    if not _asks_for_a_new_prop(clause, scene):
         return None
     text_m = re.search(r"(?:\"([^\"]+)\"|'([^']+)'|\bsaying\s+(.+)$)", clause)
     text_value = next((g for g in text_m.groups() if g), None) if text_m else None
@@ -890,9 +923,44 @@ def _parse_amendment(
 def _parse_move(
     clause: str, scene: SceneState | None, transition: Transition | None
 ) -> Intent | None:
-    if not re.search(r"\b(move|shift|slide|raise|lower|lift|nudge|bring|push|pull|send|position)\b", clause):
+    if not re.search(
+        r"\b(move|shift|slide|raise|lower|lift|nudge|bring|push|pull|send|position|"
+        r"put|place|set|stack|arrange|gather)\b",
+        clause,
+    ):
         return None
-    resolved = _resolve_target_or_clarify(clause, scene, "Which object should I move")
+
+    # "put the spheres on the pedestal" — a placement onto something already on
+    # set. Handled before the direction words below, which describe a nudge
+    # along an axis and have nothing to say about a surface.
+    split = split_placement(clause)
+    if split:
+        anchor = find_placement_anchor(clause, scene)
+        if anchor is not None:
+            subject = split[0]
+            group = resolve_target_group(
+                subject, scene, last_group=session_context.last_group()
+            )
+            if group:
+                return Intent(
+                    action="transform", target=group[0], targets=group,
+                    anchor=anchor, transition=transition,
+                )
+            resolved = _resolve_target_or_clarify(
+                subject, scene, "Which object should I move"
+            )
+            if isinstance(resolved, Intent):
+                return resolved
+            if resolved:
+                return Intent(
+                    action="transform", target=resolved,
+                    anchor=anchor, transition=transition,
+                )
+
+    group = resolve_target_group(clause, scene, last_group=session_context.last_group())
+    resolved = group[0] if group else _resolve_target_or_clarify(
+        clause, scene, "Which object should I move"
+    )
     if isinstance(resolved, Intent):
         return resolved
     target = resolved
@@ -903,6 +971,7 @@ def _parse_move(
         return Intent(
             action="transform",
             target=target,
+            targets=group or None,
             position=absolute,
             mode="absolute",
             transition=transition,
@@ -924,6 +993,7 @@ def _parse_move(
     return Intent(
         action="transform",
         target=target,
+        targets=group or None,
         position=(direction[0] * amount, direction[1] * amount, direction[2] * amount),
         mode="relative",
         transition=transition,
@@ -1029,7 +1099,36 @@ def parse_clause(clause: str, scene: SceneState | None) -> Intent | None:
                 updates["addressee"] = addr
             if snap:
                 updates["snap_motion"] = True
+            group = _group_for(work, intent, scene)
+            if group:
+                updates["targets"] = group
             if updates:
                 intent = intent.model_copy(update=updates)
             return intent
+    return None
+
+
+def _group_for(
+    clause: str, intent: Intent, scene: SceneState | None
+) -> list[str] | None:
+    """Widen a single resolved target to the group the clause actually named.
+
+    Every handler resolves one name, because that is all an Intent used to hold.
+    Rather than teaching each of them about plurals, this asks once, at the only
+    point they all pass through — and only widens when the name a handler picked
+    is genuinely a member of the group, so a deliberately singular direction is
+    never broadened behind the director's back.
+    """
+    # `targets` mirrors `target` as a singleton on every intent, so only a list
+    # the handler genuinely filled in — more than one name — means "already a
+    # group, leave it alone".
+    if not intent.target or intent.action == "spawn":
+        return None
+    if intent.targets and len(intent.targets) > 1:
+        return None
+    group = resolve_target_group(
+        clause, scene, last_group=session_context.last_group()
+    )
+    if len(group) > 1 and intent.target in group:
+        return group
     return None

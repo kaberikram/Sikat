@@ -151,6 +151,14 @@ Animator, VFX Operator) turns instructions into live scene changes over a
 WebSocket — `"add a red box then dim the lights"`, `"sunset mood"`,
 `"move the box up 2 over 3 seconds"`, `"turnaround the sphere"`, `"enable bloom"`.
 
+The crew directs **groups** as readily as single props: `"put all 3 spheres on
+the pedestal"` moves the three already on set (spacing them across the surface
+rather than stacking them), and `"make them all red"` follows up on the same
+three. A verb like *put* or *place* spawns only what is genuinely not on set —
+naming something already standing there moves it. When one word fits several
+props (`"move the sphere"` with three of them), the crew asks which, with
+pickable options, instead of guessing.
+
 ```bash
 # Terminal A — agent server (requires uv; https://docs.astral.sh/uv/)
 cd server && uv sync && uv run uvicorn app.main:app --port 8000

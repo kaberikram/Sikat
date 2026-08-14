@@ -876,6 +876,15 @@ class Intent(BaseModel):
 
     action: IntentAction
     target: str | None = None
+    targets: list[str] | None = None
+    """Every object this step applies to — "put all three spheres on the pedestal".
+
+    A flat sibling of `target` for the same reason `anchor_target` is one: models
+    drop nested shapes but keep string lists. `target` stays the first name, so
+    every reader that predates groups (session memory, residue, undo, parse
+    hints) keeps working unchanged; the producer fans a group out into one
+    single-target packet per object, leaving the wire protocol alone.
+    """
     addressee: int | None = None
     role: str | None = None
     transition: Transition | None = None
@@ -946,6 +955,23 @@ class Intent(BaseModel):
     clarify_options: list[str] | None = None
     # suggest (server-internal — surfaced as agent_suggestion after command)
     suggestion_command: str | None = None
+
+    @model_validator(mode="after")
+    def _mirror_targets(self):
+        """Keep `target` and `targets` describing the same thing.
+
+        A model that answers with only one of the two must not read as having
+        said nothing about the other: `target` alone is a group of one, and
+        `targets` alone still has to satisfy every single-target reader.
+        """
+        if self.targets:
+            deduped = list(dict.fromkeys(t for t in self.targets if t))
+            self.targets = deduped or None
+            if self.targets and not self.target:
+                self.target = self.targets[0]
+        elif self.target:
+            self.targets = [self.target]
+        return self
 
     @model_validator(mode="after")
     def _coerce_flat_anchor(self):

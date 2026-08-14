@@ -68,10 +68,10 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 ## Actions
 | action | use when | key fields |
 |--------|----------|------------|
-| spawn | new primitive | primitive, color, name, text, position OR anchor_target+anchor_relation |
-| remove | delete object | target (name) |
-| transform | move/rotate/scale | target, position OR anchor_target+anchor_relation, rotation/scale, mode (absolute\\|relative), transition |
-| animate | motion on object | target, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
+| spawn | new primitive, not already on set | primitive, color, name, text, position OR anchor_target+anchor_relation |
+| remove | delete object | target (name), or targets for several |
+| transform | move/put/place/set/stack/arrange/gather/rotate/scale something already on set | target OR targets, position OR anchor_target+anchor_relation, rotation/scale, mode (absolute\\|relative), transition |
+| animate | motion on object | target OR targets, motion OR track_property + track_keyframes (prefer for unique choreography), motion_params, animate_repeat, transition |
 | move_camera | frame shot | position, rotation, look_at (ONLY when explicitly framing), fov, transition |
 
 ## Camera / look-at rules (IMPORTANT)
@@ -81,7 +81,7 @@ stop", "box in, red, dead center", "cutting bloom, we're flat now".
 - When framing IS requested, look_at = object name; client aims at the object's **current** path position.
 - Preserve existing camera rotation when only adjusting fov unless they ask to reframe.
 | update_lights | relight | ambient_color, ambient_intensity (0-4), key_color, key_intensity (0-8), key_position, background |
-| set_material | surface look | target, color, emissive, emissive_intensity, opacity |
+| set_material | surface look | target OR targets, color, emissive, emissive_intensity, opacity |
 | update_fx | post stack | section (bloom\\|pixelate\\|cellShading\\|glitch\\|dither), fx_enabled, fx_set [{{key,value}}] |
 | playback | transport | playback_action (play\\|pause\\|seek\\|record\\|cut\\|loop_on\\|loop_off), seek_time, playback_pause_after_seek |
 | set_scene | whole mood | mood (noir\\|sunset\\|studio\\|neon\\|shine) |
@@ -174,6 +174,9 @@ Examples: "hey director", "standing by — what's the call?", "copy, ears on".
 
 ## Scene grounding rules
 - `target` MUST be an object name from the briefing when referring to existing objects
+- `targets` (a list of briefing names) when the direction is about more than one
+- Before spawning, check the briefing: if something answering to that noun is
+  already on set and the director did not ask for another one, move it instead
 - Pronouns ("it", "that") → most recent target from history OR selectedId
 - "selected" / "this one" → selectedId from briefing
 - Rotations are RADIANS. Colors lowercase "#rrggbb".
@@ -479,6 +482,12 @@ def _history_section() -> str:
             for ex in hist
         )
         parts.append(f"Recent direction (oldest first):\n{lines}")
+    group = session.last_group()
+    if group:
+        parts.append(
+            "Last group (what \"them\" / \"those\" / \"all of them\" means right now): "
+            + ", ".join(group)
+        )
     latest = session.latest_plan()
     if latest is not None:
         steps = ", ".join(
@@ -525,6 +534,8 @@ def _history_section() -> str:
 Follow-up rules:
 - Pronouns ("it", "that", "this one") and an omitted target refer to the most
   recently mentioned object above.
+- Plural pronouns ("them", "those", "all of them") refer to the last group
+  above — name every one of them in `targets`.
 - Small corrections like "go back a bit" or "a little more" are RELATIVE
   transforms on that same object (mode "relative"), not new absolute moves.
 - Build on the last take journal — do not forget what you just staged.
@@ -549,9 +560,19 @@ def _system_prompt(scene: SceneState | None, hints: str | None = None) -> str:
 _JSON_SCHEMA_HINT = """
 Respond with a single JSON object of exactly this shape:
 {"intents": [ {"action": "<one of the actions above>", "say": "<in-character radio line>", ...only relevant fields...}, ... ]}
-Example for "place a box on the left of the sphere":
+The same sentence shape is a spawn or a move depending on whether the thing
+named is already in the briefing. Check before you choose.
+Example for "place a box on the left of the sphere" when no box is on set:
 {"intents": [
   {"action": "spawn", "primitive": "box", "anchor_target": "CORE_SPHERE", "anchor_relation": "left_of", "say": "box in, camera left of the sphere"}
+]}
+Example for "put the box on the left of the sphere" when HERO_BOX is on set:
+{"intents": [
+  {"action": "transform", "target": "HERO_BOX", "anchor_target": "CORE_SPHERE", "anchor_relation": "left_of", "say": "box over, camera left of the sphere"}
+]}
+Example for "put all three spheres on the pedestal" with three spheres on set:
+{"intents": [
+  {"action": "transform", "targets": ["SPHERE_SPAWN", "SPHERE_SPAWN_2", "SPHERE_SPAWN_3"], "anchor_target": "PEDESTAL", "anchor_relation": "on", "say": "all three up on the plinth"}
 ]}
 Example for "add a blue sphere and make it float":
 {"intents": [

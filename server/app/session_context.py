@@ -92,6 +92,11 @@ class SessionContext:
     def __init__(self) -> None:
         self._history: deque[Exchange] = deque(maxlen=_MAX)
         self._pending_target: str | None = None
+        # The set of objects the last command actually acted on, so "now spin
+        # them" lands on the same three without re-deriving them from a phrase
+        # that no longer contains the noun.
+        self._last_group: list[str] = []
+        self.unresolved_targets: list[str] = []
         # Point + speak: the object the director is physically aiming at while
         # speaking. Scoped to the current command; cleared when it finishes.
         self._pointed_target: str | None = None
@@ -99,6 +104,7 @@ class SessionContext:
         self._last_transform: Intent | None = None
         self._pending_clarify: PendingClarify | None = None
         self._clarify_target: str | None = None
+        self._clarify_answer: str | None = None
         self.recent_notes: deque[str] = deque(maxlen=_RECENT_NOTES_MAX)
         self.latest_scene: SceneState | None = None
         self.latest_full_scene: SceneState | None = None
@@ -124,6 +130,26 @@ class SessionContext:
         if target:
             self._pending_target = target
 
+    def note_unresolved(self, names: list[str]) -> None:
+        """Names the director used that nothing on set answered to.
+
+        Kept so the end-of-command line can be honest about a partial result
+        instead of reporting the two that moved as if they were the three
+        that were asked for."""
+        for name in names:
+            if name and name not in self.unresolved_targets:
+                self.unresolved_targets.append(name)
+
+    def note_group(self, names: list[str]) -> None:
+        """Remember a group only when it *is* one — a single object is already
+        covered by last_target, and overwriting the group with it would make
+        "them" forget the other two."""
+        if len(names) > 1:
+            self._last_group = list(names)
+
+    def last_group(self) -> list[str]:
+        return list(self._last_group)
+
     def note_transform(self, intent: Intent) -> None:
         if intent.action == "transform":
             self._last_transform = intent
@@ -136,6 +162,9 @@ class SessionContext:
             self.note_transform(intent)
         self._pending_target = None
         self._pending_addressee = None
+        # A clarify answers exactly one direction. Holding it past that would
+        # pin every later ambiguous phrase to whatever was picked once.
+        self._clarify_answer = None
 
     def history(self) -> list[Exchange]:
         return list(self._history)
@@ -171,11 +200,22 @@ class SessionContext:
 
     def set_clarify_target(self, target: str | None) -> None:
         self._clarify_target = target
+        self._clarify_answer = target
 
     def consume_clarify_target(self) -> str | None:
         target = self._clarify_target
         self._clarify_target = None
         return target
+
+    def clarify_answer(self) -> str | None:
+        """The answer to the last clarify, readable until the next direction.
+
+        `consume_clarify_target` is one-shot and the grammar takes it first, so
+        anything resolving later in the same command has nothing left to read.
+        Without this, a re-run of the held clause can find the target ambiguous
+        all over again and ask the same question forever.
+        """
+        return self._clarify_answer
 
     def note_say(self, text: str) -> None:
         cleaned = text.strip()
@@ -241,6 +281,7 @@ class SessionContext:
     def command_started(self) -> None:
         self.last_command_at = time.monotonic()
         self.command_in_flight = True
+        self.unresolved_targets = []
 
     def command_finished(self) -> None:
         self.command_in_flight = False
@@ -249,10 +290,13 @@ class SessionContext:
     def clear(self) -> None:
         self._history.clear()
         self._pending_target = None
+        self._last_group = []
+        self.unresolved_targets = []
         self._pending_addressee = None
         self._last_transform = None
         self._pending_clarify = None
         self._clarify_target = None
+        self._clarify_answer = None
         self.recent_notes.clear()
         self.latest_scene = None
         self.latest_full_scene = None
@@ -427,6 +471,18 @@ def note_target(target: str | None) -> None:
     get_session().note_target(target)
 
 
+def note_group(names: list[str]) -> None:
+    get_session().note_group(names)
+
+
+def note_unresolved(names: list[str]) -> None:
+    get_session().note_unresolved(names)
+
+
+def last_group() -> list[str]:
+    return get_session().last_group()
+
+
 def note_transform(intent: Intent) -> None:
     get_session().note_transform(intent)
 
@@ -469,6 +525,10 @@ def set_clarify_target(target: str | None) -> None:
 
 def consume_clarify_target() -> str | None:
     return get_session().consume_clarify_target()
+
+
+def clarify_answer() -> str | None:
+    return get_session().clarify_answer()
 
 
 def note_say(text: str) -> None:

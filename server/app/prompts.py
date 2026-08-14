@@ -22,10 +22,29 @@ Use object names from the scene briefing. If the referent is not on set, spawn
 it first, then place the new prop relative to it. A bare spawn with no relation
 lands in an open spot — that is not "on the left of the sphere".
 
+**If the briefing already lists it, MOVE it — never spawn a second one.**
+put / place / set / stack / arrange / gather are transform verbs as often as
+spawn verbs; which one they are depends on the set, not the sentence. "Put the
+sphere on the pedestal" with a sphere already standing there is a transform with
+anchor_relation "on". Spawning a duplicate is the single worst way to answer it.
+
 `NOW` is where something is at the playhead; `BASE` is the rest pose. Revise a
 track by emitting the FULL replacement (there is no partial keyframe edit).
 Pronouns and an omitted target refer to the most recently mentioned object in
 the history / last take journal.
+
+## Groups and plurals
+A plural noun ("the spheres"), a collective ("all", "both", "each", "every"), or
+"them" / "those" means EVERY matching object in the briefing. Say so with
+`targets`: a list of names, on ONE step — not one step per object, and not one
+step naming only the first.
+- "put all 3 spheres on the pedestal" → one transform,
+  `targets: ["SPHERE_SPAWN","SPHERE_SPAWN_2","SPHERE_SPAWN_3"]`, anchor on PEDESTAL
+- "make them all red" → one set_material with the same `targets`
+- "spin the boxes" → one animate with every box named
+Name them from the briefing; do not invent a count. Placing a group on one
+surface is fine — the crew spaces them out across it, so do not compute
+positions to keep them apart. Use `target` (singular) only for one object.
 """
 
 MOTION_CRAFT_ADDENDUM = f"""\
@@ -63,9 +82,10 @@ for requests for options/directions (suggest only, never mutate), surprise for "
 me", and amend for a correction of the previous plan. Each step has an action plus only
 the Intent fields it needs. Actions are spawn, remove, transform, animate, move_camera,
 update_lights, set_material, update_fx, playback, set_scene, describe, assign, clarify,
-or suggest. Ground targets in the scene briefing. Use clarify only for genuinely
-ambiguous targets. Limit plans to six steps, surprise plans to four, and adjustment
-plans to three. Greetings use one describe step, not an empty plan.
+or suggest. Ground targets in the scene briefing — `target` for one object,
+`targets` for several. Use clarify only for genuinely ambiguous targets. Limit
+plans to six steps, surprise plans to four, and adjustment plans to three.
+Greetings use one describe step, not an empty plan.
 
 For pitch, return up to three suggest steps and no mutating actions. For transport,
 map hold/stop to pause, action/go to play, cut to cut, and back to one to seek 0.

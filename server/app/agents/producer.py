@@ -39,7 +39,12 @@ from ..schema import (
     intent_preview_message,
 )
 from ..session_context import CLARIFY_TIMEOUT_SEC, PendingClarify
-from ..target_resolution import resolve_llm_target, resolve_option_answer
+from ..spatial import Box, arrange_on
+from ..target_resolution import (
+    resolve_llm_target,
+    resolve_option_answer,
+    resolve_target_or_group,
+)
 from .asset_animator import AssetAnimator, default_spawn_name
 from .base import (
     EmitCancel,
@@ -149,6 +154,79 @@ def _salvage_spawn_anchor(
             return find_placement_anchor(other, scene)
         return None
     return find_placement_anchor(clause, scene)
+
+
+class AmbiguousTarget(Exception):
+    """The phrase fits two objects equally well, so the crew has to ask.
+
+    Raised out of target resolution rather than resolved to a best guess: on a
+    set holding three spheres, "move the sphere" silently moving whichever
+    sorted first is the exact "it didn't understand me" failure. Caught at the
+    staging boundary, which is where a question can actually be put on screen.
+    """
+
+    def __init__(self, phrase: str, options: list[str]) -> None:
+        super().__init__(phrase)
+        self.phrase = phrase
+        self.options = options
+
+    def as_intent(self) -> Intent:
+        return Intent(
+            action="clarify",
+            clarify_question=f"which {self.phrase}?",
+            clarify_options=self.options,
+        )
+
+
+def spread_group_anchor(
+    intents: list[Intent], scene: SceneState | None
+) -> list[Intent]:
+    """Give each member of a group its own spot on the shared surface.
+
+    Every one of these intents resolved to the same anchor, and "on" resolves to
+    a single point, so without this they are all sent to the same place and end
+    up inside one another. `PlacementAnchor.offset` already rides the wire and
+    the client already adds it to the resolved point, so the fix is one offset
+    per member and no protocol change.
+    """
+    first = intents[0].anchor
+    if first is None or first.relation not in ("on", "above") or scene is None:
+        return intents
+    anchor_name = first.target.name
+    if not anchor_name or any(
+        i.anchor is None or i.anchor.target.name != anchor_name for i in intents
+    ):
+        return intents
+    anchor_obj = next(
+        (o for o in scene.objects if o.name == anchor_name and o.bounds), None
+    )
+    if anchor_obj is None or anchor_obj.bounds is None:
+        return intents
+
+    def box_for(name: str | None) -> Box | None:
+        obj = next((o for o in scene.objects if o.name == name and o.bounds), None)
+        if obj is None or obj.bounds is None:
+            return None
+        return Box(min=tuple(obj.bounds.min), max=tuple(obj.bounds.max))
+
+    anchor_box = Box(
+        min=tuple(anchor_obj.bounds.min), max=tuple(anchor_obj.bounds.max)
+    )
+    offsets = arrange_on(anchor_box, [box_for(i.target) for i in intents])
+    spread: list[Intent] = []
+    for intent, offset in zip(intents, offsets):
+        anchor = intent.anchor
+        if anchor is None:  # unreachable — every member was checked above
+            spread.append(intent)
+            continue
+        base = anchor.offset or (0.0, 0.0, 0.0)
+        merged = (base[0] + offset[0], base[1] + offset[1], base[2] + offset[2])
+        spread.append(
+            intent.model_copy(
+                update={"anchor": anchor.model_copy(update={"offset": merged})}
+            )
+        )
+    return spread
 
 
 async def _drain_llm_stream(agen, queue: asyncio.Queue) -> None:
@@ -277,23 +355,28 @@ class Producer:
             assignment = performers.get(intent.addressee)
             if assignment:
                 working = working.model_copy(update={"target": assignment.target})
-        working = await self._resolve_working_target(working, scene, emit)
-        if working is None:
+        resolved = await self._resolve_working_targets(working, scene, emit)
+        if not resolved:
             return []
-        if working.action == "spawn" and not working.anchor and utterance:
-            salvaged = _salvage_spawn_anchor(working, utterance, scene)
+        if resolved[0].action == "spawn" and not resolved[0].anchor and utterance:
+            salvaged = _salvage_spawn_anchor(resolved[0], utterance, scene)
             if salvaged:
                 # The director named a relationship and the model answered with
                 # a bare spawn (or a coordinate read off STAGE: centre). Either
                 # way the prop lands dead centre, so take the relationship —
                 # anchor outranks position on the client for the same reason.
-                working = working.model_copy(update={"anchor": salvaged})
+                resolved = [resolved[0].model_copy(update={"anchor": salvaged})]
                 await emit(
                     self.name,
                     f"placing it {salvaged.relation.replace('_', ' ')} {salvaged.target.name}",
                     "info",
                 )
-        built = specialist.build(working, scene) if specialist else []
+        if len(resolved) > 1:
+            resolved = spread_group_anchor(resolved, scene)
+
+        built: list[CommandPacket] = []
+        for one in resolved:
+            built.extend(specialist.build(one, scene) if specialist else [])
         if built and specialist:
             await emit(
                 specialist.name,
@@ -309,58 +392,86 @@ class Producer:
             await emit(self.name, f"dropped unactionable intent: {intent.action}", "warn")
         return built
 
-    async def _resolve_working_target(
+    async def _resolve_working_targets(
         self,
         working: Intent,
         scene: SceneState | None,
         emit: EmitLog,
-    ) -> Intent | None:
-        """Fuzzy-resolve LLM targets; hero-fallback for animate only.
+    ) -> list[Intent]:
+        """Ground an intent's target(s) against the live set.
 
-        Returns None when the intent should be left unbuilt (e.g. unmatched remove).
+        Returns one intent per object the step applies to — usually one, several
+        when the director spoke about a group ("all three spheres", "them"), and
+        none when nothing on set answers to the name.
+
+        Hero-fallback stays animate-only, as before: a move with no referent is
+        a miss, not an invitation to move something else.
         """
         if working.action not in ("animate", "transform", "set_material", "remove"):
-            return working
+            return [working]
         camera_sentinels = {"CAMERA", "VIRTUAL_CAMERA"}
         if working.target and working.target.upper() in camera_sentinels:
-            return working
+            return [working]
+
+        named = working.targets or ([working.target] if working.target else [])
+        if len(named) > 1:
+            # The model already named the group. Ground each name it gave and
+            # keep the ones that exist, rather than re-deriving the set from a
+            # phrase the model has already interpreted.
+            grounded = self._ground_each(named, scene)
+            if grounded:
+                session_context.note_group(grounded)
+                missing = [n for n in named if n not in grounded]
+                if missing:
+                    session_context.note_unresolved(missing)
+                    await emit(
+                        self.name,
+                        f"{len(grounded)} of {len(named)} named objects are on set",
+                        "warn",
+                    )
+                return self._fan_out(working, grounded)
+
         if working.target:
             if working.target.endswith("_SPAWN"):
-                return working
+                return [working]
             if working.target == session_context.last_target():
-                return working
+                return [working]
         if not scene or not scene.objects:
-            if working.action == "animate" and not working.target:
-                _, hero_name = resolve_hero(scene, None)
-                await emit(
-                    self.name,
-                    f"no target — animating hero '{hero_name}'",
-                    "warn",
-                )
-                return working.model_copy(update={"target": hero_name})
-            return working
+            return await self._hero_or_nothing(working, scene, emit)
 
         if not working.target:
-            if working.action == "animate":
-                _, hero_name = resolve_hero(scene, None)
-                await emit(
-                    self.name,
-                    f"no target — animating hero '{hero_name}'",
-                    "warn",
-                )
-                return working.model_copy(update={"target": hero_name})
-            return working
+            return await self._hero_or_nothing(working, scene, emit)
 
-        resolved, _reason = resolve_llm_target(working.target, scene)
-        if resolved and resolved != working.target:
+        resolution = resolve_target_or_group(
+            working.target, scene, last_group=session_context.last_group()
+        )
+
+        if resolution.is_group:
+            session_context.note_group(resolution.names)
             await emit(
                 self.name,
-                f"reading '{working.target}' as '{resolved}'",
+                f"'{working.target}' is {len(resolution.names)} objects: "
+                f"{', '.join(resolution.names)}",
                 "info",
             )
-            return working.model_copy(update={"target": resolved})
-        if resolved:
-            return working
+            return self._fan_out(working, resolution.names)
+
+        if resolution.reason == "ambiguous":
+            answered = session_context.clarify_answer()
+            if answered in resolution.options:
+                # This is the re-run of a clause the director already
+                # disambiguated. Asking again would be a loop.
+                return self._fan_out(working, [answered])
+            # Deliberately not a silent best guess. The caller turns this into
+            # the clarify question the director can answer with one tap.
+            raise AmbiguousTarget(working.target, resolution.options)
+
+        if resolution.names:
+            resolved = resolution.names[0]
+            if resolved != working.target:
+                await emit(self.name, f"reading '{working.target}' as '{resolved}'", "info")
+                return self._fan_out(working, [resolved])
+            return [working]
 
         if working.action == "animate":
             hero_obj, hero_name = resolve_hero(scene, None)
@@ -375,20 +486,56 @@ class Producer:
                     f"no match for '{working.target}' and nothing on set to redirect to — skipping",
                     "warn",
                 )
-                return None
+                return []
             await emit(
                 self.name,
                 f"no match for '{working.target}' — animating hero '{hero_name}'",
                 "warn",
             )
-            return working.model_copy(update={"target": hero_name})
+            return self._fan_out(working, [hero_name])
 
+        session_context.note_unresolved([working.target])
         await emit(
             self.name,
             f"no match for '{working.target}' — skipping {working.action}",
             "warn",
         )
-        return None
+        return []
+
+    async def _hero_or_nothing(
+        self, working: Intent, scene: SceneState | None, emit: EmitLog
+    ) -> list[Intent]:
+        """Untargeted animate falls back to the hero; everything else passes through."""
+        if working.action == "animate" and not working.target:
+            _, hero_name = resolve_hero(scene, None)
+            await emit(self.name, f"no target — animating hero '{hero_name}'", "warn")
+            return self._fan_out(working, [hero_name])
+        return [working]
+
+    @staticmethod
+    def _ground_each(named: list[str], scene: SceneState | None) -> list[str]:
+        """Keep the model's names that resolve, in the order it gave them."""
+        if scene is None:
+            return []
+        out: list[str] = []
+        for name in named:
+            resolved, _reason = resolve_llm_target(name, scene)
+            if resolved and resolved not in out:
+                out.append(resolved)
+        return out
+
+    @staticmethod
+    def _fan_out(working: Intent, names: list[str]) -> list[Intent]:
+        """One intent per object, so the rest of the pipeline never sees a group.
+
+        Everything downstream — specialists, staging, cursor presence, supersede
+        cancellation, undo — is built around one packet naming one object, and
+        stays that way. The group only ever exists here.
+        """
+        return [
+            working.model_copy(update={"target": name, "targets": [name]})
+            for name in names
+        ]
 
     async def _build_packets_for_intents(
         self,
@@ -403,11 +550,24 @@ class Producer:
         for intent in intents:
             if intent.action == "describe":
                 continue
-            packets.extend(
-                await self._build_packets_for_intent(
+            try:
+                built = await self._build_packets_for_intent(
                     intent, emit, emit_status, command_id, scene, utterance=utterance
                 )
-            )
+            except AmbiguousTarget as ask:
+                # This entry point returns packets to a caller with nowhere to
+                # put a question, so the best guess is still better than
+                # dropping the direction — but say which way it went.
+                await emit(
+                    self.name,
+                    f"'{ask.phrase}' could be any of {', '.join(ask.options)} — taking {ask.options[0]}",
+                    "warn",
+                )
+                built = await self._build_packets_for_intent(
+                    intent.model_copy(update={"target": ask.options[0], "targets": [ask.options[0]]}),
+                    emit, emit_status, command_id, scene, utterance=utterance,
+                )
+            packets.extend(built)
         return packets
 
     async def _maybe_emit_supersede_cancel(
@@ -718,6 +878,7 @@ class Producer:
         emit_cancel: EmitCancel = _noop_cancel,
         emit_suggest: EmitSuggest = _noop_suggest,
         utterance: str | None = None,
+        emit_question: EmitQuestion = _noop_question,
     ) -> list[CommandPacket]:
         packets: list[CommandPacket] = []
         for intent in intents:
@@ -727,24 +888,18 @@ class Producer:
             if intent.action == "suggest":
                 await self._emit_suggest(intent, emit_suggest)
                 continue
-            voiced = intent_with_radio(intent)
-            await self._maybe_emit_freeze_cancel(voiced, command_id, emit_cancel)
-            built = await self._build_packets_for_intent(
-                voiced, emit_log, emit_status, command_id, scene, utterance=utterance
-            )
-            for packet in built:
-                packet.commandId = command_id
-            packets.extend(built)
-            await self._stream_packets_staged(
-                built,
-                command_id,
-                emit_log,
-                emit_packet,
-                emit_status,
-                note=voiced.say,
-                emit_cancel=emit_cancel,
-                scene=scene,
-                intent=voiced,
+            packets.extend(
+                await self._emit_staged_intent(
+                    intent,
+                    command_id,
+                    emit_log,
+                    emit_packet,
+                    emit_status,
+                    emit_cancel,
+                    scene,
+                    utterance=utterance,
+                    emit_question=emit_question,
+                )
             )
         return packets
 
@@ -761,12 +916,27 @@ class Producer:
         refinement: bool = False,
         prior_command_id: str | None = None,
         utterance: str | None = None,
+        emit_question: EmitQuestion = _noop_question,
     ) -> list[CommandPacket]:
         voiced = intent_with_radio(intent)
         await self._maybe_emit_freeze_cancel(voiced, command_id, emit_cancel)
-        built = await self._build_packets_for_intent(
-            voiced, emit_log, emit_status, command_id, scene, utterance=utterance
-        )
+        try:
+            built = await self._build_packets_for_intent(
+                voiced, emit_log, emit_status, command_id, scene, utterance=utterance
+            )
+        except AmbiguousTarget as ask:
+            await self._emit_clarify(
+                ask.as_intent(),
+                utterance or voiced.target or "",
+                command_id,
+                emit_log,
+                emit_question,
+                emit_cancel,
+                emit_packet,
+                emit_status,
+                scene,
+            )
+            return []
         for packet in built:
             packet.commandId = command_id
             if refinement:
@@ -831,6 +1001,7 @@ class Producer:
         scene: SceneState | None,
         utterance: str | None = None,
         spawned_here: list[Intent] | None = None,
+        emit_question: EmitQuestion = _noop_question,
     ) -> list[CommandPacket]:
         if intent.action in ("describe", "suggest", "clarify"):
             return []
@@ -857,6 +1028,7 @@ class Producer:
             scene,
             refinement=False,
             utterance=utterance,
+            emit_question=emit_question,
         )
 
     async def _direct_multi_clause(
@@ -1042,6 +1214,7 @@ class Producer:
                 scene,
                 refinement=False,
                 utterance=text,
+                emit_question=emit_question,
             )
             all_packets.extend(built)
             grammar_emitted.append(voiced)
@@ -1084,6 +1257,7 @@ class Producer:
                     scene,
                     utterance=text,
                     spawned_here=spawned_here,
+                    emit_question=emit_question,
                 )
                 if built:
                     llm_directed_count += 1
@@ -1140,6 +1314,7 @@ class Producer:
                     scene,
                     emit_cancel,
                     emit_suggest,
+                    emit_question=emit_question,
                 )
                 all_packets.extend(rescued)
                 if describe_only and not rescued:
@@ -1228,7 +1403,7 @@ class Producer:
             if intents:
                 packets = await self._stream_intents(
                     intents, command_id, emit_log, emit_packet, emit_status, scene, emit_cancel, emit_suggest,
-                    utterance=text,
+                    utterance=text, emit_question=emit_question,
                 )
                 session_context.record(text, intents)
                 log.debug("keyless: %d grammar intent(s)", len(intents))
