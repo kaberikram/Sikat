@@ -20,12 +20,20 @@
  * changes size. You aim with that image; it must not jump when you start
  * talking.
  *
- * The viewfinder is a *sibling* mesh, not a child, so the ambient fade below can
- * take the chrome away without taking the shot with it.
+ * The card itself is always up — it is the camcorder's chrome, not a caption,
+ * and a screen surround that vanished between takes would leave the shot
+ * floating. What the ambient policy still governs is the **body block**: in
+ * ambient mode the states the world already answers get no words here, so an
+ * untouched card is just a header and the shot.
  *
- * In ambient mode the card fades to nothing and **stops repainting entirely**
- * for the states the world covers. One canvas + one CanvasTexture for the
- * card's lifetime; repaints draw in place (no per-update canvas/GPU realloc).
+ * The preview well is *cut out* of the texture rather than painted. The screen
+ * mesh is opaque and this card is transparent, and three.js draws every opaque
+ * object before any transparent one — so no `renderOrder` can put this card
+ * behind the shot, and anything painted in the well lands on top of it.
+ *
+ * One canvas + one CanvasTexture for the card's lifetime; repaints draw in
+ * place (no per-update canvas/GPU realloc), and an idle card repaints only when
+ * the line it would show changes.
  */
 import * as THREE from 'three'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
@@ -209,16 +217,13 @@ const LEVEL_BARS = 24
 
 /**
  * State changes ease the card itself rather than cutting the texture: a quick
- * dip in opacity and scale, then a settle. The slate is the surface you look at
+ * dip in opacity and scale, then a settle. The card is the surface you look at
  * most in the headset, and it was the only one that never moved.
  */
 const STATE_SETTLE_MS = 190
 /** How far the card recedes at the moment of the change. */
 const STATE_DIP_SCALE = 0.965
 const STATE_DIP_OPACITY = 0.55
-/** Fade rate in/out of ambient hiding — slower out than in, so it never snaps away. */
-const VISIBILITY_DAMP_IN = 10
-const VISIBILITY_DAMP_OUT = 5
 
 function wrapLines(
   ctx: CanvasRenderingContext2D,
@@ -381,11 +386,29 @@ function drawProgressBlock(
   }
 }
 
-function drawPreviewWell(ctx: CanvasRenderingContext2D, top: number): void {
-  ctx.fillStyle = XR_UI.wash
+/**
+ * Cut the viewfinder's window out of the card rather than painting a well on it.
+ *
+ * The screen mesh is opaque and this card is transparent, and three.js draws the
+ * whole opaque list before the whole transparent list — `renderOrder` sorts only
+ * *within* a list, so no ordering can put this card behind the screen. Painting
+ * anything here, however faint, lands on top of the shot. Erasing to real
+ * transparency is the one approach that doesn't depend on draw order at all.
+ */
+function cutPreviewWindow(ctx: CanvasRenderingContext2D, top: number): void {
+  ctx.save()
+  ctx.globalCompositeOperation = 'destination-out'
   ctx.beginPath()
   ctx.roundRect(CONTENT_X, top, CONTENT_W, PREVIEW_H_PX, BLOCK_RADIUS)
   ctx.fill()
+  ctx.restore()
+
+  // Hairline back over the cut so the window still reads as an inset well.
+  ctx.strokeStyle = 'rgba(23, 23, 26, 0.10)'
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, PREVIEW_H_PX, BLOCK_RADIUS)
+  ctx.stroke()
 }
 
 export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
@@ -409,15 +432,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   let lastAnimatedState: SlateState | null = null
   /** True once the re-form ease has landed, so it stops writing every frame. */
   let settled = true
-  /** Ambient mode is the default in XR — the world answers, this card doesn't. */
-  let ambient = true
   /**
-   * Eased 0..1 presence of the card itself, independent of the state settle.
-   * Starts hidden so the card fades *in* when it has something to say, rather
-   * than flashing on at session start and easing back out.
+   * Ambient mode is the default in XR — the world answers, so the card holds
+   * back the *body block* for anything the set already carries. It no longer
+   * gates the card itself: the chrome around the shot is the camcorder, not a
+   * caption, and it stays up.
    */
-  let visibility = 0
-  let lastFrameAt = 0
+  let ambient = true
   /** Step-by-step of a running plan, when the crew is sending one. */
   let progress: SlateProgress | null = null
 
@@ -440,37 +461,10 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   }
 
   /**
-   * Does the world already answer this? Anything that reaches `replying`,
-   * `misheard` or `offline` got here because the ambient channel decided words
-   * were needed, so those always show. Listening/sending stay on this card
-   * (live STT while holding A). Idle only hides when it has nothing sticky
-   * to say.
-   */
-  function worldCarries(st: SlateState, nowMs: number): boolean {
-    if (!ambient) return false
-    if (
-      st === 'offline' ||
-      st === 'replying' ||
-      st === 'misheard' ||
-      st === 'listening' ||
-      st === 'sending'
-    ) return false
-    // "Something is happening" is the room's job — the stage ring says it
-    // better than a word could. *Which* step, of how many, is not something a
-    // pulsing ring can carry, so a plan that reports its steps earns the card
-    // by the same test everything else here is held to.
-    if (st === 'thinking') return progress === null
-    // The idle ladder decides what an idle card would say; if it would say
-    // anything at all, the card has to be on screen to say it. Checking a
-    // hand-listed subset here is how the SET DAY shot list went invisible in
-    // XR: the hint was in the ladder but not in this gate, so the card faded
-    // out and stopped repainting, and the cue lines were never shown.
-    return idleLine(nowMs) === null
-  }
-
-  /**
    * What an idle card would show, or null when it genuinely has nothing to say.
-   * Single source of truth for both the visibility gate and the paint.
+   * Single source of truth for the idle body — everything the card might
+   * volunteer unprompted goes through this ladder, so nothing can be hidden by
+   * being left off a hand-listed subset somewhere else.
    */
   function idleLine(nowMs: number): string | null {
     const line =
@@ -496,7 +490,12 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
    */
   function bodyFor(ctx: CanvasRenderingContext2D, st: SlateState, nowMs: number): SlateBody {
     if (st === 'thinking') {
-      return progress ? { kind: 'progress', progress } : null
+      // "Something is happening" is the room's job — the stage ring says it
+      // better than a word could, so in ambient mode a bare thinking state gets
+      // no block at all. *Which* step, of how many, is not something a pulsing
+      // ring can carry, so a plan that reports its steps earns one.
+      if (progress) return { kind: 'progress', progress }
+      if (ambient) return null
     }
 
     let line = ''
@@ -504,7 +503,9 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     if (st === 'listening') {
       line = interim.trim() || '…'
       ghost = !interim.trim()
-    } else if (st === 'sending') {
+    } else if (st === 'sending' || st === 'thinking') {
+      // Only reachable for `thinking` with ambient off — the always-on card
+      // that debugging and desktop-style use want.
       line = bodyText
       ghost = true
     } else if (st === 'misheard') {
@@ -512,8 +513,8 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     } else if (st === 'replying') {
       line = bodyText
     } else {
-      // Idle priority lives in idleLine so the visibility gate and the paint
-      // can never disagree about whether there is something to say.
+      // Idle priority lives in idleLine so every caller agrees about whether
+      // there is something to say.
       line = idleLine(nowMs) ?? ''
       ghost = !bodyText && !notice
     }
@@ -557,7 +558,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       }
 
       y += BLOCK_GAP
-      drawPreviewWell(ctx, y)
+      cutPreviewWindow(ctx, y)
     })
   }
 
@@ -578,23 +579,22 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       if (!settled) {
         settled = true
         mesh.scale.setScalar(1)
+        mat.opacity = 1
       }
-      mat.opacity = visibility
       return
     }
     settled = false
     const e = 1 - (1 - Math.max(t, 0)) ** 3
     mesh.scale.setScalar(STATE_DIP_SCALE + (1 - STATE_DIP_SCALE) * e)
-    mat.opacity = (STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e) * visibility
+    mat.opacity = STATE_DIP_OPACITY + (1 - STATE_DIP_OPACITY) * e
   }
 
   /**
    * Drop held text once its hold has run out. Keyed on the hold itself rather
    * than on the state: `setLastSent` writes body text while leaving the state
    * `idle`, so a state-keyed expiry never fired for it and lines like
-   * "take 3 saved to the timeline" stayed on the card for the rest of the
-   * session — pinning it visible, since non-empty body text also blocks the
-   * ambient fade. Returns true when something was actually cleared.
+   * "take 3 saved to the timeline" stayed in the body block for the rest of
+   * the session. Returns true when something was actually cleared.
    */
   function expireHold(now: number): boolean {
     if (!holdUntil || now <= holdUntil) return false
@@ -603,18 +603,6 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     mishearBody = ''
     holdUntil = 0
     return true
-  }
-
-  /** Ease the card's presence toward hidden/shown; returns true while it's on screen. */
-  function applyVisibility(now: number): boolean {
-    const delta = lastFrameAt ? Math.min((now - lastFrameAt) / 1000, 0.1) : 0
-    lastFrameAt = now
-    const want = worldCarries(effectiveState(), now) ? 0 : 1
-    const rate = want > visibility ? VISIBILITY_DAMP_IN : VISIBILITY_DAMP_OUT
-    visibility += (want - visibility) * Math.min(1, delta * rate)
-    if (visibility < 0.004) visibility = 0
-    mesh.visible = visibility > 0
-    return mesh.visible
   }
 
   return {
@@ -704,17 +692,7 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
         lastAnimatedState = st
         stateChangedAt = now
       }
-      const onScreen = applyVisibility(now)
       applyStateSettle(now)
-
-      // Fully faded out — no canvas work, no texture upload. This is the whole
-      // point of ambient mode on the XR frame path.
-      if (!onScreen) {
-        // Held text still has to expire off-screen, or it would be sitting
-        // there waiting the next time the card comes back.
-        expireHold(now)
-        return
-      }
 
       if (st === 'thinking' || st === 'listening' || st === 'sending') {
         // Phase advances on wall time so the pulse rate doesn't ride the
