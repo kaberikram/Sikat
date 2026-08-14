@@ -31,7 +31,7 @@ import {
   resetAmbientSense,
   updateAmbientSense,
 } from './ambient-sense'
-import { createDirectorSlate, SLATE_H, SLATE_W } from './director-slate'
+import { createDirectorSlate, PREVIEW_H, PREVIEW_W, PREVIEW_Y } from './director-slate'
 import { setRoomStillness } from './room-response'
 import { playStageLockPulse, startEntrySequence } from './entry-sequence'
 import { doublePulse, pulse } from './haptics'
@@ -69,10 +69,10 @@ const WORKING_SAMPLE_INTERVAL_MS = 4000
 const LENS_FORWARD_M = 0.05
 
 /**
- * The grip panel — viewfinder above, director card below, one column tilted
- * back toward the eyes.
+ * The grip panel — one director card out past the controller nose, tilted back
+ * toward the eyes, with the viewfinder seated in its preview well.
  *
- * The tilt pivots about the column's *centre*, which is what makes
+ * The tilt pivots about the card's *centre*, which is what makes
  * `PANEL_FORWARD_M` the real distance from the grip. It used to pivot about the
  * viewfinder with the card parented 9cm beneath it, so the rotation swung the
  * card back toward the hand: pushing the screen forward left the card behind,
@@ -83,27 +83,17 @@ const LENS_FORWARD_M = 0.05
 const PANEL_FORWARD_M = 0.12
 /**
  * High enough that the tilt can't drop the card back onto the hand. Rotating a
- * ~26cm column swings its bottom edge toward the grip by
- * `halfHeight × sin(tilt)` ≈ 4.9cm and down by `halfHeight × (1 − cos(tilt))`,
- * so at 0.09 the card's lower edge sat 3cm *below* the grip origin — still over
- * the controller. This clears it.
+ * card this tall swings its bottom edge toward the grip by
+ * `halfHeight × sin(tilt)` and down by `halfHeight × (1 − cos(tilt))` — at 0.09
+ * the lower edge sat 3cm *below* the grip origin, still over the controller.
+ * This clears it, with the card at its tallest (executing); every shorter state
+ * clears by more, since the card grows upward from a fixed bottom.
  */
 const PANEL_UP_M = 0.13
 const PANEL_TILT_DEG = 22
 
-/** Both panels share a width, so the column reads as one surface. */
-const PANEL_W = SLATE_W
-/** 16:9, matching the 640×360 viewfinder target in animate-loop — any other ratio distorts the shot. */
-const VIEWFINDER_H = (PANEL_W * 9) / 16
-/** Seam between viewfinder and card. */
-const PANEL_GAP_M = 0.01
-
-const COLUMN_H = VIEWFINDER_H + PANEL_GAP_M + SLATE_H
-const VIEWFINDER_Y = (COLUMN_H - VIEWFINDER_H) / 2
-const SLATE_Y = -(COLUMN_H - SLATE_H) / 2
-
 /** Take badge, proportioned against the frame it overlays rather than fixed. */
-const BADGE_W = PANEL_W * 0.71
+const BADGE_W = PREVIEW_W * 0.71
 const BADGE_H = BADGE_W * 0.22
 const BADGE_INSET_M = 0.006
 
@@ -159,22 +149,25 @@ export function createCamcorderRig(
   panel.rotation.set((-PANEL_TILT_DEG * Math.PI) / 180, 0, 0)
   group.add(panel)
 
+  // The card first, so the screen composites over its preview well.
+  const directorSlate = createDirectorSlate(panel)
+
   // Rear LCD facing the shooter (+Z) — plane default faces +Z, leave that.
+  // A sibling of the card rather than a child: the card's ambient fade takes
+  // the chrome away without taking the shot with it.
   const screenMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(PANEL_W, VIEWFINDER_H),
+    new THREE.PlaneGeometry(PREVIEW_W, PREVIEW_H),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       side: THREE.DoubleSide,
-      depthTest: true,
+      // No depth test, matching the card. Half a panel sliced by a prop the
+      // director leaned into reads as broken, not as depth.
+      depthTest: false,
     })
   )
-  screenMesh.position.set(0, VIEWFINDER_Y, 0)
-  screenMesh.renderOrder = 10
+  screenMesh.position.set(0, PREVIEW_Y, 0.0005)
+  screenMesh.renderOrder = 14
   panel.add(screenMesh)
-
-  // Sibling of the screen, not a child of it: the column has one pivot.
-  const directorSlate = createDirectorSlate(panel)
-  directorSlate.group.position.set(0, SLATE_Y, 0)
   // The world answers first; the slate is what's left when it can't.
   directorSlate.setAmbient(true)
   bindAmbientChannel(directorSlate)
@@ -214,6 +207,25 @@ export function createCamcorderRig(
       thinkingLine = null
       respond({ kind: 'said', text: msg.message })
     }
+  })
+  // Which step, of how many — the one thing about a working set that the stage
+  // ring genuinely cannot say. The card shows it; without this it only ever
+  // knew a plan was running, not how far along.
+  const offSlatePlan = socket.onPlanUpdate((msg) => {
+    if (!useEditorStore.getState().xrActive) return
+    if (msg.status === 'done') {
+      directorSlate.setProgress(null)
+      return
+    }
+    const total = msg.stepsTotal ?? 0
+    const index = msg.stepIndex ?? 0
+    directorSlate.setProgress({
+      label: msg.say?.trim() || 'working the take',
+      caption: msg.stepLabel?.trim() || msg.status.replace(/_/g, ' '),
+      // No total yet means the plan is still being written — the track shimmers
+      // rather than inventing a denominator.
+      ratio: total > 0 ? Math.min(1, index / total) : null,
+    })
   })
   const offSlatePacket = socket.onPacket((packet) => {
     if (!useEditorStore.getState().xrActive) return
@@ -497,8 +509,10 @@ export function createCamcorderRig(
         })
       )
       // Tucked inside the frame's top edge rather than floating over the shot.
-      takeLabel.position.set(0, (VIEWFINDER_H - BADGE_H) / 2 - BADGE_INSET_M, 0.001)
-      takeLabel.renderOrder = 11
+      takeLabel.position.set(0, (PREVIEW_H - BADGE_H) / 2 - BADGE_INSET_M, 0.001)
+      // Above the screen's own order, or the LCD paints over it — neither
+      // depth-tests, so the later draw simply wins.
+      takeLabel.renderOrder = 15
       screenMesh.add(takeLabel)
       setEditorLayer(takeLabel)
     } else if (!isRolling && takeLabel) {
@@ -633,6 +647,7 @@ export function createCamcorderRig(
     dispose: () => {
       offSlateLog()
       offSlatePacket()
+      offSlatePlan()
       registerStagePlacer(null)
       stopXrCoach()
       resetAmbientChannel()

@@ -1,40 +1,116 @@
 /**
- * DIRECTOR_LINK slate under the grip viewfinder — the in-headset exception
- * surface.
+ * DIRECTOR_LINK card — the in-headset exception surface, and the frame the
+ * viewfinder sits in.
  *
  * This used to be the system's voice: every acknowledgement, every reply, the
  * mic meter and the thinking dot all landed here. They now land in the world
- * (see `ambient-channel.ts`), and the slate carries only what the world cannot
+ * (see `ambient-channel.ts`), and the card carries only what the world cannot
  * say — a blocked mic, a dropped link, a missing controller, the first-run
- * coach lines, and the crew's own words when the scene didn't already answer.
+ * coach lines, the step-by-step of a running plan, and the crew's own words
+ * when the scene didn't already answer.
+ *
+ * Layout follows the Figma `ai-thinking-state` node: a header row, an optional
+ * body block, and the viewfinder's preview well, stacked with a fixed padding
+ * and gap. The card's *height* is whatever those blocks add up to, so an idle
+ * card is short rather than a tall card with a hole in it.
+ *
+ * The plane is sized for the tallest state and the card is drawn bottom-anchored
+ * inside it, growing upward. That keeps the preview well — and therefore the
+ * viewfinder mesh the rig parks on it — perfectly still while the chrome above
+ * changes size. You aim with that image; it must not jump when you start
+ * talking.
+ *
+ * The viewfinder is a *sibling* mesh, not a child, so the ambient fade below can
+ * take the chrome away without taking the shot with it.
  *
  * In ambient mode the card fades to nothing and **stops repainting entirely**
- * for the states the world covers (thinking). Listening and sending stay on
- * this card so hold-A live STT is readable at arm's length. Repainting a
- * 896×480 canvas every 40ms sat on the XR frame path — idle still skips it.
- *
- * One canvas + one CanvasTexture for the slate's lifetime; repaints draw in
- * place (no per-update canvas/GPU realloc).
+ * for the states the world covers. One canvas + one CanvasTexture for the
+ * card's lifetime; repaints draw in place (no per-update canvas/GPU realloc).
  */
 import * as THREE from 'three'
 import { currentDemoHint, isDemoActive } from '../../director/demo-shoot'
 import { useEditorStore } from '../../store'
 import { setEditorLayer } from '../infrastructure'
 import { currentCoachHint } from './xr-coach'
-import { drawGlassCard, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
+import { drawGlassPanel, drawProgressTrack, makeLiveCanvasTexture, XR_UI } from './xr-ui-chrome'
+
+// ---- Figma metrics (node 49:4), in design units -------------------------------
+
+const CARD_W_U = 264
+const PAD_U = 14
+const HEADER_H_U = 18
+const BLOCK_GAP_U = 11
+const CONTENT_W_U = CARD_W_U - PAD_U * 2
+/**
+ * The preview is 236×148 in the Figma (1.59:1), but the render target it shows
+ * is 640×360 and that ratio is what actually gets recorded — so the well is
+ * 16:9 and everything below it shifts up accordingly.
+ */
+const PREVIEW_H_U = (CONTENT_W_U * 9) / 16
+const BUBBLE_PAD_U = 10
+const BUBBLE_LINE_U = 16
+/** Processing block: title row, track, caption — fixed height per the design. */
+const PROCESSING_H_U = 68
+/** Live level meter, tucked under the interim text while holding A. */
+const BARS_H_U = 12
+/** Transparent margin around the card so its soft shadow isn't clipped. */
+const BLEED_U = 8
 
 /**
- * Card size in metres. The rig stacks the viewfinder above this and needs both
- * numbers to lay the column out, so they are exported rather than private.
- *
- * Note the plane is 2.7:1 while the texture below is 1.9:1 — glyphs render
- * wider than they are drawn. Long-standing and deliberately left alone; keep
- * any resize uniform so the look doesn't shift.
+ * Tallest body block, and therefore the card's maximum height. A three-line
+ * bubble (10 + 3×16 + 10) and the processing block are both 68 — that
+ * coincidence is what makes one fixed plane enough for every state.
  */
-export const SLATE_W = 0.27
-export const SLATE_H = 0.099
-const TEX_W = 896
-const TEX_H = 480
+const MAX_BODY_H_U = PROCESSING_H_U
+const CARD_MAX_H_U =
+  PAD_U + HEADER_H_U + BLOCK_GAP_U + MAX_BODY_H_U + BLOCK_GAP_U + PREVIEW_H_U + PAD_U
+
+// ---- world size, in metres ----------------------------------------------------
+
+/** Visible card width. The plane is wider by the bleed on each side. */
+const CARD_W = 0.27
+const M_PER_U = CARD_W / CARD_W_U
+
+/** Plane size — card plus transparent bleed. */
+export const SLATE_W = (CARD_W_U + BLEED_U * 2) * M_PER_U
+export const SLATE_H = (CARD_MAX_H_U + BLEED_U * 2) * M_PER_U
+
+/** Preview well size — what the rig makes the viewfinder mesh. */
+export const PREVIEW_W = CONTENT_W_U * M_PER_U
+export const PREVIEW_H = PREVIEW_H_U * M_PER_U
+/**
+ * Preview centre relative to the plane's centre. The bleed is symmetric so it
+ * cancels; this is purely how far the well sits below the middle of the card.
+ */
+export const PREVIEW_Y = (PAD_U + PREVIEW_H_U / 2 - CARD_MAX_H_U / 2) * M_PER_U
+
+// ---- canvas, at 4px per design unit -------------------------------------------
+
+const PX = 4
+const TEX_W = (CARD_W_U + BLEED_U * 2) * PX
+const TEX_H = (CARD_MAX_H_U + BLEED_U * 2) * PX
+const PAD = PAD_U * PX
+const HEADER_H = HEADER_H_U * PX
+const BLOCK_GAP = BLOCK_GAP_U * PX
+const CONTENT_W = CONTENT_W_U * PX
+const PREVIEW_H_PX = PREVIEW_H_U * PX
+const BUBBLE_PAD = BUBBLE_PAD_U * PX
+const BUBBLE_LINE = BUBBLE_LINE_U * PX
+const PROCESSING_H = PROCESSING_H_U * PX
+const BARS_H = BARS_H_U * PX
+const BLEED = BLEED_U * PX
+const CARD_W_PX = CARD_W_U * PX
+const CONTENT_X = BLEED + PAD
+/** Height of a card with no body block — header, gap, preview, padding. */
+const CARD_BASE_H = PAD + HEADER_H + BLOCK_GAP + PREVIEW_H_PX + PAD
+
+const CARD_RADIUS = 18 * PX
+const BLOCK_RADIUS = 8 * PX
+
+const FONT_LABEL = '700 52px "Nunito", ui-rounded, system-ui, sans-serif'
+const FONT_HINT = '600 40px "Nunito", ui-rounded, system-ui, sans-serif'
+const FONT_BODY = '600 48px "Nunito", ui-rounded, system-ui, sans-serif'
+const FONT_CAPTION = '500 38px "JetBrains Mono", ui-monospace, monospace'
 
 export type SlateState =
   | 'idle'
@@ -44,6 +120,15 @@ export type SlateState =
   | 'replying'
   | 'misheard'
   | 'offline'
+
+export interface SlateProgress {
+  /** What the crew is doing — the plan's own line. */
+  label: string
+  /** The step underway, shown small beneath the track. */
+  caption: string
+  /** 0..1 when the plan's length is known, null while it's still being written. */
+  ratio: number | null
+}
 
 export interface DirectorSlate {
   group: THREE.Group
@@ -61,6 +146,12 @@ export interface DirectorSlate {
   setNotice: (text: string | null) => void
   setLevel: (level: number) => void
   /**
+   * Step-by-step of a running plan. `ratio` null means the work is real but its
+   * length isn't known yet — the track shimmers rather than claiming a fraction.
+   * Null clears it.
+   */
+  setProgress: (progress: SlateProgress | null) => void
+  /**
    * Ambient mode (the default in XR): fade out and stop repainting for every
    * state the world already carries. Turn it off to get the old always-on card.
    */
@@ -74,7 +165,9 @@ const STATE_ACCENT: Record<SlateState, string> = {
   idle: XR_UI.status,
   listening: XR_UI.accent,
   sending: XR_UI.accent,
-  thinking: XR_UI.accent,
+  // Amber while executing, per the design's third state — a working set reads
+  // differently at a glance from one that is only listening.
+  thinking: XR_UI.sunDeep,
   replying: XR_UI.status,
   misheard: XR_UI.rec,
   offline: XR_UI.rec,
@@ -84,10 +177,20 @@ const STATE_LABEL: Record<SlateState, string> = {
   idle: 'DIRECTOR',
   listening: 'LISTENING',
   sending: 'HEARD',
-  thinking: 'THINKING',
+  thinking: 'EXECUTING',
   replying: 'DIRECTOR',
   misheard: 'DIRECTOR',
   offline: 'OFFLINE',
+}
+
+const STATE_HINT: Record<SlateState, string> = {
+  idle: 'HOLD A · TALK',
+  listening: 'RELEASE TO SEND',
+  sending: '',
+  thinking: 'WORKING…',
+  replying: 'HOLD A · TALK',
+  misheard: 'HOLD A · TALK',
+  offline: '',
 }
 
 const DEFAULT_MISHEARD = 'didn’t catch that — name an object or a move'
@@ -144,6 +247,147 @@ function wrapLines(
   return rows
 }
 
+/**
+ * What sits between the header and the preview, if anything.
+ *
+ * `null` is the idle card the design shows: header, then the shot. Everything
+ * else is either words or the progress of a running plan.
+ */
+type SlateBody =
+  | { kind: 'text'; lines: string[]; ghost: boolean; bars: boolean }
+  | { kind: 'progress'; progress: SlateProgress }
+  | null
+
+/** Listening caps at two lines to leave room for the level meter; see BARS_H_U. */
+function bodyLineCap(st: SlateState): number {
+  return st === 'listening' ? 2 : 3
+}
+
+function bodyHeight(body: SlateBody): number {
+  if (body === null) return 0
+  if (body.kind === 'progress') return PROCESSING_H
+  return BUBBLE_PAD * 2 + body.lines.length * BUBBLE_LINE + (body.bars ? BARS_H : 0)
+}
+
+function drawHeader(
+  ctx: CanvasRenderingContext2D,
+  st: SlateState,
+  top: number,
+  pulsePhase: number
+): void {
+  const midY = top + HEADER_H / 2
+  ctx.fillStyle = STATE_ACCENT[st]
+  ctx.beginPath()
+  if (st === 'thinking' || st === 'sending') {
+    // Calm breathing dot — the one thing on the card that says "still going".
+    const r = 14 + Math.sin(pulsePhase) * 4
+    ctx.arc(CONTENT_X + 14, midY, Math.max(r, 7), 0, Math.PI * 2)
+  } else {
+    ctx.arc(CONTENT_X + 14, midY, 14, 0, Math.PI * 2)
+  }
+  ctx.fill()
+
+  ctx.fillStyle = XR_UI.ink
+  ctx.font = FONT_LABEL
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(STATE_LABEL[st], CONTENT_X + 52, midY + 2)
+
+  const hint = STATE_HINT[st]
+  if (hint) {
+    ctx.fillStyle = XR_UI.faint
+    ctx.font = FONT_HINT
+    ctx.textAlign = 'right'
+    ctx.fillText(hint, CONTENT_X + CONTENT_W, midY + 2)
+  }
+}
+
+function drawTextBlock(
+  ctx: CanvasRenderingContext2D,
+  body: Extract<SlateBody, { kind: 'text' }>,
+  top: number,
+  height: number,
+  smoothedLevel: number,
+  pulsePhase: number
+): void {
+  ctx.fillStyle = XR_UI.wash
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, height, BLOCK_RADIUS)
+  ctx.fill()
+
+  ctx.fillStyle = body.ghost ? XR_UI.inkSoft : XR_UI.ink
+  ctx.font = FONT_BODY
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  let y = top + BUBBLE_PAD + BUBBLE_LINE / 2
+  for (const line of body.lines) {
+    ctx.fillText(line, CONTENT_X + BUBBLE_PAD, y)
+    y += BUBBLE_LINE
+  }
+
+  if (!body.bars) return
+  // You can see it hear you: centre-weighted bars off the smoothed RMS.
+  const barsW = CONTENT_W - BUBBLE_PAD * 2
+  const barW = 8
+  const gap = (barsW - LEVEL_BARS * barW) / (LEVEL_BARS - 1)
+  const baseY = top + height - BUBBLE_PAD
+  for (let i = 0; i < LEVEL_BARS; i++) {
+    const centerBias = 1 - Math.abs(i - (LEVEL_BARS - 1) / 2) / (LEVEL_BARS / 2)
+    const shimmer = 0.65 + 0.35 * Math.sin(pulsePhase * 2 + i * 1.7)
+    const amp = Math.min(smoothedLevel * 6, 1) * centerBias * shimmer
+    const bh = 6 + amp * (BARS_H - 10)
+    ctx.fillStyle = amp > 0.08 ? XR_UI.accent : 'rgba(169, 169, 179, 0.35)'
+    ctx.beginPath()
+    ctx.roundRect(CONTENT_X + BUBBLE_PAD + i * (barW + gap), baseY - bh, barW, bh, barW / 2)
+    ctx.fill()
+  }
+}
+
+function drawProgressBlock(
+  ctx: CanvasRenderingContext2D,
+  progress: SlateProgress,
+  top: number,
+  pulsePhase: number
+): void {
+  ctx.fillStyle = XR_UI.wash
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, PROCESSING_H, BLOCK_RADIUS)
+  ctx.fill()
+
+  const innerX = CONTENT_X + BUBBLE_PAD
+  const innerW = CONTENT_W - BUBBLE_PAD * 2
+
+  ctx.fillStyle = XR_UI.ink
+  ctx.font = FONT_BODY
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  const titleY = top + 10 * PX + 8 * PX
+  ctx.fillText(progress.label, innerX, titleY)
+
+  if (progress.ratio !== null) {
+    ctx.fillStyle = XR_UI.sunDeep
+    ctx.font = FONT_HINT
+    ctx.textAlign = 'right'
+    ctx.fillText(`${Math.round(progress.ratio * 100)}%`, innerX + innerW, titleY)
+  }
+
+  drawProgressTrack(ctx, innerX, top + 34 * PX, innerW, 4 * PX, progress.ratio, pulsePhase)
+
+  if (progress.caption) {
+    ctx.fillStyle = XR_UI.inkSoft
+    ctx.font = FONT_CAPTION
+    ctx.textAlign = 'left'
+    ctx.fillText(progress.caption, innerX, top + 52 * PX)
+  }
+}
+
+function drawPreviewWell(ctx: CanvasRenderingContext2D, top: number): void {
+  ctx.fillStyle = XR_UI.wash
+  ctx.beginPath()
+  ctx.roundRect(CONTENT_X, top, CONTENT_W, PREVIEW_H_PX, BLOCK_RADIUS)
+  ctx.fill()
+}
+
 export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
   // Placement is the rig's call — it owns the column the card sits in.
   const group = new THREE.Group()
@@ -174,6 +418,8 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
    */
   let visibility = 0
   let lastFrameAt = 0
+  /** Step-by-step of a running plan, when the crew is sending one. */
+  let progress: SlateProgress | null = null
 
   const live = makeLiveCanvasTexture(TEX_W, TEX_H)
   const mat = new THREE.MeshBasicMaterial({
@@ -197,8 +443,8 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
    * Does the world already answer this? Anything that reaches `replying`,
    * `misheard` or `offline` got here because the ambient channel decided words
    * were needed, so those always show. Listening/sending stay on this card
-   * (live STT while holding A). Thinking is still the room's job. Idle only
-   * hides when it has nothing sticky to say.
+   * (live STT while holding A). Idle only hides when it has nothing sticky
+   * to say.
    */
   function worldCarries(st: SlateState, nowMs: number): boolean {
     if (!ambient) return false
@@ -209,7 +455,11 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
       st === 'listening' ||
       st === 'sending'
     ) return false
-    if (st === 'thinking') return true
+    // "Something is happening" is the room's job — the stage ring says it
+    // better than a word could. *Which* step, of how many, is not something a
+    // pulsing ring can carry, so a plan that reports its steps earns the card
+    // by the same test everything else here is held to.
+    if (st === 'thinking') return progress === null
     // The idle ladder decides what an idle card would say; if it would say
     // anything at all, the card has to be on screen to say it. Checking a
     // hand-listed subset here is how the SET DAY shot list went invisible in
@@ -238,107 +488,76 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
     return null
   }
 
+  /**
+   * The block between the header and the preview, if this state has one.
+   *
+   * Takes a measuring context because the line count decides the block's height,
+   * and the height decides where the card's top edge lands.
+   */
+  function bodyFor(ctx: CanvasRenderingContext2D, st: SlateState, nowMs: number): SlateBody {
+    if (st === 'thinking') {
+      return progress ? { kind: 'progress', progress } : null
+    }
+
+    let line = ''
+    let ghost = false
+    if (st === 'listening') {
+      line = interim.trim() || '…'
+      ghost = !interim.trim()
+    } else if (st === 'sending') {
+      line = bodyText
+      ghost = true
+    } else if (st === 'misheard') {
+      line = mishearBody || DEFAULT_MISHEARD
+    } else if (st === 'replying') {
+      line = bodyText
+    } else {
+      // Idle priority lives in idleLine so the visibility gate and the paint
+      // can never disagree about whether there is something to say.
+      line = idleLine(nowMs) ?? ''
+      ghost = !bodyText && !notice
+    }
+
+    const bars = st === 'listening'
+    if (!line) return bars ? { kind: 'text', lines: [], ghost, bars } : null
+
+    ctx.font = FONT_BODY
+    const lines = wrapLines(ctx, line, CONTENT_W - BUBBLE_PAD * 2, bodyLineCap(st))
+    return { kind: 'text', lines, ghost, bars }
+  }
+
   function paint(nowMs: number): void {
     lastPaint = nowMs
-    live.repaint((ctx, w, h) => {
+    live.repaint((ctx, _w, h) => {
       const st = effectiveState()
-      drawGlassCard(ctx, w, h, { pad: 18, radius: 44 })
+      const body = bodyFor(ctx, st, nowMs)
+      const bodyH = bodyHeight(body)
+      const cardH = CARD_BASE_H + (body ? BLOCK_GAP + bodyH : 0)
+      // Bottom-anchored: the card grows upward so the preview well — and the
+      // viewfinder parked on it — never move between states.
+      const cardTop = h - BLEED - cardH
 
-      // Status row — small accent dot + quiet label, no heavy pill.
-      const rowY = 72
-      const accent = STATE_ACCENT[st]
-      ctx.fillStyle = accent
-      ctx.beginPath()
-      if (st === 'thinking' || st === 'sending') {
-        // Calm breathing dot.
-        const r = 16 + Math.sin(pulsePhase) * 5
-        ctx.arc(64, rowY, Math.max(r, 8), 0, Math.PI * 2)
-      } else {
-        ctx.arc(64, rowY, 16, 0, Math.PI * 2)
-      }
-      ctx.fill()
+      drawGlassPanel(ctx, BLEED, cardTop, CARD_W_PX, cardH, {
+        radius: CARD_RADIUS,
+        shadow: BLEED,
+      })
 
-      ctx.fillStyle = XR_UI.inkSoft
-      ctx.font = '700 48px "Nunito", ui-rounded, system-ui, sans-serif'
-      ctx.textAlign = 'left'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(STATE_LABEL[st], 100, rowY + 2)
+      let y = cardTop + PAD
+      drawHeader(ctx, st, y, pulsePhase)
+      y += HEADER_H
 
-      ctx.textAlign = 'right'
-      ctx.font = '600 40px "Nunito", ui-rounded, system-ui, sans-serif'
-      const hint =
-        st === 'listening'
-          ? 'RELEASE TO SEND'
-          : st === 'thinking' || st === 'sending'
-            ? ''
-            : 'HOLD A · TALK'
-      if (hint) ctx.fillText(hint, w - 56, rowY + 2)
-
-      // Body — one open area, generous space; no inner well boxes.
-      const bodyY = 130
-      const bodyH = h - bodyY - 34
-      const maxW = w - 128
-      const bodyFont = '600 56px "Nunito", ui-rounded, system-ui, sans-serif'
-      const lineH = 68
-
-      if (st === 'listening') {
-        // Live level bars under the wrapping interim — you can see it hear you.
-        const text = interim.trim()
-        ctx.fillStyle = text ? XR_UI.ink : XR_UI.inkSoft
-        ctx.font = bodyFont
-        ctx.textAlign = 'left'
-        ctx.textBaseline = 'middle'
-        const rows = wrapLines(ctx, text || '…', maxW, 3)
-        let y = bodyY + 32
-        for (const row of rows) {
-          ctx.fillText(row, 64, y)
-          y += lineH
+      if (body) {
+        y += BLOCK_GAP
+        if (body.kind === 'progress') {
+          drawProgressBlock(ctx, body.progress, y, pulsePhase)
+        } else {
+          drawTextBlock(ctx, body, y, bodyH, smoothedLevel, pulsePhase)
         }
-
-        const barW = 10
-        const gap = (maxW - LEVEL_BARS * barW) / (LEVEL_BARS - 1)
-        const baseY = bodyY + bodyH - 12
-        for (let i = 0; i < LEVEL_BARS; i++) {
-          // Center-weighted bars driven by smoothed RMS, with per-bar shimmer.
-          const centerBias = 1 - Math.abs(i - (LEVEL_BARS - 1) / 2) / (LEVEL_BARS / 2)
-          const shimmer = 0.65 + 0.35 * Math.sin(pulsePhase * 2 + i * 1.7)
-          const amp = Math.min(smoothedLevel * 6, 1) * centerBias * shimmer
-          const bh = 8 + amp * 48
-          ctx.fillStyle = amp > 0.08 ? XR_UI.accent : 'rgba(169, 169, 179, 0.35)'
-          ctx.beginPath()
-          ctx.roundRect(64 + i * (barW + gap), baseY - bh, barW, bh, barW / 2)
-          ctx.fill()
-        }
-        return
+        y += bodyH
       }
 
-      let line = ''
-      let ghost = false
-      if (st === 'sending' || st === 'thinking') {
-        line = bodyText || ''
-        ghost = true
-      } else if (st === 'misheard') {
-        line = mishearBody || DEFAULT_MISHEARD
-        ghost = false
-      } else if (st === 'replying') {
-        line = bodyText
-      } else {
-        // Idle priority lives in idleLine so the visibility gate and the paint
-        // can never disagree about whether there is something to say.
-        line = idleLine(nowMs) ?? ''
-        ghost = !bodyText && !notice
-      }
-
-      ctx.fillStyle = ghost ? XR_UI.inkSoft : XR_UI.ink
-      ctx.font = bodyFont
-      ctx.textAlign = 'left'
-      ctx.textBaseline = 'middle'
-      const rows = wrapLines(ctx, line, maxW, 3)
-      let y = bodyY + bodyH / 2 - ((rows.length - 1) * lineH) / 2
-      for (const row of rows) {
-        ctx.fillText(row, 64, y)
-        y += lineH
-      }
+      y += BLOCK_GAP
+      drawPreviewWell(ctx, y)
     })
   }
 
@@ -434,7 +653,13 @@ export function createDirectorSlate(parent: THREE.Object3D): DirectorSlate {
         state = 'thinking'
       } else if (state === 'thinking' || state === 'sending') {
         state = 'idle'
+        // The plan is over; its step count must not survive into the next one.
+        progress = null
       }
+      repaint(true)
+    },
+    setProgress: (next) => {
+      progress = next
       repaint(true)
     },
     setReply: (text) => {
