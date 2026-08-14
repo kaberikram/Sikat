@@ -140,6 +140,54 @@ export function makeLiveCanvasTexture(width: number, height: number): LiveCanvas
  * bright hairline stroke + top-edge highlight. `pad` reserves transparent
  * margin on all sides so the shadow can bleed without clipping.
  */
+/**
+ * The frosted panel itself, at an arbitrary rect and without clearing.
+ *
+ * Split out of `drawGlassCard` for the director card, which draws a panel whose
+ * height changes with what it has to say inside a canvas sized for the tallest
+ * state — so it needs to place the panel rather than fill the bitmap.
+ */
+export function drawGlassPanel(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  opts: { fill?: string; radius?: number; shadow?: number } = {}
+): void {
+  const radius = opts.radius ?? 64
+  const fill = opts.fill ?? XR_UI.glass
+  const shadow = opts.shadow ?? 48
+
+  ctx.save()
+  ctx.shadowColor = XR_UI.shadow
+  ctx.shadowBlur = shadow * 0.8
+  ctx.shadowOffsetY = shadow * 0.3
+  ctx.fillStyle = fill
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, radius)
+  ctx.fill()
+  ctx.restore()
+
+  ctx.strokeStyle = XR_UI.glassStroke
+  ctx.lineWidth = 5
+  ctx.beginPath()
+  ctx.roundRect(x + 2.5, y + 2.5, w - 5, h - 5, Math.max(radius - 2.5, 0))
+  ctx.stroke()
+
+  // Top-edge highlight
+  ctx.save()
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, radius)
+  ctx.clip()
+  const hl = ctx.createLinearGradient(0, y, 0, y + h * 0.28)
+  hl.addColorStop(0, 'rgba(255, 255, 255, 0.55)')
+  hl.addColorStop(1, 'rgba(255, 255, 255, 0)')
+  ctx.fillStyle = hl
+  ctx.fillRect(x, y, w, h * 0.28)
+  ctx.restore()
+}
+
 export function drawGlassCard(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -147,40 +195,12 @@ export function drawGlassCard(
   opts: { fill?: string; radius?: number; pad?: number } = {}
 ): void {
   const pad = opts.pad ?? 48
-  const radius = opts.radius ?? 64
-  const fill = opts.fill ?? XR_UI.glass
-  const cw = w - pad * 2
-  const ch = h - pad * 2
-
   ctx.clearRect(0, 0, w, h)
-
-  ctx.save()
-  ctx.shadowColor = XR_UI.shadow
-  ctx.shadowBlur = pad * 0.8
-  ctx.shadowOffsetY = pad * 0.3
-  ctx.fillStyle = fill
-  ctx.beginPath()
-  ctx.roundRect(pad, pad, cw, ch, radius)
-  ctx.fill()
-  ctx.restore()
-
-  ctx.strokeStyle = XR_UI.glassStroke
-  ctx.lineWidth = 5
-  ctx.beginPath()
-  ctx.roundRect(pad + 2.5, pad + 2.5, cw - 5, ch - 5, Math.max(radius - 2.5, 0))
-  ctx.stroke()
-
-  // Top-edge highlight
-  ctx.save()
-  ctx.beginPath()
-  ctx.roundRect(pad, pad, cw, ch, radius)
-  ctx.clip()
-  const hl = ctx.createLinearGradient(0, pad, 0, pad + ch * 0.28)
-  hl.addColorStop(0, 'rgba(255, 255, 255, 0.55)')
-  hl.addColorStop(1, 'rgba(255, 255, 255, 0)')
-  ctx.fillStyle = hl
-  ctx.fillRect(pad, pad, cw, ch * 0.28)
-  ctx.restore()
+  drawGlassPanel(ctx, pad, pad, w - pad * 2, h - pad * 2, {
+    fill: opts.fill,
+    radius: opts.radius,
+    shadow: pad,
+  })
 }
 
 /** Pill fill + soft shadow, with hover = glow + gentle lighten (no inversion). */
@@ -219,6 +239,42 @@ export function drawPill(
     ctx.roundRect(x, y, w, h, r)
     ctx.fill()
   }
+}
+
+/**
+ * Progress track for the director card's executing block.
+ *
+ * `ratio` null means the work is real but its length isn't known yet — a plan
+ * that is still being written has no step count. That draws a travelling sliver
+ * rather than a filled bar, because a bar implies a fraction and we would be
+ * inventing the denominator.
+ */
+export function drawProgressTrack(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  ratio: number | null,
+  phase: number
+): void {
+  const r = h / 2
+  ctx.fillStyle = XR_UI.chip
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, r)
+  ctx.fill()
+
+  ctx.fillStyle = XR_UI.accent
+  ctx.beginPath()
+  if (ratio === null) {
+    const sliverW = w * 0.28
+    // Ping-pong so the sliver never jumps back to the start.
+    const travel = (Math.sin(phase * 0.9) + 1) / 2
+    ctx.roundRect(x + travel * (w - sliverW), y, sliverW, h, r)
+  } else {
+    ctx.roundRect(x, y, Math.max(h, w * Math.min(1, Math.max(0, ratio))), h, r)
+  }
+  ctx.fill()
 }
 
 /** Transport / action pill button. Default: wash chip with ink label. */

@@ -26,6 +26,7 @@ import { getEaseFn } from '../easing'
 import { tagSceneInfrastructure, setEditorLayer } from './infrastructure'
 import { drawGlassCard, drawPill, makeCanvasTexture, XR_UI } from './xr/xr-ui-chrome'
 import { getCursorStatusVisibility } from './agent-cursor-status'
+import { LABEL_H, LABEL_Y, statusSlotY } from './agent-cursor-layout'
 import { dampToward } from './opacity-damp'
 
 /** Film-set badge names — display only; agent ids stay canonical everywhere. */
@@ -40,8 +41,8 @@ function displayNameFor(agent: string): string {
 }
 
 const HOVER_HEIGHT = 0.22
-const STATUS_SLOT_Y = 0.18
-const LABEL_Y = 0.3
+/** Spinner / check sprite — square, so this is both its width and its height. */
+const SPINNER_H = 0.12
 const flightEase = getEaseFn('easeOut')
 
 /** Named cursor fade-in time constant (slower than the old 0.22/frame snap). */
@@ -109,7 +110,7 @@ function makeLabel(name: string, color: string): {
   })
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false })
   const sprite = new THREE.Sprite(material)
-  sprite.scale.set(0.72, 0.15, 1)
+  sprite.scale.set(0.72, LABEL_H, 1)
   return { sprite, material }
 }
 
@@ -181,8 +182,8 @@ function makeSpinner(color: string): SpinnerParts {
     opacity: 0,
   })
   const spinner = new THREE.Sprite(spinnerMat)
-  spinner.scale.set(0.12, 0.12, 1)
-  spinner.position.set(0, STATUS_SLOT_Y, 0)
+  spinner.scale.set(SPINNER_H, SPINNER_H, 1)
+  spinner.position.set(0, statusSlotY(SPINNER_H), 0)
   return { spinnerMat, arcTex, checkTex, spinner }
 }
 
@@ -194,7 +195,8 @@ function makeNote(): {
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, opacity: 0 })
   const sprite = new THREE.Sprite(material)
   sprite.scale.set(0.01, 0.01, 1)
-  sprite.position.set(0, STATUS_SLOT_Y, 0)
+  // Real Y arrives with the first drawn note, which is when the height is known.
+  sprite.position.set(0, statusSlotY(0.01), 0)
   return { sprite, material }
 }
 
@@ -283,6 +285,9 @@ function drawNote(cursor: Cursor, text: string): void {
   cursor.noteMat.needsUpdate = true
   const worldH = lines.length === 2 ? 0.24 : 0.18
   cursor.noteSprite.scale.set(worldH * (cardW / cardH), worldH, 1)
+  // Height and placement move together: a two-line note has to drop, not spread
+  // upward into the badge.
+  cursor.noteSprite.position.y = statusSlotY(worldH)
 }
 
 function buildCursor(agent: string, seed: number): Cursor {
