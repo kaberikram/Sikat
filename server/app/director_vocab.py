@@ -20,7 +20,12 @@ _PHRASE_SUBS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bpop in (?:a |an |the |some )?"), "add "),
     (re.compile(r"\breveal(?:ing)? (?:a |an |the |some )?"), "add "),
     (re.compile(r"\bintroduce (?:a |an |the |some )?"), "add "),
-    (re.compile(r"\bput (?:a |an |the |some )"), "add a "),
+    # Only the indefinite article. "put a sphere on the pedestal" asks for a new
+    # prop; "put the sphere on the pedestal" is about one already standing there,
+    # and rewriting it to "add a sphere" spawned a duplicate before any handler
+    # got to look at the set. Which one "put" means is a question about the
+    # scene, so it is settled in _asks_for_a_new_prop, not here.
+    (re.compile(r"\bput (?:a |an )"), "add a "),
     (re.compile(r"\bthrow in (?:a |an |the |some )?"), "add "),
     (re.compile(r"\bnew (box|sphere|ball|cone|text|tag)\b"), r"add \1"),
     # Text / type

@@ -253,3 +253,68 @@ def _box_of(placed: list[Placed], name: str) -> Box:
         if p.name == name:
             return p.box
     raise KeyError(name)
+
+
+# ---------------------------------------------------------------------------
+# Arranging a group on one surface
+# ---------------------------------------------------------------------------
+
+ARRANGE_GAP_M = 0.02
+"""Breathing room between neighbours sharing a surface."""
+
+_DEFAULT_MOVER_RADIUS_M = 0.05
+"""Assumed half-width for a prop that reported no bounds — small enough that a
+crowded pedestal still spreads, rather than flinging everything to the rim."""
+
+
+def arrange_on(anchor: Box, movers: list[Box | None]) -> list[Vec3]:
+    """Lateral offsets so a group shares a surface instead of stacking on it.
+
+    "On the pedestal" resolves to one point — the anchor's centre — which is the
+    right answer for one prop and the wrong one for three: they land inside each
+    other. So the placement of a *group* has to be decided as a group.
+
+    Returns one XZ offset per mover, applied through `PlacementAnchor.offset`,
+    which the client already adds to whatever the relation resolved to. Y is
+    always 0: how high something sits on a surface is the relation's business,
+    not the arrangement's.
+
+    Two in a row, three or more around a ring. The ring is sized to hold the
+    props and then clamped to the surface, so a pedestal too small for the group
+    crowds them together rather than dropping them over the edge.
+    """
+    count = len(movers)
+    if count == 0:
+        return []
+    if count == 1:
+        return [(0.0, 0.0, 0.0)]
+
+    radii = [
+        m.footprint_radius if m is not None and m.footprint_radius > 0 else _DEFAULT_MOVER_RADIUS_M
+        for m in movers
+    ]
+    widest = max(radii)
+    surface = anchor.footprint_radius
+
+    if count == 2:
+        reach = min(radii[0] + radii[1] + ARRANGE_GAP_M, surface * 2) / 2
+        sx, _, sz = anchor.size
+        # Spread along the surface's longer floor axis, so a narrow plinth gets
+        # its pair end to end rather than hanging off both long edges.
+        if sx >= sz:
+            return [(-reach, 0.0, 0.0), (reach, 0.0, 0.0)]
+        return [(0.0, 0.0, -reach), (0.0, 0.0, reach)]
+
+    # Radius that leaves ARRANGE_GAP_M between neighbours on the ring: the chord
+    # between adjacent slots must clear two footprints.
+    chord = 2 * widest + ARRANGE_GAP_M
+    ideal = chord / (2 * math.sin(math.pi / count))
+    ring = min(ideal, max(surface - widest, 0.0)) if surface > 0 else ideal
+    return [
+        (
+            ring * math.cos(2 * math.pi * i / count),
+            0.0,
+            ring * math.sin(2 * math.pi * i / count),
+        )
+        for i in range(count)
+    ]

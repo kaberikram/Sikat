@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass, field
 
 from .schema import SceneState
 
@@ -13,14 +14,38 @@ def _clause_words(clause: str) -> set[str]:
     return set(re.findall(r"[a-z]+", clause.lower()))
 
 
+def _singular(word: str) -> str:
+    """Crude English stem, enough to make a plural name a plural referent.
+
+    "spheres" scored 0.0 against SPHERE_SPAWN because the raw word was compared
+    to the raw token — so "put all 3 spheres on the pedestal" had no referent at
+    all and read as being about something not on set. Nothing downstream could
+    recover from that, which is why the sentence ended up spawning.
+    """
+    lower = word.lower()
+    if len(lower) > 3 and lower.endswith("es") and lower[-3] in "sxzh":
+        return lower[:-2]
+    if len(lower) > 3 and lower.endswith("s") and not lower.endswith("ss"):
+        return lower[:-1]
+    return lower
+
+
+def _stems(words: set[str]) -> set[str]:
+    return {_singular(w) for w in words}
+
+
 def _score_object(clause: str, obj_name: str) -> float:
     name_lower = obj_name.lower()
     clause_lower = clause.lower()
-    if name_lower in clause_lower:
+    # Whole name only. A bare `in` let SPHERE_SPAWN score a perfect match on
+    # "make SPHERE_SPAWN_2 red", tying with the object actually named and
+    # turning an unambiguous instruction into a question. Same boundary rule
+    # `_find_scene_target` already uses.
+    if re.search(rf"(?<![a-z0-9_]){re.escape(name_lower)}(?![a-z0-9_])", clause_lower):
         return 1.0
     name_tokens = {t for t in re.split(r"[^a-z]+", name_lower) if len(t) >= 3}
     words = _clause_words(clause)
-    overlap = words & name_tokens
+    overlap = _stems(words) & _stems(name_tokens)
     if not overlap:
         return 0.0
     return 0.5 + 0.1 * len(overlap)
@@ -108,6 +133,185 @@ def resolve_llm_target(name: str, scene: SceneState | None) -> tuple[str | None,
     if ranked and ranked[0][1] >= _LLM_TARGET_MIN_SCORE:
         return ranked[0][0], "fuzzy"
     return None, "none"
+
+
+# ---------------------------------------------------------------------------
+# Groups: "all three spheres", "both boxes", "them"
+# ---------------------------------------------------------------------------
+
+_COLLECTIVE_WORDS = frozenset(
+    {"all", "every", "each", "both", "them", "those", "these", "everything"}
+)
+
+_PRONOUN_GROUP = frozenset({"them", "those", "these"})
+
+_WORD_COUNTS = {
+    "both": 2,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+}
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """What a target phrase turned out to mean on this set.
+
+    One return shape for every caller, because "the sphere" and "all the
+    spheres" differ only in how many names come back — and the third case, two
+    equally good answers, is a question rather than a name.
+    """
+
+    names: list[str] = field(default_factory=list)
+    reason: str = "none"
+    """exact | fuzzy | group | ambiguous | none"""
+    options: list[str] = field(default_factory=list)
+    """Candidates to offer when `reason` is ambiguous."""
+
+    @property
+    def is_group(self) -> bool:
+        return self.reason == "group"
+
+
+def _spoken_count(words: list[str]) -> int | None:
+    for word in words:
+        if word in _WORD_COUNTS:
+            return _WORD_COUNTS[word]
+        if word.isdigit():
+            value = int(word)
+            if 2 <= value <= 12:
+                return value
+    return None
+
+
+def _names_the_kind(phrase: str, scene: SceneState) -> list[str]:
+    """Objects of a primitive kind the phrase names — "spheres" → every sphere.
+
+    Reads the same synonym table the grammar uses, so "balls" and "spheres"
+    gather the same props. Matches an object's declared primitive first, then
+    its name tokens, so a hand-named PEDESTAL_CYL still answers to "cylinders".
+    """
+    from .clause_handlers import PRIMITIVE_WORDS
+
+    kinds = {
+        PRIMITIVE_WORDS[stem]
+        for stem in _stems(_clause_words(phrase))
+        if stem in PRIMITIVE_WORDS
+    }
+    if not kinds:
+        return []
+    matches: list[str] = []
+    for obj in scene.objects:
+        if obj.primitive and obj.primitive.lower() in kinds:
+            matches.append(obj.name)
+            continue
+        tokens = _stems({t for t in re.split(r"[^a-z]+", obj.name.lower()) if t})
+        if any(
+            PRIMITIVE_WORDS.get(token) in kinds
+            for token in tokens
+            if token in PRIMITIVE_WORDS
+        ):
+            matches.append(obj.name)
+    return matches
+
+
+def _says_group(phrase: str, scene: SceneState) -> bool:
+    """True when the phrase is about more than one thing.
+
+    Either it says so outright ("all", "both", "them") or it uses a plural noun
+    that is not itself the name of something on set — `SPHERES` as a literal
+    object name is one object, however it is spelled.
+    """
+    words = _clause_words(phrase)
+    if words & _COLLECTIVE_WORDS:
+        return True
+    lower = phrase.strip().lower()
+    if any(obj.name.lower() == lower for obj in scene.objects):
+        return False
+    return any(
+        len(w) > 3 and w.endswith("s") and not w.endswith("ss") and _singular(w) != w
+        for w in words
+    )
+
+
+def resolve_target_group(
+    phrase: str,
+    scene: SceneState | None,
+    *,
+    last_group: list[str] | None = None,
+) -> list[str]:
+    """Every object a plural or collective phrase refers to, in scene order.
+
+    Returns [] when the phrase names one thing (or nothing) — callers fall back
+    to single-target resolution, so this is safe to try first.
+    """
+    if not phrase or scene is None or not scene.objects:
+        return []
+    if not _says_group(phrase, scene):
+        return []
+
+    words = _clause_words(phrase)
+    matches = _color_filter(phrase, scene) or []
+    if not matches:
+        matches = _names_the_kind(phrase, scene)
+    if not matches and words & _PRONOUN_GROUP and last_group:
+        live = {obj.name for obj in scene.objects}
+        matches = [name for name in last_group if name in live]
+    if not matches and "everything" in words:
+        matches = [obj.name for obj in scene.objects]
+    if not matches:
+        # "all of them" with no noun and no memory: every tie at the top of the
+        # ranking is a plausible member, which is what a collective word means.
+        ranked = rank_targets(phrase, scene)
+        if ranked:
+            top = ranked[0][1]
+            matches = [name for name, score in ranked if score >= top]
+    if len(matches) < 2:
+        return []
+
+    ordered = [obj.name for obj in scene.objects if obj.name in set(matches)]
+    count = _spoken_count(sorted(words, key=len))
+    if count is not None and count < len(ordered):
+        # "the two on the left" narrows; "all 3 spheres" when four are standing
+        # there does not — the director is counting loosely, and moving three of
+        # four is a worse answer than moving all four and saying so.
+        lower = phrase.lower()
+        if "on the left" in lower or "on the right" in lower:
+            return _spatial_sort(phrase, ordered, scene)[:count]
+    return ordered
+
+
+def resolve_target_or_group(
+    name: str | None,
+    scene: SceneState | None,
+    *,
+    last_group: list[str] | None = None,
+) -> Resolution:
+    """Single entry point: one name, a group of names, or a question to ask."""
+    if not name or scene is None or not scene.objects:
+        return Resolution()
+
+    group = resolve_target_group(name, scene, last_group=last_group)
+    if group:
+        return Resolution(names=group, reason="group")
+
+    for obj in scene.objects:
+        if obj.name == name:
+            return Resolution(names=[obj.name], reason="exact")
+
+    ranked = rank_targets(name, scene)
+    if not ranked or ranked[0][1] < _LLM_TARGET_MIN_SCORE:
+        return Resolution()
+    if is_ambiguous(ranked):
+        # Two equally good answers is not a resolution, it is a question. This
+        # used to take ranked[0] regardless, so on a set of three spheres "move
+        # the sphere" silently moved whichever sorted first.
+        return Resolution(
+            names=[ranked[0][0]], reason="ambiguous", options=ambiguous_options(ranked)
+        )
+    return Resolution(names=[ranked[0][0]], reason="fuzzy")
 
 
 def is_ambiguous(candidates: list[tuple[str, float]]) -> bool:

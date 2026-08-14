@@ -20,6 +20,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from . import outcome
 from . import scene_state
 from . import session_context
 from .agent_bridge import AgentBridge
@@ -192,6 +193,19 @@ async def _handle_user_command(msg: UserCommand, ws: WebSocket) -> None:
                     "Producer", radio_reply(msg.text), "warn", msg.commandId, kind="miss"
                 ),
             )
+        else:
+            # Only speaks when the set cannot: several props moved at once, or a
+            # placement landed relative to something else. Silent otherwise.
+            landed = outcome.summarize(
+                packets, unresolved=session.unresolved_targets
+            )
+            if landed:
+                await manager.send(
+                    ws,
+                    agent_log_message(
+                        "Producer", landed, "info", msg.commandId, kind="reply"
+                    ),
+                )
     except Exception as exc:  # never let one bad command kill the socket loop
         log.exception("user command failed: %s", msg.text)
         await manager.send(ws, error_message(str(exc), msg.commandId))

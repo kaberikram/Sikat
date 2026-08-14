@@ -232,6 +232,21 @@ is rescaled, or the stage relocates — which in XR it does, to wherever the
 director is standing. `in_front_of` / `behind` are relative to the virtual
 camera, not a world axis.
 
+### Groups on one anchor
+
+A plural direction ("put all three spheres on the pedestal") stays a group only
+inside the server. `Intent.targets` carries the names; the Producer fans them
+out into one single-target packet per object, so **the wire protocol is
+unchanged** — every packet still names exactly one thing, and staging, cursor
+presence, supersede cancellation and undo all keep working as they do for a
+single command.
+
+Because `on` resolves to a single point, a group sharing one anchor would land
+inside itself. The Producer therefore fills in each packet's `anchor.offset`
+from `spatial.arrange_on` — two in a row, three or more around a ring sized to
+the anchor's footprint. The client already adds `offset` to whatever the
+relation resolved to, so nothing changed there either.
+
 An anchor naming something not on set falls back to the normal placement rather
 than failing the packet. `position` remains the escape hatch for anything the
 relations do not express.
