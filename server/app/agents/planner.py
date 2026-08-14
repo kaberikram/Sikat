@@ -16,6 +16,19 @@ MAX_STEPS = 6
 WALL_CLOCK_SEC = 30.0
 OBSERVE_SEC = 2.0
 
+
+def _step_signature(step: Intent) -> tuple:
+    """What makes two plan steps the same instruction."""
+    return (
+        step.action,
+        (step.target or "").lower(),
+        step.motion or step.preset,
+        step.primitive,
+        step.mood,
+        step.suggestion_command,
+    )
+
+
 class PlanRunner:
     def __init__(self, producer) -> None:
         self._producer = producer
@@ -48,6 +61,7 @@ class PlanRunner:
         describe_only = True
         escalated = prefer_strong
         scene_now = scene
+        applied_signatures: set[tuple] = set()
 
         for round_index in range(MAX_ROUNDS):
             if time.monotonic() - started >= WALL_CLOCK_SEC:
@@ -90,8 +104,16 @@ class PlanRunner:
                     cap = 3 if adjustment else 4 if plan_mode == "surprise" else MAX_STEPS
                     if emitted_steps >= cap:
                         continue
-                    emitted_steps += 1
                     step = event.step
+                    # Round 2 exists to *adjust* round 1. A step identical to
+                    # one already applied is not an adjustment — it is the
+                    # model restating itself, and applying it again animates
+                    # the prop twice and repeats the suggestion.
+                    signature = _step_signature(step)
+                    if signature in applied_signatures:
+                        continue
+                    applied_signatures.add(signature)
+                    emitted_steps += 1
                     all_steps.append(step)
                     if plan_mode == "pitch":
                         await self._producer._emit_suggest(step, emit_suggest)

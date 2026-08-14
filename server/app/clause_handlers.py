@@ -320,6 +320,16 @@ _RELATION_RE = re.compile(
 )
 _ANCHOR_ARTICLE = re.compile(r"^(?:the|a|an|my|our)\s+")
 
+# "too dark" is a question when it stands alone and an instruction when the
+# director says what to do about it. Public so the clause splitter can keep the
+# two halves of "too dark, warm it up" together — apart, the complaint reads as
+# a describe and the remedy has no light word left to match on.
+LOOK_COMPLAINT = re.compile(r"\btoo (dark|bright|moody|flat)\b")
+LOOK_REMEDY = re.compile(
+    r"\b(fix|warm|cool|dim|brighten|lighter|darker|adjust|reduce|decrease|less|"
+    r"lower|tone down|dial back)\b"
+)
+
 
 def split_placement(clause: str) -> tuple[str, str, str] | None:
     """Split "spawn a box beside the cylinder" into head / relation / anchor text.
@@ -952,12 +962,8 @@ def _parse_describe(
         topic = "scene"
     elif re.search(r"\bhow does (this|it) look\b", clause):
         topic = "scene"
-    elif re.search(r"\btoo (dark|bright|moody|flat)\b", clause):
-        if re.search(
-            r"\b(fix|warm|cool|dim|brighten|lighter|darker|adjust|reduce|decrease|less|"
-            r"lower|tone down|dial back)\b",
-            clause,
-        ):
+    elif LOOK_COMPLAINT.search(clause):
+        if LOOK_REMEDY.search(clause):
             return None
         topic = "scene"
     else:

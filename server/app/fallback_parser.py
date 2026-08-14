@@ -10,7 +10,7 @@ import re
 
 from . import session_context
 from .director_vocab import normalize_clause
-from .clause_handlers import parse_clause
+from .clause_handlers import LOOK_COMPLAINT, LOOK_REMEDY, parse_clause
 from .schema import Intent, SceneState
 
 _CLAUSE_SPLIT = re.compile(
@@ -30,10 +30,20 @@ _ADDRESS_COMMA = re.compile(
 # "add a red box and a blue sphere" → give the second noun phrase its own add verb.
 _CHAINED_SPAWN = re.compile(r"\band\s+(?=a\s+)", re.I)
 
+# "too dark, warm it up" — the comma joins a complaint to its own remedy, which
+# is one lighting note, not two commands. Split, neither half survives: the
+# complaint alone reads as a question about the shot, and the remedy alone has
+# no light word left for _parse_lights to match on.
+_COMPLAINT_COMMA = re.compile(
+    rf"({LOOK_COMPLAINT.pattern})\s*,\s*(?=[^,]*{LOOK_REMEDY.pattern})",
+    re.I,
+)
+
 
 def split_clauses(text: str) -> list[str]:
     """Split compound director lines on commas, ``then``, ``;``, and bare ``and`` before verbs."""
     protected = _ADDRESS_COMMA.sub(r"\1 ", text)
+    protected = _COMPLAINT_COMMA.sub(r"\1 ", protected)
     chained = _CHAINED_SPAWN.sub(", add ", protected)
     return [clause.strip() for clause in _CLAUSE_SPLIT.split(chained) if clause.strip()]
 

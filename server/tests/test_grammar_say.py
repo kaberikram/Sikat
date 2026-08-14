@@ -1,8 +1,12 @@
 """Grammar radio lines for instant-path cursor notes."""
 from app.grammar_say import intent_with_radio, radio_line
-from app.schema import Intent
+from app.schema import Intent, PlacementAnchor, Target
 
 from tests.helpers import scene_with
+
+
+def anchor(name: str, relation: str) -> PlacementAnchor:
+    return PlacementAnchor(target=Target(name=name), relation=relation)
 
 
 def test_spawn_red_box_radio():
@@ -10,6 +14,35 @@ def test_spawn_red_box_radio():
     assert "box" in line
     assert "red" in line
     assert line != "spawning"
+
+
+def test_spawn_radio_names_the_placement():
+    """"dead center" was hardcoded, so the crew narrated the one thing an
+    anchored spawn is not doing."""
+    line = radio_line(
+        Intent(action="spawn", primitive="sphere", anchor=anchor("CUBE", "beside"))
+    )
+    assert "beside the cube" in line
+    assert "dead center" not in line
+
+
+def test_spawn_radio_still_says_centre_without_an_anchor():
+    line = radio_line(Intent(action="spawn", primitive="sphere"))
+    assert "dead center" in line
+
+
+def test_spawn_radio_reads_underscored_relations():
+    line = radio_line(
+        Intent(action="spawn", primitive="cone", anchor=anchor("PEDESTAL", "in_front_of"))
+    )
+    assert "in front of the pedestal" in line
+
+
+def test_transform_radio_names_the_destination():
+    line = radio_line(
+        Intent(action="transform", target="SNEAKER", anchor=anchor("RUNNER", "on"))
+    )
+    assert "on the runner" in line
 
 
 def test_playback_cut_radio():
@@ -31,20 +64,24 @@ def test_intent_with_radio_preserves_existing_say():
     assert intent_with_radio(intent).say == "custom line"
 
 
-async def test_instant_spawn_uses_radio_not_spawning(monkeypatch, scene):
+async def test_keyless_spawn_uses_radio_not_spawning(monkeypatch, scene):
+    """With no crew on the line the grammar is the voice, and it should sound
+    like set radio rather than a debug log. (Keyed, the LLM writes its own say —
+    see test_clause_routing.)"""
     from app import llm
     from app.agents.producer import Producer
 
     stream_started = False
 
-    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None):
+    async def slow_stream(text, scene, frame=None, on_partial=None, hints=None, tier="quality"):
         nonlocal stream_started
         stream_started = True
         yield Intent(action="spawn", primitive="box")
 
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("DIRECTOR_LLM_PROVIDER", raising=False)
     monkeypatch.setattr(llm, "stream_intents", slow_stream)
-    monkeypatch.setattr(llm, "select_provider", lambda frame=None: "deepseek")
 
     statuses: list[tuple[str, str, str | None]] = []
 
