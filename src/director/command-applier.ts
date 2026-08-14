@@ -16,7 +16,12 @@ import {
   type MotionObject,
 } from '../store'
 import { interpolateKeyframes } from '../keyframe-interpolation'
-import { resolveAnchor, type AnchorBox } from './anchor-placement'
+import {
+  findOpenSpot,
+  footprintRadius,
+  resolveAnchor,
+  type AnchorBox,
+} from './anchor-placement'
 import { bestMatch, primitiveForName } from './target-match'
 import { motionKeyframes, defaultMotionDuration, resolveMotionId, type MotionParams } from '../motion-synth'
 import { buildBounceScaleKeyframes, DEFAULT_BOUNCE_DECAY } from '../animation-presets'
@@ -134,13 +139,77 @@ export function resolveTarget(target: Target | null | undefined): MotionObject |
 
 const anchorScratch = new THREE.Box3()
 
-/** Live world bounds for an object, or null when there's no mesh to measure. */
-function liveBounds(obj: MotionObject | null | undefined): AnchorBox | null {
-  if (!obj?.mesh) return null
-  anchorScratch.setFromObject(obj.mesh)
+/** World bounds of a mesh as it stands right now, or null if unmeasurable. */
+function meshBounds(mesh: THREE.Object3D | null | undefined): AnchorBox | null {
+  if (!mesh) return null
+  anchorScratch.setFromObject(mesh)
   if (anchorScratch.isEmpty()) return null
   const { min, max } = anchorScratch
   return { min: [min.x, min.y, min.z], max: [max.x, max.y, max.z] }
+}
+
+/** Live world bounds for an object, or null when there's no mesh to measure. */
+function liveBounds(obj: MotionObject | null | undefined): AnchorBox | null {
+  return meshBounds(obj?.mesh)
+}
+
+/**
+ * Bounds of everything a new prop has to avoid.
+ *
+ * Ground planes and backdrops are skipped: they span the whole set by design, so
+ * counting them would mark every spot on the stage taken and send the search
+ * straight back to the centre it is trying to get away from.
+ */
+function occupiedBounds(): AnchorBox[] {
+  const st = useEditorStore.getState()
+  const out: AnchorBox[] = []
+  for (const obj of st.objects) {
+    if (obj.primitive === 'plane') continue
+    const box = liveBounds(obj)
+    if (!box) continue
+    if (footprintRadius(box) > st.stage.radius / 2) continue
+    out.push(box)
+  }
+  return out
+}
+
+/**
+ * Say where a prop landed and why, in the log line the director actually reads.
+ *
+ * Placement failed silently in three different ways — no anchor on the wire, an
+ * anchor naming something the set does not have, a bare spawn with nowhere
+ * stated — and all three looked identical from the outside: a prop in the
+ * middle. Naming the branch turns the next bug report into one line.
+ */
+function describePlacement(
+  p: SpawnObjectPayload,
+  anchorResolved: boolean,
+  at: Vec3
+): string {
+  const where = `${at[0].toFixed(2)}, ${at[1].toFixed(2)}, ${at[2].toFixed(2)}`
+  if (p.anchor) {
+    const target = p.anchor.target.name ?? p.anchor.target.id ?? '?'
+    const relation = p.anchor.relation.replace(/_/g, ' ')
+    return anchorResolved
+      ? `${relation} ${target}`
+      : `at ${where} — anchor "${target}" is not on set`
+  }
+  if (p.position) return `at ${where}`
+  return `at ${where} (no placement given)`
+}
+
+/** Where a prop goes when the direction never said — the first clear spot. */
+function openSpotFor(mesh: THREE.Object3D | null, scale: Vec3): Vec3 {
+  const st = useEditorStore.getState()
+  const own = meshBounds(mesh)
+  const spread = Math.max(Math.abs(scale[0]), Math.abs(scale[2]))
+  // The mesh is measured before the store applies its scale, so fold that in.
+  const radius = own ? footprintRadius(own) * spread : 0.25
+  return findOpenSpot(
+    occupiedBounds(),
+    { center: st.stage.position, radius: st.stage.radius },
+    radius
+  )
 }
 
 /**
@@ -185,13 +254,12 @@ function ensureTarget(target: Target | null | undefined): MotionObject | null {
     primitive: primitiveForName(name) as SpawnObjectPayload['primitive'],
     name,
   })
-  const stage = st.stage
   st.addObject({
     name: spawnedName,
     type: mesh instanceof THREE.Group ? 'group' : 'mesh',
     primitive: primitiveForName(name),
     mesh,
-    position: [stage.position[0], stage.position[1] + 0.5, stage.position[2]],
+    position: openSpotFor(mesh, [1, 1, 1]),
     rotation: [0, 0, 0],
     scale: [1, 1, 1],
     keyframes: [],
@@ -343,16 +411,18 @@ export function applyCommandPacket(packet: CommandPacket): string {
     case 'SPAWN_OBJECT': {
       const p = packet.payload
       const { mesh, name } = buildSpawnMesh(p)
-      const stage = st.stage
+      const targetScale: Vec3 = p.scale ?? [1, 1, 1]
       // An anchor is the crew saying "on the pedestal" rather than guessing a
       // coordinate, so it outranks an explicit position. The mesh exists but is
       // not in the store yet, so there are no mover bounds to honour — the prop
       // lands with its origin on the surface, which the entrance pop then
       // settles from.
       const anchored = resolvePlacement(p.anchor, null)
-      const spawnPos: Vec3 = anchored ??
-        p.position ?? [stage.position[0], stage.position[1] + 0.5, stage.position[2]]
-      const targetScale: Vec3 = p.scale ?? [1, 1, 1]
+      // Nothing said where it goes: find a spot rather than stacking it on the
+      // last one. This used to be a single hard-coded coordinate, so every
+      // unplaced prop was spawned inside its predecessor.
+      const spawnPos: Vec3 =
+        anchored ?? p.position ?? openSpotFor(mesh, targetScale)
       st.addObject({
         id: p.id ?? undefined,
         name,
@@ -379,7 +449,7 @@ export function applyCommandPacket(packet: CommandPacket): string {
           set: (v) => useEditorStore.getState().updateObject(spawned.id, { scale: v as Vec3 }),
         })
       }
-      return `spawned ${name}`
+      return `spawned ${name} ${describePlacement(p, anchored !== null, spawnPos)}`
     }
 
     case 'REMOVE_OBJECT': {

@@ -169,9 +169,9 @@ async def test_salvage_leaves_the_models_own_anchor_alone(producer: Producer):
     assert packets[0].payload.anchor.relation == "above"
 
 
-async def test_salvage_ignores_a_relation_word_with_nothing_on_set(producer: Producer):
-    """"turn on the bloom" is not a placement. With the snapshot in hand an
-    unmatched name means the phrase was never about where something goes."""
+async def test_salvage_ignores_a_relation_word_from_another_clause(producer: Producer):
+    """The "on" in "turn on the bloom" is not a placement, and it belongs to a
+    clause that never asked for a box."""
     scene = scene_with("PEDESTAL")
     packets = await producer._build_packets_for_intent(
         Intent(action="spawn", primitive="box"),
@@ -179,6 +179,21 @@ async def test_salvage_ignores_a_relation_word_with_nothing_on_set(producer: Pro
         utterance="add a box and turn on the bloom",
     )
     assert packets[0].payload.anchor is None
+
+
+async def test_salvage_keeps_a_placement_the_set_cannot_resolve(producer: Producer):
+    """The snapshot lags the set, and the client resolves names against the live
+    mesh anyway. Refusing to guess here is what leaves the prop centre stage —
+    the grammar's own read is no longer applied to carry it."""
+    packets = await producer._build_packets_for_intent(
+        Intent(action="spawn", primitive="sphere"),
+        scene=scene_with("SOMETHING_ELSE"),
+        utterance="add a sphere beside the cube",
+    )
+    anchor_out = packets[0].payload.anchor
+    assert anchor_out is not None
+    assert anchor_out.target.name == "cube"
+    assert anchor_out.relation == "beside"
 
 
 async def test_salvage_stays_in_the_clause_that_asked_for_the_prop(producer: Producer):

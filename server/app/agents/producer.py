@@ -117,6 +117,14 @@ def _salvage_spawn_anchor(
     Scoped to the clause that asked for *this* prop: on a compound line the
     placement in "…then put the sneaker on the pedestal" belongs to the sneaker,
     not to a box spawned earlier in the same breath.
+
+    Bare names are allowed through, because this is now the only thing standing
+    between a stated placement and a prop in the middle of the floor: grammar
+    packets are no longer applied when a crew is on the line, so if the model
+    omits the anchor and this refuses to guess, nothing carries it. An anchor
+    naming something the set does not have costs nothing — `resolvePlacement`
+    returns null on the client and the spawn falls back — while dropping one the
+    director said out loud is the entire bug.
     """
     line = utterance.strip().lower()
     clauses = split_clauses(line) or [line]
@@ -126,7 +134,7 @@ def _salvage_spawn_anchor(
         if len(named) != 1:
             return None
         clause = named[0]
-    return find_placement_anchor(clause, scene, allow_bare_name=False)
+    return find_placement_anchor(clause, scene)
 
 
 async def _drain_llm_stream(agen, queue: asyncio.Queue) -> None:

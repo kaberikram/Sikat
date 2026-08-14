@@ -46,9 +46,77 @@ const size = (b: AnchorBox): Vec3 => [
 ]
 
 /** Half the larger horizontal extent — one number for clearance. */
-function footprintRadius(b: AnchorBox): number {
+export function footprintRadius(b: AnchorBox): number {
   const [sx, , sz] = size(b)
   return Math.max(sx, sz) / 2
+}
+
+/** How high above the stage floor a prop with no stated height lands. */
+export const SPAWN_LIFT_M = 0.5
+
+/**
+ * Smallest footprint a prop already on set is treated as having.
+ *
+ * New props scale in over 0.35s, and a compound cue stages its packets 0.15s
+ * apart — so the prop before this one is very likely measured mid-pop, at a
+ * fraction of the size it is about to be. Without a floor, the next prop gets
+ * placed into the hole the last one is still growing into.
+ */
+export const MIN_OCCUPANCY_RADIUS_M = 0.15
+
+/**
+ * A spot on the stage clear of everything already standing there.
+ *
+ * "add a box" names no relationship, so there is nothing to resolve and nothing
+ * to compute from — and the answer used to be one hard-coded coordinate, which
+ * meant every unplaced prop was spawned *inside* the last one. No amount of
+ * reading the sentence better can fix that; the sentence genuinely does not say
+ * where it goes. So the set decides, by looking at what is already on it.
+ *
+ * Centre first, because a first prop on an empty stage belongs in the middle;
+ * then rings stepping outward until something clears. Deterministic: the same
+ * set answers the same way, so a re-run of a take stages identically.
+ */
+export function findOpenSpot(
+  occupied: AnchorBox[],
+  stage: { center: Vec3; radius: number },
+  movingRadius: number
+): Vec3 {
+  const y = stage.center[1] + SPAWN_LIFT_M
+  const centre: Vec3 = [stage.center[0], y, stage.center[2]]
+  if (isClear(centre, movingRadius, occupied)) return centre
+
+  // Step by the mover's own width so consecutive rings cannot overlap, with a
+  // floor so a tiny prop does not crawl outward in millimetre increments.
+  const step = Math.max(movingRadius * 2 + BESIDE_GAP_M, 0.25)
+  for (let ring = 1; ring * step <= stage.radius; ring++) {
+    const r = ring * step
+    // Enough samples that neighbours on the ring are about a step apart.
+    const samples = Math.max(6, Math.round((2 * Math.PI * r) / step))
+    for (let i = 0; i < samples; i++) {
+      const angle = (i / samples) * Math.PI * 2
+      const spot: Vec3 = [
+        stage.center[0] + Math.cos(angle) * r,
+        y,
+        stage.center[2] + Math.sin(angle) * r,
+      ]
+      if (isClear(spot, movingRadius, occupied)) return spot
+    }
+  }
+  // A full stage is not a reason to refuse the prop. Centre, and let the
+  // director move it — same as before, but now only as a genuine last resort.
+  return centre
+}
+
+/** True when a prop of `radius` centred at `spot` touches nothing. */
+function isClear(spot: Vec3, radius: number, occupied: AnchorBox[]): boolean {
+  for (const box of occupied) {
+    const [cx, , cz] = center(box)
+    const gap = Math.hypot(spot[0] - cx, spot[2] - cz)
+    const held = Math.max(footprintRadius(box), MIN_OCCUPANCY_RADIUS_M)
+    if (gap < held + radius + BESIDE_GAP_M) return false
+  }
+  return true
 }
 
 /**
